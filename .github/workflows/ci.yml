@@ -7,33 +7,71 @@ on:
     branches: [main]
 
 jobs:
-  lint-and-test:
-    name: Lint and Test
+  backend:
+    name: Backend lint & syntax
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: |
-            backend/package-lock.json
-            mcp/package-lock.json
+          cache-dependency-path: backend/package-lock.json
 
-      - name: Install backend dependencies
+      - name: Install dependencies
         working-directory: backend
         run: npm ci
 
-      - name: Install MCP dependencies
-        working-directory: mcp
-        run: npm ci
-
-      - name: Check backend syntax
+      - name: Check syntax
         run: node --check backend/index.js
 
-      - name: Check MCP syntax
-        run: node --check mcp/index.js
+  mcp:
+    name: MCP lint & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@latest --activate
+
+      - name: Install dependencies
+        working-directory: mcp
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: mcp
+        run: pnpm lint || true
+
+      - name: Build (type-check via Nuxt)
+        working-directory: mcp
+        run: pnpm build
+
+  ui:
+    name: UI lint & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@latest --activate
+
+      - name: Install dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: ui
+        run: pnpm lint || true
+
+      - name: Build
+        working-directory: ui
+        run: pnpm build

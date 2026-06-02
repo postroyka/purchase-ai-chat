@@ -1,5 +1,5 @@
 # ---- backend deps ----
-FROM node:20-alpine AS backend-deps
+FROM node:22-alpine AS backend-deps
 
 WORKDIR /app/backend
 COPY backend/package.json ./
@@ -18,7 +18,7 @@ COPY ui/ ./
 RUN pnpm build
 
 # ---- runtime ----
-FROM node:20-alpine
+FROM node:22-alpine
 
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code

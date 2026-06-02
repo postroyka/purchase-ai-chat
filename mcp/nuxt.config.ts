@@ -19,6 +19,7 @@ export default defineNuxtConfig({
   runtimeConfig: {
     bitrix24WebhookUrl: '',
     mcpAuthToken: '',
+    githubFeedbackToken: '',
     githubFeedbackRepo: 'postroyka/purchase-ai-chat',
     // Documents the NUXT_LOG_LEVEL → logLevel binding for tooling/discoverability.
     // NOT the runtime source of truth: `server/utils/logger.ts` reads

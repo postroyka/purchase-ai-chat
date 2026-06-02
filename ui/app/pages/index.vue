@@ -3,6 +3,14 @@
     <UDashboardPageHeader title="Загрузка предложений поставщиков" />
     <UDashboardPageBody>
       <div class="max-w-2xl space-y-6">
+        <UAlert
+          v-if="uploadError"
+          color="red"
+          variant="subtle"
+          :description="uploadError"
+          class="mb-2"
+        />
+
         <UCard>
           <template #header>
             <p class="font-medium">Выберите файлы</p>
@@ -51,13 +59,18 @@
 </template>
 
 <script setup lang="ts">
+type BadgeColor = 'gray' | 'blue' | 'green' | 'red'
+
 const selectedFiles = ref<File[]>([])
 const uploading = ref(false)
+const uploadError = ref<string | null>(null)
 const jobId = ref<string | null>(null)
 const jobFiles = ref<Array<{ name: string; status: string; result?: unknown; error?: string }>>([])
 const jobStatus = ref<string>('pending')
 
 let pollInterval: ReturnType<typeof setInterval> | null = null
+let pollErrorCount = 0
+const MAX_POLL_ERRORS = 5
 
 function onFilesSelected(e: Event) {
   const input = e.target as HTMLInputElement
@@ -67,6 +80,7 @@ function onFilesSelected(e: Event) {
 async function uploadFiles() {
   if (!selectedFiles.value.length) return
   uploading.value = true
+  uploadError.value = null
   const form = new FormData()
   for (const f of selectedFiles.value) form.append('files[]', f)
   try {
@@ -78,6 +92,9 @@ async function uploadFiles() {
     jobFiles.value = res.files.map(f => ({ name: f.name, status: 'pending' }))
     startPolling()
   }
+  catch (e: unknown) {
+    uploadError.value = e instanceof Error ? e.message : 'Ошибка загрузки файлов'
+  }
   finally {
     uploading.value = false
   }
@@ -85,24 +102,40 @@ async function uploadFiles() {
 
 function startPolling() {
   if (pollInterval) clearInterval(pollInterval)
+  pollErrorCount = 0
   pollInterval = setInterval(async () => {
     if (!jobId.value) return
-    const data = await $fetch<{ status: string; files: Array<{ name: string; status: string; result?: unknown; error?: string }> }>(`/api/job/${jobId.value}/status`)
-    jobStatus.value = data.status
-    jobFiles.value = data.files
-    if (data.status === 'done') {
-      clearInterval(pollInterval!)
-      pollInterval = null
+    try {
+      const data = await $fetch<{ status: string; files: Array<{ name: string; status: string; result?: unknown; error?: string }> }>(`/api/job/${jobId.value}/status`)
+      pollErrorCount = 0
+      jobStatus.value = data.status
+      jobFiles.value = data.files
+      if (data.status === 'done') {
+        clearInterval(pollInterval!)
+        pollInterval = null
+      }
+    }
+    catch {
+      pollErrorCount++
+      if (pollErrorCount >= MAX_POLL_ERRORS) {
+        clearInterval(pollInterval!)
+        pollInterval = null
+        uploadError.value = 'Не удалось получить статус задачи. Попробуйте обновить страницу.'
+      }
     }
   }, 2000)
 }
 
 onUnmounted(() => { if (pollInterval) clearInterval(pollInterval) })
 
-const jobStatusLabel = computed(() => ({ pending: 'Ожидание', processing: 'Обработка...', done: 'Готово' }[jobStatus.value] ?? jobStatus.value))
-const jobStatusColor = computed(() => ({ pending: 'gray', processing: 'blue', done: 'green' }[jobStatus.value] as 'gray' | 'blue' | 'green' ?? 'gray'))
+const JOB_STATUS_LABELS: Record<string, string> = { pending: 'Ожидание', processing: 'Обработка...', done: 'Готово' }
+const JOB_STATUS_COLORS: Record<string, BadgeColor> = { pending: 'gray', processing: 'blue', done: 'green' }
+const FILE_STATUS_COLORS: Record<string, BadgeColor> = { pending: 'gray', processing: 'blue', done: 'green', error: 'red' }
 
-function fileStatusColor(status: string): 'gray' | 'blue' | 'green' | 'red' {
-  return ({ pending: 'gray', processing: 'blue', done: 'green', error: 'red' } as Record<string, 'gray' | 'blue' | 'green' | 'red'>)[status] ?? 'gray'
+const jobStatusLabel = computed(() => JOB_STATUS_LABELS[jobStatus.value] ?? jobStatus.value)
+const jobStatusColor = computed((): BadgeColor => JOB_STATUS_COLORS[jobStatus.value] ?? 'gray')
+
+function fileStatusColor(status: string): BadgeColor {
+  return FILE_STATUS_COLORS[status] ?? 'gray'
 }
 </script>

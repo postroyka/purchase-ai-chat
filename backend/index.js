@@ -14,9 +14,31 @@ const MAX_FILE_SIZE_MB = parseInt(process.env.MAX_FILE_SIZE_MB || '20', 10);
 const ALLOWED_EXTENSIONS = (process.env.ALLOWED_EXTENSIONS || 'pdf,xlsx,docx')
   .split(',')
   .map((e) => e.trim().toLowerCase());
+const BACKEND_API_TOKEN = process.env.BACKEND_API_TOKEN || '';
 
-// In-memory jobs store
+// Bearer-token auth middleware. Skip if token not configured (dev mode).
+function requireAuth(req, res, next) {
+  if (!BACKEND_API_TOKEN) return next();
+  const auth = req.headers['authorization'] || '';
+  if (auth === `Bearer ${BACKEND_API_TOKEN}`) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+// In-memory jobs store. Each entry includes createdAt for TTL cleanup.
 const jobs = new Map();
+
+const JOB_TTL_MS = parseInt(process.env.JOB_TTL_HOURS || '24', 10) * 60 * 60 * 1000;
+
+// Clean up finished jobs and their upload directories older than JOB_TTL_MS.
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, job] of jobs.entries()) {
+    if (job.status !== 'done' && job.status !== 'error') continue;
+    if (now - job.createdAt < JOB_TTL_MS) continue;
+    try { fs.rmSync(job.dir, { recursive: true, force: true }); } catch {}
+    jobs.delete(id);
+  }
+}, 60 * 60 * 1000); // run every hour
 
 // Multer storage: files go to a temp dir first, then moved per-job
 const storage = multer.diskStorage({
@@ -47,7 +69,7 @@ const upload = multer({
 });
 
 // POST /upload
-app.post('/upload', (req, res) => {
+app.post('/upload', requireAuth, (req, res) => {
   upload.array('files[]')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
@@ -68,10 +90,15 @@ app.post('/upload', (req, res) => {
     fs.mkdirSync(jobDir, { recursive: true });
 
     const fileEntries = req.files.map((f) => {
-      const destPath = path.join(jobDir, f.originalname);
+      const safeFilename = path.basename(f.originalname);
+    const resolvedJobDir = path.resolve(jobDir);
+    const destPath = path.join(resolvedJobDir, safeFilename);
+    if (!destPath.startsWith(resolvedJobDir + path.sep)) {
+      throw new Error(`Unsafe filename rejected: ${f.originalname}`);
+    }
       fs.renameSync(f.path, destPath);
       return {
-        name: f.originalname,
+        name: safeFilename,
         path: destPath,
         status: 'pending',
         result: null,
@@ -86,6 +113,8 @@ app.post('/upload', (req, res) => {
       status: 'pending',
       responsibleUserId,
       files: fileEntries,
+      dir: jobDir,
+      createdAt: Date.now(),
     });
 
     // Fire and forget
@@ -99,7 +128,7 @@ app.post('/upload', (req, res) => {
 });
 
 // GET /job/:id/status
-app.get('/job/:id/status', (req, res) => {
+app.get('/job/:id/status', requireAuth, (req, res) => {
   const job = jobs.get(req.params.id);
   if (!job) {
     return res.status(404).json({ error: 'Job not found' });
