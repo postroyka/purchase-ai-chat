@@ -1,23 +1,38 @@
-# Stage 1: build dependencies
-FROM node:20-alpine AS deps
+# ---- backend deps ----
+FROM node:20-alpine AS backend-deps
 
-WORKDIR /app
+WORKDIR /app/backend
+COPY backend/package.json ./
+RUN npm install --omit=dev
 
-COPY backend/package.json backend/package.json
-RUN cd backend && npm install --omit=dev
+# ---- ui build ----
+FROM node:22-alpine AS ui-builder
 
-# Stage 2: final image
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+WORKDIR /app/ui
+COPY ui/package.json ui/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY ui/ ./
+RUN pnpm build
+
+# ---- runtime ----
 FROM node:20-alpine
 
-# Install Claude Code CLI globally
+# Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /app
 
-# Copy backend with installed deps
-COPY --from=deps /app/backend/node_modules ./backend/node_modules
+# Backend
+COPY --from=backend-deps /app/backend/node_modules ./backend/node_modules
 COPY backend/ ./backend/
-COPY ui/ ./ui/
+
+# UI static output
+COPY --from=ui-builder /app/ui/.output/public ./ui/public
+
+# Prompts (used by claude code agent)
 COPY prompts/ ./prompts/
 
 EXPOSE 3000
