@@ -1,0 +1,7 @@
+node_modules/
+.env.prod
+.env.local
+uploads/
+fixtures/
+*.log
+.DS_Store

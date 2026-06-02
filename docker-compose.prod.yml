@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mcp
+    env_file:
+      - .env.prod
+    volumes:
+      - uploads:/app/uploads
+    networks:
+      - procure-net
+    restart: unless-stopped
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    env_file:
+      - .env.prod
+    networks:
+      - procure-net
+    restart: unless-stopped
+
+networks:
+  procure-net:
+    driver: bridge
+
+volumes:
+  uploads:
