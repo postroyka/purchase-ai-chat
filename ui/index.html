@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>procure-ai</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f4f6f8;
+      color: #1a1a2e;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+      padding: 40px 48px;
+      max-width: 520px;
+      width: 100%;
+    }
+    h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      letter-spacing: -0.5px;
+    }
+    .subtitle {
+      color: #6b7280;
+      font-size: 0.95rem;
+      margin-bottom: 32px;
+    }
+    .upload-area {
+      border: 2px dashed #d1d5db;
+      border-radius: 8px;
+      padding: 32px 24px;
+      text-align: center;
+      margin-bottom: 20px;
+      transition: border-color 0.2s;
+    }
+    .upload-area:hover {
+      border-color: #6366f1;
+    }
+    .upload-area label {
+      display: block;
+      cursor: pointer;
+    }
+    .upload-area input[type="file"] {
+      display: none;
+    }
+    .upload-icon {
+      font-size: 2.5rem;
+      margin-bottom: 10px;
+    }
+    .upload-hint {
+      color: #6b7280;
+      font-size: 0.85rem;
+      margin-top: 8px;
+    }
+    .file-list {
+      margin-bottom: 20px;
+      min-height: 0;
+    }
+    .file-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #f9fafb;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 0.9rem;
+    }
+    .file-item .file-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    button[type="submit"] {
+      width: 100%;
+      padding: 12px;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button[type="submit"]:hover {
+      background: #4f46e5;
+    }
+    button[type="submit"]:disabled {
+      background: #c7d2fe;
+      cursor: not-allowed;
+    }
+    .status-block {
+      margin-top: 24px;
+      padding: 16px;
+      border-radius: 8px;
+      background: #f0f9ff;
+      border: 1px solid #bae6fd;
+      font-size: 0.9rem;
+      color: #0369a1;
+      display: none;
+    }
+    .status-block.visible {
+      display: block;
+    }
+    .status-block.error {
+      background: #fff1f2;
+      border-color: #fecdd3;
+      color: #be123c;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>procure-ai</h1>
+    <p class="subtitle">Загрузите счёт или спецификацию — агент создаст сделку в Битрикс24.</p>
+
+    <form id="uploadForm">
+      <div class="upload-area">
+        <label for="fileInput">
+          <div class="upload-icon">📄</div>
+          <strong>Выберите файлы или перетащите сюда</strong>
+          <div class="upload-hint">PDF, XLSX, DOCX · до 20 МБ каждый</div>
+          <input type="file" id="fileInput" name="files[]" multiple accept=".pdf,.xlsx,.docx" />
+        </label>
+      </div>
+
+      <div class="file-list" id="fileList"></div>
+
+      <button type="submit" id="submitBtn" disabled>Загрузить</button>
+    </form>
+
+    <div class="status-block" id="statusBlock"></div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const fileList = document.getElementById('fileList');
+    const submitBtn = document.getElementById('submitBtn');
+    const statusBlock = document.getElementById('statusBlock');
+
+    fileInput.addEventListener('change', () => {
+      fileList.innerHTML = '';
+      const files = Array.from(fileInput.files);
+      files.forEach(f => {
+        const item = document.createElement('div');
+        item.className = 'file-item';
+        item.innerHTML = `<span>📎</span><span class="file-name">${f.name}</span><span>${(f.size / 1024 / 1024).toFixed(2)} MB</span>`;
+        fileList.appendChild(item);
+      });
+      submitBtn.disabled = files.length === 0;
+    });
+
+    document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      submitBtn.disabled = true;
+      statusBlock.className = 'status-block visible';
+      statusBlock.textContent = 'Загружаем файлы…';
+
+      const formData = new FormData();
+      Array.from(fileInput.files).forEach(f => formData.append('files[]', f));
+
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          statusBlock.className = 'status-block visible error';
+          statusBlock.textContent = `Ошибка: ${data.error || res.statusText}`;
+        } else {
+          statusBlock.textContent = `Задача принята. ID: ${data.jobId}. Ожидайте обработки…`;
+          pollStatus(data.jobId);
+        }
+      } catch (err) {
+        statusBlock.className = 'status-block visible error';
+        statusBlock.textContent = `Сетевая ошибка: ${err.message}`;
+        submitBtn.disabled = false;
+      }
+    });
+
+    function pollStatus(jobId) {
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch(`/job/${jobId}/status`);
+          const data = await res.json();
+          if (data.status === 'done') {
+            clearInterval(interval);
+            statusBlock.textContent = `Готово! Обработано файлов: ${data.files.length}.`;
+            submitBtn.disabled = false;
+          } else if (data.status === 'error') {
+            clearInterval(interval);
+            statusBlock.className = 'status-block visible error';
+            statusBlock.textContent = 'Ошибка при обработке.';
+            submitBtn.disabled = false;
+          } else {
+            statusBlock.textContent = `Статус: ${data.status}…`;
+          }
+        } catch (_) {
+          clearInterval(interval);
+          submitBtn.disabled = false;
+        }
+      }, 2000);
+    }
+  </script>
+</body>
+</html>
