@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend lint, syntax & tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@11.5.0 --activate
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pnpm install --frozen-lockfile
+
+      - name: Check syntax
+        run: node --check backend/index.js
+
+      - name: Run tests
+        working-directory: backend
+        run: pnpm test
+
+  mcp:
+    name: MCP lint, typecheck & tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@11.5.0 --activate
+
+      - name: Install dependencies
+        working-directory: mcp
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Nuxt types (required by eslint config)
+        working-directory: mcp
+        run: pnpm nuxt prepare
+
+      - name: Lint
+        working-directory: mcp
+        run: pnpm lint
+
+      - name: Run tests
+        working-directory: mcp
+        run: pnpm test
+
+      - name: Build
+        working-directory: mcp
+        run: pnpm build
+
+  ui:
+    name: UI lint & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@11.5.0 --activate
+
+      - name: Install dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Nuxt types (required by eslint config)
+        working-directory: ui
+        run: pnpm nuxt prepare
+
+      - name: Lint
+        working-directory: ui
+        run: pnpm lint
+
+      - name: Build
+        working-directory: ui
+        run: pnpm build

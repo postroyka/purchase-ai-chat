@@ -1,0 +1,164 @@
+name: Build & publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (tag/sha) to build and publish'
+        # Useful for: re-triggering a failed release build, building a
+        # release candidate from a branch, or verifying the DXT bundle
+        # from a specific commit without pushing a new tag.
+        #
+        # Note: every dispatch still builds and PUSHES a `sha-<short>`-tagged
+        # image to GHCR (not `:latest`), so Watchtower — which tracks `:latest`
+        # — will not pick it up; pull that sha tag explicitly to put it on a
+        # host. `dxt-release` runs ONLY on a real `v*` tag push, never on a
+        # dispatch (even if `ref` points at a tag), since it gates on
+        # `github.ref`, which on dispatch is the branch.
+        required: true
+        default: 'main'
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # No git push from this job — don't leave GITHUB_TOKEN in .git/config
+          # where a compromised dependency postinstall could read it.
+          persist-credentials: false
+      - uses: pnpm/action-setup@08c4be7e2e672a47d11bd04269e27e5f3e8529cb # v6.0.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test:unit
+
+  build:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # GHCR auth comes from docker/login-action (secrets.GITHUB_TOKEN),
+          # not the git credential store — so don't persist it on checkout.
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=tag
+            # sha-<short> on every run — this is the ONLY tag a workflow_dispatch
+            # produces (its github.ref is a branch, so none of the tag-gated rules
+            # above fire). Without it metadata-action emits zero tags on dispatch
+            # and build-push fails. Watchtower tracks :latest, so it ignores these.
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build & push
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  dxt-build:
+    name: Build DXT bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Depends on build so a release is only assembled (image + DXT) when both
+    # halves succeed — prevents a DXT artifact attaching to a GitHub Release
+    # whose Docker image failed to publish. (closes #198 split)
+    needs: [test, build]
+    permissions:
+      contents: read
+    if: needs.test.result == 'success' && needs.build.result == 'success'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@08c4be7e2e672a47d11bd04269e27e5f3e8529cb # v6.0.0
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:dxt
+      - name: Upload DXT artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bx24-template-mcp-dxt
+          path: dist/bx24-template-mcp.dxt
+          if-no-files-found: error
+
+  dxt-release:
+    name: Attach DXT to release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: dxt-build
+    # contents: write is only granted on v* tag runs — never on workflow_dispatch
+    # without a tag or on non-tag pushes (least-privilege, closes #198).
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download DXT artifact
+        uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.9
+        with:
+          name: bx24-template-mcp-dxt
+          path: dist
+      - name: Attach DXT to release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          files: dist/bx24-template-mcp.dxt
+          fail_on_unmatched_files: true
+
+# NOTE: This workflow ends at publishing to GHCR — it does NOT SSH into
+# production. Pulling the new image to the server is the operator's job:
+#   - Automatic: Watchtower (docker-compose.watchtower.yml) checks GHCR nightly
+#   - Manual:    `make redeploy` on the host (docker compose pull && up -d)
+# See docs/DEPLOYMENT.md for the full operator guide.
+

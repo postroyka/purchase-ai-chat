@@ -1,0 +1,15 @@
+node_modules/
+.env.prod
+.env.local
+uploads/
+fixtures/
+*.log
+.DS_Store
+mcp/.nuxt/
+mcp/.claude/
+ui/.nuxt/
+backend/uploads-test/
+backend/tests/fixtures/
+backend/tests/fixtures*/
+backend/tests/*/valid.pdf
+home/
