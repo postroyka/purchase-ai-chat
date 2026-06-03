@@ -1,9 +1,11 @@
 # ---- backend deps ----
 FROM node:22-alpine AS backend-deps
 
+RUN corepack enable && corepack prepare pnpm@11.5.0 --activate
+
 WORKDIR /app/backend
-COPY backend/package.json backend/package-lock.json ./
-RUN npm ci --omit=dev
+COPY backend/package.json backend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --prod
 
 # ---- ui build ----
 FROM node:22-alpine AS ui-builder

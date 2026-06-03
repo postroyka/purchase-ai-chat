@@ -16,19 +16,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
-          cache: "npm"
-          cache-dependency-path: backend/package-lock.json
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@11.5.0 --activate
 
       - name: Install dependencies
         working-directory: backend
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Check syntax
         run: node --check backend/index.js
 
       - name: Run tests
         working-directory: backend
-        run: npm test
+        run: pnpm test
 
   mcp:
     name: MCP lint, typecheck & tests
