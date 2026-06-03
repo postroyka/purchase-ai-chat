@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
 
 export default defineMcpTool({
-  name: 'find_product',
+  name: 'b24_crm_find_product',
   description: '[NOT IMPLEMENTED] Find an active parent product in Bitrix24 catalog by vendor code or name. If multiple active products match, returns the one with minimum id.',
   inputSchema: {
     vendorCode: z.string().optional().describe('Vendor article/code from supplier document'),

@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
 
 export default defineMcpTool({
-  name: 'find_contract',
+  name: 'b24_crm_find_contract',
   description: '[NOT IMPLEMENTED] Find an active contract for a supplier in Bitrix24. Returns contract id if found.',
   inputSchema: {
     supplierId: z.string().describe('Bitrix24 company id of the supplier'),

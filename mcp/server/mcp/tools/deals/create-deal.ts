@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
 
 export default defineMcpTool({
-  name: 'create_deal',
+  name: 'b24_crm_create_deal',
   description: '[NOT IMPLEMENTED] Create a procurement deal in Bitrix24 (funnel "Закупки", category 1, stage C1:NEW, currency BYN). Attaches source file to deal card and writes processing log as a comment. Tax 20%, VAT included in price (Y). Unit always "шт". Deal is always created — no duplicate check.',
   inputSchema: {
     supplierId: z.string().describe('Bitrix24 company id of the supplier'),

@@ -11,7 +11,7 @@ services:
       redis:
         condition: service_healthy
       mcp:
-        condition: service_started
+        condition: service_healthy
     env_file:
       - .env.prod
     environment:
@@ -24,13 +24,27 @@ services:
 
   mcp:
     build:
-      context: .
-      dockerfile: Dockerfile.mcp
+      context: ./mcp
+      dockerfile: Dockerfile
     env_file:
       - .env.prod
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
     networks:
       - procure-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   redis:
     image: redis:7-alpine

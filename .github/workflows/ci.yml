@@ -47,6 +47,10 @@ jobs:
         working-directory: mcp
         run: pnpm install --frozen-lockfile
 
+      - name: Generate Nuxt types (required by eslint config)
+        working-directory: mcp
+        run: pnpm nuxt prepare
+
       - name: Lint
         working-directory: mcp
         run: pnpm lint
@@ -55,7 +59,7 @@ jobs:
         working-directory: mcp
         run: pnpm test
 
-      - name: Build (type-check via Nuxt)
+      - name: Build
         working-directory: mcp
         run: pnpm build
 
