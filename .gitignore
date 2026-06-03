@@ -5,3 +5,6 @@ uploads/
 fixtures/
 *.log
 .DS_Store
+mcp/.nuxt/
+backend/uploads-test/
+backend/tests/fixtures/
