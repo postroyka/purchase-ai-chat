@@ -5,6 +5,11 @@ services:
   app:
     image: ghcr.io/postroyka/procure-ai-app:latest
     container_name: procure-app
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 768M
     depends_on:
       redis:
         condition: service_healthy
@@ -13,7 +18,7 @@ services:
     env_file:
       - .env.prod
     environment:
-      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.prod}@redis:6379
       # nginx-proxy + acme-companion discovery (грабли #2: no LETSENCRYPT_EMAIL here).
       VIRTUAL_HOST: ${VIRTUAL_HOST}
       VIRTUAL_PORT: "3000"
@@ -60,9 +65,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: procure-redis
-    command: redis-server --save 60 1 --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    command: redis-server --save 60 1 --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.prod}
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.prod}
     env_file:
       - .env.prod
     volumes:
@@ -72,7 +77,7 @@ services:
       - procure-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -81,7 +86,7 @@ services:
     # Pinned, not :latest — it mounts docker.sock (грабли #6, supply-chain).
     image: containrrr/watchtower:1.7.1
     container_name: procure-watchtower
-    command: --interval 300 --cleanup --label-enable
+    command: --interval 300 --cleanup --label-enable --stop-timeout 30s
     environment:
       # daemon 24+ needs API >=1.44; default 1.25 silently fails (грабли #5).
       DOCKER_API_VERSION: "1.47"
@@ -94,6 +99,11 @@ services:
     networks:
       - procure-net
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
 
 networks:
   procure-net:

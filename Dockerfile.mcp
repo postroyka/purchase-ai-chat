@@ -1,4 +1,4 @@
-# Builds the MCP image using the upstream submodule (mcp/) as the base,
+# Builds the MCP image using the upstream subtree (mcp/) as the base,
 # then overlays PST-specific tools from mcp-overlay/ before the build step.
 # context must be the repo root (deploy.yml passes context: .)
 FROM node:22-alpine AS builder

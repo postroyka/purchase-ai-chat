@@ -21,17 +21,12 @@ export default defineMcpTool({
       quantity: z.number().positive().describe('Quantity from document'),
     })).min(1).describe('Line items. Unit is always шт regardless of document.'),
   },
-  handler: async ({ supplierId, contractId, responsibleUserId, sourceFile, items }) => {
+  handler: async () => {
     // TODO Week 2: call b24-controller REST API
     // Rules: CATEGORY_ID=1, STAGE_ID=C1:NEW, CURRENCY_ID=BYN
     // Each item: TAX_RATE=20, TAX_INCLUDED=Y, unit=шт
     // NOTE: priceExclVat is the document's VAT-EXCLUSIVE per-unit price, yet we
     // set TAX_INCLUDED=Y — intentional per docs/PROJECT_BRIEF.md (lines 42-43).
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify({ stub: true, supplierId, contractId, responsibleUserId, sourceFile, itemCount: items.length, message: 'create_deal not implemented yet' }),
-      }],
-    }
+    throw new Error('b24_pst_crm_create_deal is not implemented yet (Week 2)')
   },
 })

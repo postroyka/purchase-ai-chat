@@ -18,8 +18,6 @@ export default defineMcpTool({
       }
     }
     // TODO Week 2: call b24-controller REST API
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify({ stub: true, vendorCode, name, message: 'find_product not implemented yet' }) }],
-    }
+    throw new Error('b24_pst_crm_find_product is not implemented yet (Week 2)')
   },
 })
