@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 
 // Unit-test the timing-safe comparison logic extracted from mcp-auth.ts
 // We test the logic in isolation without spinning up a Nitro server.

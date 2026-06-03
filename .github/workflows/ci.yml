@@ -76,6 +76,10 @@ jobs:
         working-directory: ui
         run: pnpm install --frozen-lockfile
 
+      - name: Generate Nuxt types (required by eslint config)
+        working-directory: ui
+        run: pnpm nuxt prepare
+
       - name: Lint
         working-directory: ui
         run: pnpm lint
