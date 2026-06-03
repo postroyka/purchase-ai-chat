@@ -61,6 +61,22 @@ curl http://localhost:3000/job/<jobId>/status \
 # → { "jobId": "...", "status": "done", "files": [...] }
 ```
 
+## MCP — upstream и кастомные инструменты
+
+`mcp/` подключён через **git subtree** из
+[bitrix24/templates-mcp](https://github.com/bitrix24/templates-mcp) —
+файлы хранятся прямо в репо, никаких submodule.
+
+PST-специфичные инструменты живут в `mcp-overlay/` и копируются поверх
+upstream при сборке образа (`Dockerfile.mcp`). Имена инструментов используют
+префикс `b24_pst_crm_*`, чтобы не пересекаться с возможными
+`b24_crm_*`-инструментами upstream.
+
+**Обновить upstream MCP:**
+```bash
+git subtree pull --prefix=mcp https://github.com/bitrix24/templates-mcp main --squash
+```
+
 ## Разработка
 
 ```bash
