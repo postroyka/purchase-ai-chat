@@ -109,6 +109,14 @@ describe('createJobsStore — Redis path (mocked ioredis)', () => {
     expect(got).toBeNull();
   });
 
+  it('get returns null (does not throw) when Redis returns invalid JSON', async () => {
+    getMock.mockResolvedValue('not valid json');
+    const mod = await import('../jobs-store.js?redis=' + Math.random());
+    const store = mod.createJobsStore();
+    const got = await store.get('corrupted');
+    expect(got).toBeNull();
+  });
+
   it('get returns null for schema-invalid stored data', async () => {
     getMock.mockResolvedValue(JSON.stringify({ jobId: 5, status: 'x' }));
     const mod = await import('../jobs-store.js?redis=' + Math.random());

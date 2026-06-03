@@ -7,17 +7,10 @@ import { Bitrix24ErrorCode, Bitrix24ToolError } from '~/server/utils/errors'
  * Generic single-or-batch action factory used by every action-tool family.
  *
  * Current consumers:
- *   - `server/utils/task-lifecycle.ts` — 7 v3 lifecycle wrappers (`start`,
- *     `pause`, `complete`, `approve`, `disapprove`, `defer`, `renew`)
- *   - `server/utils/checklist.ts` — 3 v2 checklist action wrappers
- *     (`complete`, `renew`, `delete`), with optional heading-delete
- *     pre-flight
- *   - `server/mcp/tools/tasks/delete-elapsed-time.ts` — v2 delete with
- *     universal `confirmDelete` gate (Ground Rule #9)
- *   - `server/mcp/tools/tasks/add-task-dependency.ts` — v2 add with
- *     fixed `taskIdTo` + `linkType` and id-or-array `taskIdFrom`
- *   - `server/mcp/tools/tasks/remove-task-dependency.ts` — v2 delete
- *     mirror of add; uses the universal `confirmDelete` gate
+ *   - `server/mcp/tools/deals/find-supplier.ts` — поиск поставщиков в CRM
+ *   - `server/mcp/tools/deals/find-product.ts` — поиск товаров/номенклатуры
+ *   - `server/mcp/tools/deals/find-contract.ts` — поиск договоров (смарт-инвойсов)
+ *   - `server/mcp/tools/deals/create-deal.ts` — создание сделки на закупку
  *
  * All families share:
  *   1. The same input shape — a target id that's either a number
@@ -72,8 +65,8 @@ export interface BatchRow {
  * prevents drift between tools.
  *
  * @param cap — the batch cap the description should mention, so the LLM
- *   sees the family-specific number (e.g. 25 for v3 lifecycle, 50 for v2
- *   checklist / elapsed-time) rather than a generic blurb.
+ *   sees the family-specific number (e.g. 25 for find-supplier, 50 for
+ *   create-deal) rather than a generic blurb.
  */
 export function forceFlagSchema(cap: number) {
   return z
@@ -124,16 +117,12 @@ export function confirmDeleteSchema() {
  * to the deletion (SKILL.md Ground Rule #9).`. Code is always
  * `DELETE_NEEDS_CONFIRM`.
  *
- * Consumers must call this BEFORE any pre-flight round-trip (e.g. the
- * checklist heading-detection `getlist`) so an unconfirmed call
- * short-circuits without spending a wire call.
+ * Consumers must call this BEFORE any pre-flight round-trip so an
+ * unconfirmed call short-circuits without spending a wire call.
  *
- * Closes #32 — previously duplicated as module-local functions in
- * `delete-elapsed-time.ts` + `checklist.ts`, and inline in
- * `delete-task-result.ts` (3 existing callsites). PR-C adds a 4th
- * (`remove-task-dependency.ts`); the consolidation lives here so the
- * 4th callsite lands on the shared helper rather than proliferating a
- * fourth copy.
+ * Closes #32 — previously duplicated as module-local functions across
+ * several tool files; the consolidation lives here so every callsite
+ * lands on the shared helper rather than proliferating copies.
  */
 export function assertConfirmedDelete(
   toolName: string,
@@ -206,9 +195,8 @@ export interface ActionToolSpec<TInput extends ActionToolInput, TBatchRow extend
   /** Run the batch action. Must return one row per input id, in input order. */
   runBatch: (input: TInput, ids: number[]) => Promise<TBatchRow[]>
   /**
-   * Optional extra fields injected into the batch summary envelope. The
-   * checklist factory uses this for `{ taskId }`; the lifecycle factory
-   * leaves it unset.
+   * Optional extra fields injected into the batch summary envelope.
+   * Leave unset if no extra context is needed per batch call.
    */
   batchSummaryExtras?: (input: TInput, ids: number[]) => Record<string, unknown>
 }

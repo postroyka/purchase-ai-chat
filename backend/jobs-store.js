@@ -25,7 +25,13 @@ function createRedisStore(url, ttlSeconds) {
       try {
         const raw = await client.get(`job:${id}`);
         if (!raw) return null;
-        const job = JSON.parse(raw);
+        let job;
+        try {
+          job = JSON.parse(raw);
+        } catch (parseErr) {
+          console.error(`[jobs-store] JSON.parse error for job:${id}:`, parseErr);
+          return null;
+        }
         // Basic schema validation — guard against corrupted or malicious Redis data
         if (typeof job !== 'object' || job === null) return null;
         if (typeof job.jobId !== 'string' || typeof job.status !== 'string') return null;

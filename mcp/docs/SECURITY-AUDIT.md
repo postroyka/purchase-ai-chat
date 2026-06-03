@@ -22,14 +22,14 @@ for a hosted multi-tenant MCP it would be a serious credential disclosure.
 ### Audit pass — SDK 1.1.2 (2026-05)
 
 **Upstream status**: the 1.1.1 leak documented below was reported upstream as
-[`bitrix24/b24jssdk#39`][upstream-39] (our tracker: [#38][downstream-38]) and
+[`bitrix24/b24jssdk#39`][upstream-39] (upstream-шаблон: [#38][upstream-38]) and
 fixed in [PR `bitrix24/b24jssdk#40`][upstream-40], shipped in SDK
 **1.1.2** (2026-05-18). We bumped `@bitrix24/b24jssdk` and
 `@bitrix24/b24jssdk-nuxt` from `^1.1.1` to `^1.1.2` in this PR.
 
 [upstream-39]: https://github.com/bitrix24/b24jssdk/issues/39
 [upstream-40]: https://github.com/bitrix24/b24jssdk/pull/40
-[downstream-38]: https://github.com/bitrix24/templates-mcp/issues/38
+[upstream-38]: https://github.com/bitrix24/templates-mcp/issues/38  <!-- upstream-шаблон: issue в исходном репозитории bitrix24/templates-mcp -->
 
 **What 1.1.2 changed**:
 

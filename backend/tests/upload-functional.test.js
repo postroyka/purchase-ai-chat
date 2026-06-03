@@ -101,6 +101,18 @@ describe('POST /upload — functional', () => {
 });
 
 describe('GET /job/:id/status — functional', () => {
+  it('rejects request without auth token', async () => {
+    const res = await request(app).get('/job/some-id/status');
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects request with wrong token', async () => {
+    const res = await request(app)
+      .get('/job/some-id/status')
+      .set('Authorization', 'Bearer wrong-token');
+    expect(res.status).toBe(401);
+  });
+
   it('returns 404 for unknown jobId with valid token', async () => {
     const res = await request(app)
       .get('/job/nonexistent-id/status')

@@ -1,4 +1,4 @@
-# Установка bx24-template-mcp в Claude Desktop (DXT)
+# Установка procure-ai-mcp в Claude Desktop (DXT)
 
 Это инструкция для **локальной установки** через расширение Claude Desktop. Сервер запускается у вас на компьютере — никакого публичного домена, никакого Bearer-токена. Секрет вебхука Bitrix24 хранится в зашифрованном хранилище Claude Desktop (macOS Keychain / Windows DPAPI / Linux libsecret).
 
@@ -6,26 +6,35 @@
 
 - Claude Desktop ≥ 0.10.0 ([скачать](https://claude.ai/download)).
 - Доступ к порталу Bitrix24 с правом создавать входящие вебхуки.
-- Файл `bx24-template-mcp.dxt` — берите из [GitHub Releases](https://github.com/bitrix24/templates-mcp/releases) или соберите сами (`pnpm install && pnpm build:dxt`).
+- Файл `procure-ai-mcp.dxt` — берите из [GitHub Releases](https://github.com/postroyka/purchase-ai-chat/releases) или соберите сами (`pnpm install && pnpm build:dxt`).
 
 ## Шаги установки
 
 1. **Создайте входящий вебхук в Bitrix24.**
    - Зайдите в портал → «Разработчикам» → «Другое» → «Входящий вебхук».
-   - Разрешения, которые нужны проекту: `task`, `user`, `crm` (на будущее). Можно поставить «Все», если портал тестовый.
+   - Разрешения, которые нужны проекту: `crm` (для работы со сделками, товарами, поставщиками и договорами). Можно поставить «Все», если портал тестовый.
    - Сохраните и **скопируйте URL целиком** — он выглядит как `https://your-portal.bitrix24.ru/rest/1/abc123def456/`.
 
 2. **Установите расширение.**
    - Откройте Claude Desktop → **Настройки → Extensions → Install from file**.
-   - Перетащите `bx24-template-mcp.dxt` в окно или выберите файл вручную.
+   - Перетащите `procure-ai-mcp.dxt` в окно или выберите файл вручную.
 
 3. **Заполните параметры.**
    - **Bitrix24 webhook URL** — вставьте URL целиком, с финальным слэшем.
-   - **GitHub feedback token** *(опционально)* — fine-grained PAT с правом `Issues: read/write` на `bitrix24/templates-mcp`. Если оставите пустым, инструмент `bx24mcp_submit_feedback` будет недоступен.
-   - **Feedback repository** — оставьте `bitrix24/templates-mcp`, если только не делаете форк.
+   - **GitHub feedback token** *(опционально)* — fine-grained PAT с правом `Issues: read/write` на `postroyka/purchase-ai-chat`. Если оставите пустым, инструмент `bx24mcp_submit_feedback` будет недоступен.
+   - **Feedback repository** — оставьте `postroyka/purchase-ai-chat`, если только не делаете форк.
    - **Log level** — `info` по умолчанию. `debug` если нужно посмотреть HTTP-вызовы; `warning`/`error` — тише для повседневной работы. Логи идут в stderr (панель логов расширения), не в stdout.
 
-4. **Включите расширение** галочкой и проверьте: в новом чате попросите Claude — *«Покажи моего текущего пользователя Bitrix24»*. Должно вернуться имя/email учётки, на которой создан вебхук.
+4. **Включите расширение** галочкой и проверьте: в новом чате попросите Claude — *«Найди поставщиков по товару X»*. Должно вернуться список компаний из вашего CRM.
+
+## Инструменты procure-ai-mcp
+
+Сервер предоставляет четыре CRM-инструмента для работы с закупками:
+
+- `b24_crm_find_supplier` — поиск поставщиков (компаний) по названию или реквизитам.
+- `b24_crm_find_product` — поиск товаров/номенклатуры в каталоге Bitrix24.
+- `b24_crm_find_contract` — поиск договоров (смарт-инвойсов) по поставщику или периоду.
+- `b24_crm_create_deal` — создание сделки (заявки на закупку) в CRM.
 
 ## Bitrix24 Self-Hosted (on-premise)
 
@@ -52,10 +61,10 @@ export NODE_EXTRA_CA_CERTS=/path/to/your-internal-ca-bundle.pem
 
 ## Если что-то пошло не так
 
-- В Claude Desktop: **Настройки → Extensions → bx24-template-mcp → View logs** — там stderr процесса.
+- В Claude Desktop: **Настройки → Extensions → procure-ai-mcp → View logs** — там stderr процесса.
 - Самые частые ошибки:
   - `NUXT_BITRIX24_WEBHOOK_URL is not set` — не заполнили обязательное поле в шаге 3.
   - `Request failed with status code 401/403` — вебхук отозван или не имеет прав на нужный метод.
   - `unable to verify the first certificate` — Self-Hosted с внутренним УЦ, не выставлен `NODE_EXTRA_CA_CERTS`.
 
-Issue или вопрос: <https://github.com/bitrix24/templates-mcp/issues>.
+Issue или вопрос: <https://github.com/postroyka/purchase-ai-chat/issues>.

@@ -77,7 +77,7 @@ const LEVEL_BY_NAME: Record<string, LogLevel> = {
  * `journalctl` / `docker logs` / Claude Desktop's extension log. 32 chars
  * fits every legitimate level name with room for diagnostic context.
  *
- * @see https://github.com/bitrix24/templates-mcp/issues/137
+ * @see https://github.com/bitrix24/templates-mcp/issues/137 [upstream-137]
  */
 function resolveLevel(): LogLevel {
   const [rawValue, varName]

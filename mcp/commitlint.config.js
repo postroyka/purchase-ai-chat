@@ -32,9 +32,9 @@ export default {
         // transport built alongside the HTTP server). First-class
         // packaging shape; see docs/ARCHITECTURE.md.
         'dxt',
-        // server/utils/* — shared helpers (sdk-helpers, wire-coerce,
-        // v3-filter, define-action-tool, task-lifecycle, checklist, …)
-        // get their own scope. Submodule-level scopes (sdk-helpers etc.)
+        // server/utils/* — shared helpers (sdk-helpers, define-action-tool,
+        // find-supplier, create-deal, …) get their own scope.
+        // Submodule-level scopes (sdk-helpers etc.)
         // are intentionally NOT separate entries — keeping a single
         // `utils` scope matches the broad-scope convention used by the
         // rest of the enum (tools/client/auth/…).

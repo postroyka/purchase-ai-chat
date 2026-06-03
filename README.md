@@ -7,7 +7,7 @@
 ## Архитектура
 
 ```
-UI (Nuxt, :3000) ──upload/poll──▶ backend (Express, :3000) ──Claude Code──▶ MCP (Nuxt, :3001)
+UI (Nuxt, :3000) ──upload/poll──▶ backend (Express, :3000) ──Claude Code──▶ MCP (Nuxt, :3000)
                                                                               find_supplier
                                                                               find_contract
                                                                               find_product
@@ -17,7 +17,7 @@ UI (Nuxt, :3000) ──upload/poll──▶ backend (Express, :3000) ──Claud
                                      Redis (jobs persistence)
 ```
 
-MCP-сервис не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3001/mcp`).
+MCP-сервис не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3000/mcp`).
 
 ## Быстрый старт
 

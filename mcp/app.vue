@@ -65,7 +65,7 @@ useHead({
             :b24ui="{ baseLine: '[--ui-btn-icon-size:20px] gap-1.5' }"
             color="air-secondary-no-accent"
             size="md"
-            to="https://github.com/bitrix24/templates-mcp"
+            to="https://github.com/postroyka/purchase-ai-chat"
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -107,24 +107,24 @@ useHead({
       <footer class="pt-[22px] pb-7 px-6 text-center text-[13px] opacity-[0.92]">
         <a
           class="footer-link"
-          href="https://github.com/bitrix24/templates-mcp/blob/main/LICENSE"
+          href="https://github.com/postroyka/purchase-ai-chat/blob/main/LICENSE"
           target="_blank"
           rel="noopener noreferrer"
         >MIT</a>
         <span class="mx-2" aria-hidden="true">&middot;</span>
         <a
           class="footer-link"
-          href="https://github.com/bitrix24/templates-mcp/releases"
+          href="https://github.com/postroyka/purchase-ai-chat/releases"
           target="_blank"
           rel="noopener noreferrer"
         >v0.1.0-alpha.1</a>
         <span class="mx-2" aria-hidden="true">&middot;</span>
         <a
           class="footer-link"
-          href="https://github.com/bitrix24/templates-mcp"
+          href="https://github.com/postroyka/purchase-ai-chat"
           target="_blank"
           rel="noopener noreferrer"
-        >bitrix24/templates-mcp</a>
+        >postroyka/purchase-ai-chat</a>
       </footer>
     </div>
   </B24App>
