@@ -1,0 +1,3 @@
+[submodule "mcp"]
+	path = mcp
+	url = https://github.com/bitrix24/templates-mcp
