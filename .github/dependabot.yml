@@ -1,0 +1,42 @@
+version: 2
+updates:
+  # Dockerfile base images ONLY (e.g. node:22-alpine). Mutable tags are
+  # acceptable here — Dockerfile bases are pinned by tag, not digest.
+  #
+  # This block does NOT cover the docker-compose stack. Dependabot's docker
+  # ecosystem only detects the canonical `docker-compose.yml`; it cannot see
+  # our split, digest-pinned infra files (docker-compose.server.yml /
+  # docker-compose.watchtower.yml) — dependabot-core#12134. Those infra
+  # images (nginx-proxy / acme-companion / watchtower) are handled by
+  # Renovate's `docker-compose` manager instead (renovate.json:
+  # `"docker-compose": { "enabled": true }`), which matches every
+  # `docker-compose*.yml` name and bumps tag + @sha256 digest together.
+  # The two tools are split by IMAGE, not strictly by file: both also match
+  # the canonical docker-compose.yml, but it carries only the app's own image
+  # (on :latest, which Dependabot/Renovate skip; and excluded from the
+  # Renovate docker-compose manager via a packageRule) — so they never race on
+  # a real image. See docs/SECURITY.md § "Patching upstream CVEs in pinned images".
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Minsk
+    labels:
+      - dependencies
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # GitHub Actions are handled by Renovate (renovate.json), which uses the
+  # `helpers:pinGitHubActionDigests` preset to produce SHA-pinned + tag-
+  # commented bumps (`action@<SHA> # vX.Y.Z`). Dependabot only produces
+  # mutable-tag bumps (`@v4 → @v7`) — leaving it enabled here in parallel
+  # would regress every action to a mutable tag on each scheduled run and
+  # collide with zizmor's `unpinned-uses` rule (advisory since #177).
+
+  # npm dependency updates and security alerts are also handled by Renovate
+  # (see renovate.json — vulnerabilityAlerts.enabled: true). No Dependabot
+  # npm block is needed; adding one with open-pull-requests-limit: 0 only
+  # creates noise without adding coverage.

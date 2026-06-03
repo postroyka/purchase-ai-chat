@@ -1,0 +1,91 @@
+# Watchtower — automatic container update overlay (opt-in).
+#
+# Compose override that adds Watchtower alongside the main application.
+# Defaults to MONITOR-ONLY: Watchtower checks GHCR on a schedule and reports
+# that a newer image exists, but does NOT apply it — you promote it through the
+# health-gated `make redeploy`. This is the safe default because Watchtower has
+# no post-update health gate or rollback. Opt into unattended auto-apply by
+# removing WATCHTOWER_MONITOR_ONLY below (see the note next to it). No SSH access
+# is needed either way.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.watchtower.yml up -d
+#   make watchtower-up      # shortcut in the Makefile
+#
+# Rollback (pin the old version while Watchtower is paused):
+#   make watchtower-stop    # pause auto-updates
+#   echo 'BX24_IMAGE=ghcr.io/bitrix24/templates-mcp:0.1.0' >> .env
+#   docker compose up -d bx24-template-mcp
+#   make verify-local URL=https://your-domain.com
+#   make watchtower-start   # resume auto-updates when stable
+#
+# Security note: Watchtower mounts /var/run/docker.sock which grants full
+# Docker API access on the host. This is an intentional trade-off — see
+# issue #190 for a tracked improvement (docker-socket-proxy).
+#
+# See docs/DEPLOYMENT.md "Path A — Watchtower" for the full picture.
+
+services:
+  bx24-template-mcp:
+    # Inherit all settings from docker-compose.yml; add Watchtower opt-in label.
+    # The label is harmless without this overlay — Watchtower only runs here.
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    # Watches containers labelled com.centurylinklabs.watchtower.enable=true
+    # (--label-enable) and restarts them when a newer image is available.
+    # Removes the old image after a successful update (--cleanup).
+    # Pin to a specific release — never use :latest for infrastructure images.
+    # Check for latest at: https://github.com/containrrr/watchtower/releases
+    # Digest pinned to 1.7.1 (multi-arch manifest); verify: docker pull containrrr/watchtower:1.7.1
+    image: containrrr/watchtower:1.7.1@sha256:6dd50763bbd632a83cb154d5451700530d1e44200b268a4e9488fefdfcf2b038
+    container_name: watchtower
+    # `unless-stopped` lets `docker compose stop watchtower` stay down until
+    # explicitly started — required for the manual rollback procedure above.
+    # `restart: always` would cause the daemon to immediately resurrect it.
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+    volumes:
+      # rw mount is required — Watchtower restarts/recreates containers, which
+      # grants host-root-equivalent access (see #190 for the docker-socket-proxy
+      # hardening). Note Watchtower has NO post-update health gate or rollback:
+      # a crash-looping :latest stays running until an operator acts. The manual
+      # path (`make redeploy`) is health-gated via `--wait`; see docs/RUNBOOK.md.
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Docker Engine 26+ uses API 1.47; Watchtower 1.7.x needs this hint
+      # if the daemon advertises an API version higher than the client default.
+      DOCKER_API_VERSION: "1.47"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
+      # Check for updates nightly at 03:00 UTC (cron: second minute hour day month weekday).
+      # Predictable window avoids mid-traffic restarts. To check more frequently,
+      # replace WATCHTOWER_SCHEDULE with WATCHTOWER_POLL_INTERVAL (seconds):
+      #   WATCHTOWER_POLL_INTERVAL: "300"   # every 5 minutes
+      WATCHTOWER_SCHEDULE: "0 0 3 * * *"
+      # Watchtower has NO post-update health gate or rollback: if it auto-applied
+      # a crash-looping :latest it would stay broken until an operator noticed.
+      # So the SAFE DEFAULT here is monitor-only — Watchtower just detects that a
+      # newer image exists and (if you set a notification URL below) tells you;
+      # you then apply it through the health-gated `make redeploy` (manually, or
+      # from a cron / systemd timer), which gates on /api/health via `--wait`.
+      WATCHTOWER_MONITOR_ONLY: "true"
+      # Make detections VISIBLE: set a notification URL (shoutrrr format —
+      # Slack / Telegram / email / etc.). Strongly recommended in monitor-only
+      # mode, since nothing is applied automatically. Uncomment and fill in:
+      #   WATCHTOWER_NOTIFICATION_URL: "slack://token@channel"
+      #   WATCHTOWER_NOTIFICATIONS_LEVEL: "info"
+      # Want UNATTENDED auto-apply instead (no health gate — accept the risk)?
+      # Remove WATCHTOWER_MONITOR_ONLY above, and pair it with the notification
+      # URL plus an external monitor on /api/health to catch a bad release fast.
+    # Watchtower uses Docker socket only — no network access to other containers
+    # needed. Omitting networks: gives it an isolated default compose network.
