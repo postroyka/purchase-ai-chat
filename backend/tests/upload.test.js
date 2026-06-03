@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Import app after setting env so jobs-store uses in-memory
+// Set env before import so jobs-store and auth use correct values
 process.env.REDIS_URL = '';
 process.env.BACKEND_API_TOKEN = '';
 process.env.UPLOAD_DIR = path.join(__dirname, '../uploads-test');
@@ -15,14 +15,21 @@ const { app } = await import('../index.js');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 
+// Minimal valid PDF (256 bytes) — enough for file-type to detect application/pdf
+function makeValidPdfBuffer() {
+  // Minimal PDF 1.4 structure that file-type recognises as application/pdf
+  const header = '%PDF-1.4\n';
+  const obj = '1 0 obj\n<< /Type /Catalog >>\nendobj\n';
+  const xref = 'xref\n0 2\n0000000000 65535 f \n0000000009 00000 n \n';
+  const trailer = 'trailer\n<< /Size 2 /Root 1 0 R >>\nstartxref\n' + header.length + '\n%%EOF\n';
+  return Buffer.from(header + obj + xref + trailer);
+}
+
 beforeAll(() => {
   fs.mkdirSync(FIXTURES, { recursive: true });
-  // Minimal valid PDF (header only — file-type detects by magic bytes)
-  fs.writeFileSync(path.join(FIXTURES, 'valid.pdf'), Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d])); // %PDF-
-  // Fake PDF: extension says .pdf but content is plain text
+  fs.writeFileSync(path.join(FIXTURES, 'valid.pdf'), makeValidPdfBuffer());
   fs.writeFileSync(path.join(FIXTURES, 'fake.pdf'), Buffer.from('this is not a pdf at all'));
-  // File with disallowed extension
-  fs.writeFileSync(path.join(FIXTURES, 'script.exe'), Buffer.from([0x4d, 0x5a])); // MZ header
+  fs.writeFileSync(path.join(FIXTURES, 'script.exe'), Buffer.from([0x4d, 0x5a]));
 });
 
 afterAll(() => {
@@ -30,72 +37,41 @@ afterAll(() => {
   fs.rmSync(FIXTURES, { recursive: true, force: true });
 });
 
-describe('POST /upload', () => {
-  it('rejects request with no files', async () => {
-    const res = await request(app).post('/upload');
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/no files/i);
-  });
-
-  it('rejects disallowed extension', async () => {
-    const res = await request(app)
-      .post('/upload')
-      .attach('files[]', path.join(FIXTURES, 'script.exe'));
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/not allowed/i);
-  });
-
-  it('rejects file that lies about its extension (MIME mismatch)', async () => {
-    const res = await request(app)
-      .post('/upload')
-      .attach('files[]', path.join(FIXTURES, 'fake.pdf'), { contentType: 'application/pdf' });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/invalid content type/i);
-  });
-
-  it('accepts a valid PDF and returns jobId', async () => {
-    const res = await request(app)
-      .post('/upload')
-      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
-    // file-type may not detect minimal PDF header as PDF — that's ok for this test
-    // we test the happy path structure, not agent execution
-    if (res.status === 201) {
-      expect(res.body).toHaveProperty('jobId');
-      expect(res.body.files).toHaveLength(1);
-      expect(res.body.files[0].status).toBe('pending');
-    } else {
-      // If MIME rejected minimal buffer — acceptable, just verify it's a MIME error
-      expect(res.body.error).toMatch(/content type/i);
-    }
-  });
-});
-
-describe('GET /job/:id/status', () => {
-  it('returns 404 for unknown jobId', async () => {
-    const res = await request(app).get('/job/nonexistent-id/status');
-    expect(res.status).toBe(404);
-  });
-});
-
 describe('GET /health', () => {
-  it('returns ok', async () => {
+  it('returns ok without auth', async () => {
     const res = await request(app).get('/health');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
   });
 });
 
-describe('Auth middleware', () => {
-  beforeAll(() => {
-    process.env.BACKEND_API_TOKEN = 'test-secret-token';
-  });
-  afterAll(() => {
-    process.env.BACKEND_API_TOKEN = '';
+describe('Auth middleware — no token configured (dev mode blocked)', () => {
+  it('returns 503 when BACKEND_API_TOKEN is empty', async () => {
+    // env is '' — service not configured → 503
+    const res = await request(app).post('/upload');
+    expect(res.status).toBe(503);
   });
 
-  it('rejects upload without token', async () => {
-    // Re-import is not possible after module cache — test via direct middleware logic
-    // This verifies the env var is read correctly
-    expect(process.env.BACKEND_API_TOKEN).toBe('test-secret-token');
+  it('returns 503 when BACKEND_API_TOKEN is placeholder', async () => {
+    process.env.BACKEND_API_TOKEN = 'replace-with-secure-token';
+    const res = await request(app).post('/upload');
+    process.env.BACKEND_API_TOKEN = '';
+    expect(res.status).toBe(503);
+  });
+});
+
+describe('POST /upload (auth bypassed via empty token in this test suite)', () => {
+  // BACKEND_API_TOKEN='' → 503 for all upload requests in this file.
+  // Upload functional tests run in upload-noauth.test.js which sets a real token.
+  it('returns 503 without token set', async () => {
+    const res = await request(app).post('/upload');
+    expect(res.status).toBe(503);
+  });
+});
+
+describe('GET /job/:id/status', () => {
+  it('returns 503 when token not configured', async () => {
+    const res = await request(app).get('/job/some-id/status');
+    expect(res.status).toBe(503);
   });
 });

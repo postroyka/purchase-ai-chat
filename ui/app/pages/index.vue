@@ -110,7 +110,7 @@ function startPolling() {
       pollErrorCount = 0
       jobStatus.value = data.status
       jobFiles.value = data.files
-      if (data.status === 'done') {
+      if (data.status === 'done' || data.status === 'error') {
         clearInterval(pollInterval!)
         pollInterval = null
       }

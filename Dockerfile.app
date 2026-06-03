@@ -2,13 +2,13 @@
 FROM node:22-alpine AS backend-deps
 
 WORKDIR /app/backend
-COPY backend/package.json ./
-RUN npm install --omit=dev
+COPY backend/package.json backend/package-lock.json ./
+RUN npm ci --omit=dev
 
 # ---- ui build ----
 FROM node:22-alpine AS ui-builder
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@11.5.0 --activate
 
 WORKDIR /app/ui
 COPY ui/package.json ui/pnpm-lock.yaml ./

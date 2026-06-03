@@ -41,7 +41,7 @@ jobs:
           node-version: "22"
 
       - name: Install pnpm
-        run: corepack enable && corepack prepare pnpm@latest --activate
+        run: corepack enable && corepack prepare pnpm@11.5.0 --activate
 
       - name: Install dependencies
         working-directory: mcp
@@ -49,7 +49,7 @@ jobs:
 
       - name: Lint
         working-directory: mcp
-        run: pnpm lint || true
+        run: pnpm lint
 
       - name: Run tests
         working-directory: mcp
@@ -70,7 +70,7 @@ jobs:
           node-version: "22"
 
       - name: Install pnpm
-        run: corepack enable && corepack prepare pnpm@latest --activate
+        run: corepack enable && corepack prepare pnpm@11.5.0 --activate
 
       - name: Install dependencies
         working-directory: ui
@@ -78,7 +78,7 @@ jobs:
 
       - name: Lint
         working-directory: ui
-        run: pnpm lint || true
+        run: pnpm lint
 
       - name: Build
         working-directory: ui

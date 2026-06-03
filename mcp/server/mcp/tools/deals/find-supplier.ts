@@ -5,7 +5,7 @@ export default defineMcpTool({
   name: 'find_supplier',
   description: '[NOT IMPLEMENTED] Find a supplier (company) in Bitrix24 by UNP (9-digit Belarusian taxpayer number). Returns company id and name if found. Russian suppliers (INN+KPP without UNP) are not searched.',
   inputSchema: {
-    unp: z.string().length(9).describe('UNP — 9-digit Belarusian taxpayer number'),
+    unp: z.string().length(9).regex(/^\d{9}$/).describe('UNP — 9-digit Belarusian taxpayer number (digits only)'),
   },
   handler: async ({ unp }) => {
     // TODO Week 2: call b24-controller REST API
