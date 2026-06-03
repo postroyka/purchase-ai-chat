@@ -1,8 +1,9 @@
-version: "3.9"
-
+# Shared reverse-proxy — bring up ONLY if nginx-proxy is not already running
+# on the server (грабли: don't bind 80/443 twice, the whole server would break).
+# Run via: make init-nginxproxy
 services:
   nginx-proxy:
-    image: nginxproxy/nginx-proxy:latest
+    image: nginxproxy/nginx-proxy:1.6
     container_name: nginx-proxy
     ports:
       - "80:80"
@@ -17,7 +18,7 @@ services:
     restart: unless-stopped
 
   acme-companion:
-    image: nginxproxy/acme-companion:latest
+    image: nginxproxy/acme-companion:2.5
     container_name: acme-companion
     depends_on:
       - nginx-proxy
@@ -28,7 +29,8 @@ services:
       - nginx-html:/usr/share/nginx/html
       - acme-data:/etc/acme.sh
     environment:
-      - DEFAULT_EMAIL=admin@postroyka.by
+      # Global Let's Encrypt email — lives here, not in per-app compose (грабли #2).
+      - DEFAULT_EMAIL=${LETSENCRYPT_EMAIL}
       - NGINX_PROXY_CONTAINER=nginx-proxy
     networks:
       - proxy-net

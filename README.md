@@ -64,17 +64,47 @@ curl http://localhost:3000/job/<jobId>/status \
 ## Разработка
 
 ```bash
-cd backend && npm install && node index.js   # порт 3000
-cd mcp     && pnpm install && pnpm dev       # порт 3001
-cd ui      && pnpm install && pnpm dev       # порт 3000 (proxy → backend)
+cd backend && pnpm install && pnpm dev   # порт 3000
+cd mcp     && pnpm install && pnpm dev    # порт 3000
+cd ui      && pnpm install && pnpm dev    # порт 3000 (proxy → backend)
 ```
 
 ## Тесты
 
 ```bash
-cd backend && npm test            # vitest — upload, auth, health
-cd mcp     && pnpm test           # vitest — wire-coerce, v3-filter, mcp-auth
+cd backend && pnpm test           # vitest — upload, auth, jobs-store
+cd mcp     && pnpm test           # vitest — инструменты, mcp-auth, naming
+cd ui      && pnpm lint && pnpm build
 ```
+
+## Деплой
+
+Образы собираются GitHub Actions при push в `main` и публикуются в
+GHCR (`ghcr.io/postroyka/procure-ai-app`, `…-mcp`) с тегами
+`latest` + `sha-<sha>`. На сервере **Watchtower** (опрос ~5 мин)
+подхватывает новый `latest` и пересоздаёт контейнеры за общим
+nginx-proxy. Git на сервер не клонируется.
+
+**Разовая настройка сервера:**
+
+```bash
+mkdir -p /home/<user>/procure-ai && cd $_
+BASE="https://raw.githubusercontent.com/postroyka/purchase-ai-chat/main"
+for f in docker-compose.prod.yml docker-compose.nginxproxy.yml Makefile .env.prod.example; do
+  curl -fsSLO "$BASE/$f"
+done
+cp .env.prod.example .env.prod && nano .env.prod   # заполнить секреты и домен
+
+# Приватный GHCR — авторизоваться один раз (PAT с read:packages):
+echo "$GHCR_PAT" | docker login ghcr.io -u <github-user> --password-stdin
+
+make init-network          # создать сеть proxy-net
+make init-nginxproxy       # ТОЛЬКО если nginx-proxy ещё не запущен на сервере
+make prod-up               # запустить app + mcp + redis + watchtower
+```
+
+Обновление файлов на сервере — тем же `curl -fsSLO`, без `git pull`.
+Принудительный редеплой без ожидания Watchtower — `make prod-redeploy`.
 
 ## Документация
 

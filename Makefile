@@ -1,26 +1,49 @@
-.PHONY: dev build up down logs shell-app shell-mcp clean
+.PHONY: dev logs shell-app shell-mcp \
+	prod-up prod-down prod-redeploy prod-pull \
+	init-network init-nginxproxy
 
+# Shared reverse-proxy network name on the server (грабли #1).
+PROXY_NET ?= proxy-net
+COMPOSE   := docker compose -f docker-compose.prod.yml --env-file .env.prod
+NGINX     := docker compose -f docker-compose.nginxproxy.yml --env-file .env.prod
+
+# ---- local development ----
 dev:
-	cd backend && npm run dev &
-	cd mcp && npm run start
+	cd backend && pnpm run dev &
+	cd mcp && pnpm run dev
 
-build:
-	docker compose -f docker-compose.prod.yml build
+# ---- production (on the server) ----
+# Pull latest images from GHCR and (re)create containers.
+prod-up:
+	$(COMPOSE) pull
+	$(COMPOSE) up -d --remove-orphans
 
-up:
-	docker compose -f docker-compose.prod.yml up -d
+prod-down:
+	$(COMPOSE) down
 
-down:
-	docker compose -f docker-compose.prod.yml down
+# Force an immediate redeploy without waiting for the Watchtower interval.
+prod-redeploy:
+	$(COMPOSE) pull
+	$(COMPOSE) up -d --force-recreate --remove-orphans
+	docker image prune -f
+
+prod-pull:
+	$(COMPOSE) pull
 
 logs:
-	docker compose -f docker-compose.prod.yml logs -f
+	$(COMPOSE) logs -f
 
 shell-app:
-	docker compose -f docker-compose.prod.yml exec app sh
+	$(COMPOSE) exec app sh
 
 shell-mcp:
-	docker compose -f docker-compose.prod.yml exec mcp sh
+	$(COMPOSE) exec mcp sh
 
-clean:
-	docker compose -f docker-compose.prod.yml down -v --rmi local
+# ---- one-time server setup ----
+# Create the shared proxy network (idempotent).
+init-network:
+	docker network inspect $(PROXY_NET) >/dev/null 2>&1 || docker network create $(PROXY_NET)
+
+# Bring up nginx-proxy + acme-companion — ONLY if not already running (грабли).
+init-nginxproxy: init-network
+	$(NGINX) up -d
