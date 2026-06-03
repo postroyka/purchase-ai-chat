@@ -6,6 +6,8 @@ fixtures/
 *.log
 .DS_Store
 mcp/.nuxt/
+mcp/.claude/
+ui/.nuxt/
 backend/uploads-test/
 backend/tests/fixtures/
 backend/tests/fixtures*/

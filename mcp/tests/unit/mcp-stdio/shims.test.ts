@@ -132,14 +132,14 @@ describe('mcp-stdio/nuxt-shims runtimeConfig projection', () => {
     expect(cfg.logLevel).toBe('debug')
   })
 
-  it('defaults `githubFeedbackRepo` to the upstream repo and `logLevel` to info', async () => {
+  it('defaults `githubFeedbackRepo` to the project repo and `logLevel` to info', async () => {
     // beforeEach has already wiped every supported env var; this case sets
     // only the webhook URL so the projection is well-formed, then asserts the
     // two defaults the shim hard-codes when the source env vars are absent.
     process.env.BITRIX24_WEBHOOK_URL = 'https://example.bitrix24.ru/rest/1/abc/'
     await import('../../../mcp-stdio/nuxt-shims')
     const cfg = (globalThis as unknown as { useRuntimeConfig: () => ShimRuntimeConfig }).useRuntimeConfig()
-    expect(cfg.githubFeedbackRepo).toBe('bitrix24/templates-mcp')
+    expect(cfg.githubFeedbackRepo).toBe('postroyka/purchase-ai-chat')
     expect(cfg.logLevel).toBe('info')
   })
 

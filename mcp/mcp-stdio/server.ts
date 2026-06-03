@@ -34,7 +34,7 @@ async function main() {
   }
 
   const server = new McpServer({
-    name: 'bx24-template-mcp',
+    name: 'procure-ai-mcp',
     version: '0.1.0',
   })
 

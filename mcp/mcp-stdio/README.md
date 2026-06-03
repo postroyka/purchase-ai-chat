@@ -1,4 +1,4 @@
-# bx24-template-mcp — Claude Desktop bundle (DXT)
+# procure-ai-mcp — Claude Desktop bundle (DXT)
 
 This directory builds the **local stdio** distribution: a single `.dxt` file that Claude Desktop installs in two clicks, with no server to operate.
 
@@ -6,7 +6,7 @@ This directory builds the **local stdio** distribution: a single `.dxt` file tha
 
 - `server/index.mjs` — esbuild-bundled Node entry point, every dependency inlined (`@modelcontextprotocol/sdk`, `@nuxtjs/mcp-toolkit/server`, `@bitrix24/b24jssdk`, zod, …).
 - `manifest.json` — DXT manifest. Declares the Node entry point and a `user_config` form with one required field: the Bitrix24 webhook URL.
-- `LICENSE` — MIT, same as upstream.
+- `LICENSE` — MIT.
 
 Tool code is the same as the HTTP server — same files in `server/mcp/tools/**`, same util layer. The only stdio-specific code is:
 
@@ -19,7 +19,7 @@ Tool code is the same as the HTTP server — same files in `server/mcp/tools/**`
 ```bash
 pnpm install
 pnpm build:dxt
-# → dist/bx24-template-mcp.dxt
+# → dist/procure-ai-mcp.dxt
 ```
 
 Requires Node 22 and a system `zip` binary (`apt install zip` / preinstalled on macOS).

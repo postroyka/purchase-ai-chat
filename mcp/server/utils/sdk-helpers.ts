@@ -22,7 +22,7 @@ import { Bitrix24ToolError, toToolError } from '~/server/utils/errors'
  * to type the SDK boundary, and one spot to update if the SDK contract
  * changes.
  *
- * See `skills/manage-bx24-template-mcp/adding-tools.md` for the canonical
+ * See `docs/ARCHITECTURE.md` (REST dispatch layer) for the canonical
  * usage template.
  *
  * Type story: the SDK types `params?: TypeCallParams` (object-shaped) on

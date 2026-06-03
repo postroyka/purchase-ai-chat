@@ -1,20 +1,20 @@
 {
   "dxt_version": "0.1",
-  "name": "bx24-template-mcp",
-  "display_name": "Bitrix24 (b24-mcp)",
+  "name": "procure-ai-mcp",
+  "display_name": "Procure AI (Bitrix24 CRM)",
   "version": "0.1.0",
   "icon": "icon.png",
-  "description": "Bitrix24 MCP server — tasks, checklists, elapsed time, dependencies, and feedback. Local stdio bundle. / Bitrix24 MCP-сервер — задачи, чек-листы, учёт времени, зависимости, обратная связь. Локальный stdio-бандл. / Servidor MCP do Bitrix24 — tarefas, checklists, apontamento de tempo, dependências e feedback. Pacote stdio local.",
-  "long_description": "Gives AI assistants direct access to a Bitrix24 portal via an incoming webhook. Tasks (CRUD + 8 lifecycle actions + rating), checklist items, task results, elapsed time, dependencies, user search, plus a meta-tool to file structured feedback as a GitHub issue. Runs entirely on your machine — no server to operate, no public URL, no Bearer token. The webhook secret stays in Claude Desktop's encrypted user_config storage and never leaves the device.\n\nWorks with Bitrix24 Cloud (any TLD — .com / .ru / .com.br / .es / .de / …) and Bitrix24 Self-Hosted (on-premise). For self-hosted portals on a private CA, set NODE_EXTRA_CA_CERTS in your shell before launching Claude Desktop.\n\nLocalised install guides:\n• Русский: mcp-stdio/INSTALL.ru.md\n• Português (BR): mcp-stdio/INSTALL.pt-BR.md\n\nFull tool list and project status: https://github.com/bitrix24/templates-mcp",
+  "description": "Procure AI MCP server — find suppliers/contracts/products in Bitrix24 CRM and create procurement deals, plus feedback. Local stdio bundle. / MCP-сервер Procure AI — поиск поставщиков/договоров/товаров в Bitrix24 CRM и создание сделок закупки, плюс обратная связь. Локальный stdio-бандл. / Servidor MCP do Procure AI — buscar fornecedores/contratos/produtos no CRM do Bitrix24 e criar negócios de compra, mais feedback. Pacote stdio local.",
+  "long_description": "Gives AI assistants direct access to a Bitrix24 portal via an incoming webhook for the procurement workflow: find a supplier by UNP, find an active contract and a catalog product, and create a procurement deal (funnel «Закупки») — plus a meta-tool to file structured feedback as a GitHub issue. Runs entirely on your machine — no server to operate, no public URL, no Bearer token. The webhook secret stays in Claude Desktop's encrypted user_config storage and never leaves the device.\n\nWorks with Bitrix24 Cloud (any TLD — .com / .ru / .by / …) and Bitrix24 Self-Hosted (on-premise). For self-hosted portals on a private CA, set NODE_EXTRA_CA_CERTS in your shell before launching Claude Desktop.\n\nLocalised install guides:\n• Русский: mcp-stdio/INSTALL.ru.md\n• Português (BR): mcp-stdio/INSTALL.pt-BR.md\n\nProject status: https://github.com/postroyka/purchase-ai-chat",
   "author": {
-    "name": "Bitrix24",
-    "url": "https://github.com/bitrix24/templates-mcp"
+    "name": "Postroyka",
+    "url": "https://github.com/postroyka/purchase-ai-chat"
   },
-  "homepage": "https://github.com/bitrix24/templates-mcp",
-  "documentation": "https://github.com/bitrix24/templates-mcp#readme",
-  "support": "https://github.com/bitrix24/templates-mcp/issues",
+  "homepage": "https://github.com/postroyka/purchase-ai-chat",
+  "documentation": "https://github.com/postroyka/purchase-ai-chat#readme",
+  "support": "https://github.com/postroyka/purchase-ai-chat/issues",
   "license": "MIT",
-  "keywords": ["bitrix24", "tasks", "productivity", "mcp"],
+  "keywords": ["bitrix24", "crm", "procurement", "mcp"],
   "server": {
     "type": "node",
     "entry_point": "server/index.mjs",
@@ -41,7 +41,7 @@
     "github_feedback_token": {
       "type": "string",
       "title": "GitHub feedback token (optional) · Токен GitHub для обратной связи · Token de feedback no GitHub",
-      "description": "EN: Fine-grained PAT with Issues: read/write on bitrix24/templates-mcp. Enables bx24mcp_submit_feedback so the assistant can file structured issues when something is unclear. Leave empty to disable.\n\nRU: Fine-grained PAT с правом Issues: read/write на bitrix24/templates-mcp. Включает инструмент bx24mcp_submit_feedback — ассистент сможет создавать структурированные issue при неясностях. Оставьте пустым, чтобы отключить.\n\nPT-BR: Fine-grained PAT com Issues: read/write em bitrix24/templates-mcp. Habilita o bx24mcp_submit_feedback para o assistente abrir issues estruturadas quando algo não estiver claro. Deixe em branco para desativar.",
+      "description": "EN: Fine-grained PAT with Issues: read/write on postroyka/purchase-ai-chat. Enables bx24mcp_submit_feedback so the assistant can file structured issues when something is unclear. Leave empty to disable.\n\nRU: Fine-grained PAT с правом Issues: read/write на postroyka/purchase-ai-chat. Включает инструмент bx24mcp_submit_feedback — ассистент сможет создавать структурированные issue при неясностях. Оставьте пустым, чтобы отключить.\n\nPT-BR: Fine-grained PAT com Issues: read/write em postroyka/purchase-ai-chat. Habilita o bx24mcp_submit_feedback para o assistente abrir issues estruturadas quando algo não estiver claro. Deixe em branco para desativar.",
       "sensitive": true,
       "required": false,
       "default": ""
@@ -49,9 +49,9 @@
     "github_feedback_repo": {
       "type": "string",
       "title": "Feedback repository · Репозиторий для feedback · Repositório de feedback",
-      "description": "EN/RU/PT-BR: owner/repo for the feedback tool. Defaults to the upstream project.",
+      "description": "EN/RU/PT-BR: owner/repo for the feedback tool. Defaults to the project repository.",
       "required": false,
-      "default": "bitrix24/templates-mcp"
+      "default": "postroyka/purchase-ai-chat"
     },
     "log_level": {
       "type": "string",

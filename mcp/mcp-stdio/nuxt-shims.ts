@@ -47,7 +47,7 @@ const runtimeConfig: RuntimeConfig = {
   githubFeedbackRepo:
     process.env.NUXT_GITHUB_FEEDBACK_REPO
     ?? process.env.GITHUB_FEEDBACK_REPO
-    ?? 'bitrix24/templates-mcp',
+    ?? 'postroyka/purchase-ai-chat',
   logLevel: process.env.NUXT_LOG_LEVEL ?? process.env.LOG_LEVEL ?? 'info',
 }
 

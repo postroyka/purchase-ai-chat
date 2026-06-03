@@ -103,7 +103,7 @@ function resolveLevel(): LogLevel {
     // stdout is reserved for JSON-RPC frames in stdio mode. Direct stderr is
     // the only safe channel for this one-shot startup diagnostic.
     process.stderr.write(
-      `[bx24-template-mcp] ${varName}=${JSON.stringify(safeValue)} not recognised; `
+      `[procure-ai-mcp] ${varName}=${JSON.stringify(safeValue)} not recognised; `
       + `using ${fallbackName} (NODE_ENV=${nodeEnv}). `
       + `Valid: debug, info, notice, warning (alias warn), error, critical, alert, emergency.\n`,
     )
@@ -114,7 +114,7 @@ function resolveLevel(): LogLevel {
 export function useLogger(): LoggerInterface {
   if (loggerInstance) return loggerInstance
 
-  loggerInstance = Logger.create('bx24-template-mcp')
+  loggerInstance = Logger.create('procure-ai-mcp')
   loggerInstance.pushHandler(new ConsoleHandler(resolveLevel()))
 
   return loggerInstance

@@ -13,6 +13,10 @@ export default defineMcpTool({
       productId: z.string().optional().describe('Bitrix24 product id if matched'),
       vendorCode: z.string().optional().describe('Vendor article from document'),
       name: z.string().describe('Product name from document'),
+      // INTENTIONAL by docs/PROJECT_BRIEF.md (lines 42-43): the document price
+      // is per-unit and EXCLUDING VAT, but in Bitrix24 we write it with
+      // TAX_RATE=20 and TAX_INCLUDED=Y. This is a deliberate business decision,
+      // not a bug — do not "fix" it to exclude VAT during review.
       priceExclVat: z.number().positive().describe('Price per unit excluding VAT, as stated in document'),
       quantity: z.number().positive().describe('Quantity from document'),
     })).min(1).describe('Line items. Unit is always шт regardless of document.'),
@@ -21,6 +25,8 @@ export default defineMcpTool({
     // TODO Week 2: call b24-controller REST API
     // Rules: CATEGORY_ID=1, STAGE_ID=C1:NEW, CURRENCY_ID=BYN
     // Each item: TAX_RATE=20, TAX_INCLUDED=Y, unit=шт
+    // NOTE: priceExclVat is the document's VAT-EXCLUSIVE per-unit price, yet we
+    // set TAX_INCLUDED=Y — intentional per docs/PROJECT_BRIEF.md (lines 42-43).
     return {
       content: [{
         type: 'text' as const,

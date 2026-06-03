@@ -68,7 +68,7 @@ export async function createGithubIssue(input: CreateIssueInput): Promise<Create
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
         'Content-Type': 'application/json',
-        'User-Agent': 'bx24-template-mcp',
+        'User-Agent': 'procure-ai-mcp',
       },
       body: JSON.stringify({
         title: input.title,

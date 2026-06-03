@@ -10,7 +10,7 @@
  *      Native deps (the SDK, b24jssdk, zod, mcp-toolkit) are bundled too —
  *      DXT runtime only ships a Node binary, no node_modules.
  *   2. Copy `manifest.json` to `dist/dxt/manifest.json`.
- *   3. Zip the directory as `dist/bx24-template-mcp.dxt`. `.dxt` is just a
+ *   3. Zip the directory as `dist/procure-ai-mcp.dxt`. `.dxt` is just a
  *      `.zip` with a fixed extension.
  *
  * Run via `pnpm build:dxt`.
@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(__dirname, '..')
 const outDir = resolve(projectRoot, 'dist/dxt')
-const dxtPath = resolve(projectRoot, 'dist/bx24-template-mcp.dxt')
+const dxtPath = resolve(projectRoot, 'dist/procure-ai-mcp.dxt')
 
 await rm(outDir, { recursive: true, force: true })
 await rm(dxtPath, { force: true })

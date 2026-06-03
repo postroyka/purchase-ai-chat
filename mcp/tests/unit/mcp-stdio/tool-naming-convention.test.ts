@@ -138,7 +138,7 @@ describe('tool naming convention (issue #129)', () => {
 
     expect(
       violations,
-      'Tool name(s) do not match the convention. Bitrix24 tools: b24_<domain>(_<entity>)*_<action>, singular everywhere. Meta tools: bx24mcp_<verb>. See skills/manage-bx24-template-mcp/adding-tools.md.',
+      'Tool name(s) do not match the convention. Bitrix24 tools: b24_<domain>(_<entity>)*_<action>, singular everywhere. Meta tools: bx24mcp_<verb>. See docs/ARCHITECTURE.md.',
     ).toEqual([])
   })
 
@@ -192,7 +192,7 @@ describe('tool naming convention (issue #129)', () => {
 
     expect(
       violations,
-      '`_me` is allowed only for domains in ME_DOMAIN_ALLOWLIST (currently: `user`). For "mine" semantics on other entities, use a filter on `_list` (e.g. `b24_task_list { responsibleId: me-id }`), not a separate tool. Extending the allowlist requires a convention update in skills/manage-bx24-template-mcp/adding-tools.md and docs/ADDING-TOOLS.md.',
+      '`_me` is allowed only for domains in ME_DOMAIN_ALLOWLIST (currently: `user`). For "mine" semantics on other entities, use a filter on `_list` (e.g. `b24_task_list { responsibleId: me-id }`), not a separate tool. Extending the allowlist requires a convention update in docs/ARCHITECTURE.md.',
     ).toEqual([])
   })
 

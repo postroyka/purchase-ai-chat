@@ -52,12 +52,10 @@ describe('Auth middleware — no token configured (dev mode blocked)', () => {
     expect(res.status).toBe(503);
   });
 
-  it('returns 503 when BACKEND_API_TOKEN is placeholder', async () => {
-    process.env.BACKEND_API_TOKEN = 'replace-with-secure-token';
-    const res = await request(app).post('/upload');
-    process.env.BACKEND_API_TOKEN = '';
-    expect(res.status).toBe(503);
-  });
+  // NOTE: the placeholder-token (503) case is covered in auth-placeholder.test.js.
+  // BACKEND_API_TOKEN is captured into a module-scope constant at import time, so
+  // mutating process.env *after* importing index.js here has no effect — that
+  // would be a false-green test. The dedicated file sets the env before import.
 });
 
 describe('POST /upload (auth bypassed via empty token in this test suite)', () => {

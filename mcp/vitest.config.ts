@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
  * (`NUXT_BITRIX24_WEBHOOK_URL`, `NUXT_MCP_AUTH_TOKEN`, `NUXT_GITHUB_FEEDBACK_TOKEN`,
  * `NUXT_LOG_LEVEL`, `NUXT_AUDIT_DIR`) are deliberately NOT loaded — see #144.
  * Any new env var a test reads from `.env` MUST use one of the three prefixes
- * above; new contributor-facing documentation lives in `CONTRIBUTING.md`.
+ * above.
  * A CI step (`.github/workflows/ci.yml` "Pin envPrefix") fails the build if
  * this line widens back to a permissive `NUXT_*`.
  */

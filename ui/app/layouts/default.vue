@@ -3,15 +3,11 @@ import type { NavigationMenuItem, CommandPaletteGroup, CommandPaletteItem } from
 import type { Ref } from 'vue'
 import { computed, ref, inject, onMounted } from 'vue'
 import HomeIcon from '@bitrix24/b24icons-vue/outline/HomeIcon'
-import MessagesIcon from '@bitrix24/b24icons-vue/outline/MessagesIcon'
-import GroupIcon from '@bitrix24/b24icons-vue/outline/GroupIcon'
-import SettingsIcon from '@bitrix24/b24icons-vue/outline/SettingsIcon'
 import Bitrix24Icon from '@bitrix24/b24icons-vue/common-service/Bitrix24Icon'
 import TelegramIcon from '@bitrix24/b24icons-vue/outline/TelegramIcon'
 import GitHubIcon from '@bitrix24/b24icons-vue/social/GitHubIcon'
 import HamburgerMenuIcon from '@bitrix24/b24icons-vue/outline/HamburgerMenuIcon'
 
-const route = useRoute()
 const toast = useToast()
 
 const open = ref(false)
@@ -43,61 +39,6 @@ const links = computed<NavigationMenuItem[][]>(() => [
       onSelect: () => {
         open.value = false
       }
-    },
-    {
-      label: 'Inbox',
-      icon: MessagesIcon,
-      to: '/inbox',
-      badge: '4',
-      onSelect: () => {
-        open.value = false
-      }
-    },
-    {
-      label: 'Customers',
-      icon: GroupIcon,
-      to: '/customers',
-      onSelect: () => {
-        open.value = false
-      }
-    },
-    {
-      label: 'Settings',
-      to: '/settings',
-      icon: SettingsIcon,
-      defaultOpen: true,
-      type: 'trigger',
-      children: [
-        {
-          label: 'General',
-          to: '/settings',
-          exact: true,
-          onSelect: () => {
-            open.value = false
-          }
-        },
-        {
-          label: 'Members',
-          to: '/settings/members',
-          onSelect: () => {
-            open.value = false
-          }
-        },
-        {
-          label: 'Notifications',
-          to: '/settings/notifications',
-          onSelect: () => {
-            open.value = false
-          }
-        },
-        {
-          label: 'Security',
-          to: '/settings/security',
-          onSelect: () => {
-            open.value = false
-          }
-        }
-      ]
     }
   ],
   [
@@ -116,7 +57,7 @@ const links = computed<NavigationMenuItem[][]>(() => [
     {
       label: 'GitHub',
       icon: GitHubIcon,
-      to: 'https://github.com/bitrix24/templates-dashboard',
+      to: 'https://github.com/postroyka/purchase-ai-chat',
       target: '_blank'
     }
   ]
@@ -127,19 +68,6 @@ const groups = computed<CommandPaletteGroup[]>(() => [
     id: 'links',
     label: 'Go to',
     items: links.value.flat() as CommandPaletteItem[]
-  },
-  {
-    id: 'code',
-    label: 'Code',
-    items: [
-      {
-        id: 'source',
-        label: 'View page source',
-        icon: GitHubIcon,
-        to: `https://github.com/bitrix24/templates-dashboard/blob/main/app/pages${route.path === '/' ? '/index' : route.path}.vue`,
-        target: '_blank'
-      }
-    ]
   }
 ])
 
@@ -221,7 +149,5 @@ onMounted(async () => {
     <B24DashboardSearch :groups="groups" :color-mode="false" />
 
     <slot />
-
-    <NotificationsSlideover />
   </B24DashboardGroup>
 </template>

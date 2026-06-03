@@ -351,7 +351,7 @@ The bar here is lower than for `@bitrix24/b24jssdk` (no webhook URL or auth head
 
 ### What to check on every future bump
 
-The same checklist lives — short form — in `skills/manage-bx24-template-mcp/SKILL.md` under "Renovate Bot" → "`@bitrix24/b24ui-nuxt` and `@bitrix24/b24icons-vue` bumps". Long form here:
+Long form of the checklist for any future `@bitrix24/b24ui-nuxt` / `@bitrix24/b24icons-vue` bump:
 
 1. **New `runtimeConfig` keys.** `grep -RE "runtimeConfig|nuxt\.options\.runtime" node_modules/@bitrix24/b24ui-nuxt/dist/`. Any new `public:` key crossing into the client bundle is a yellow flag — read the surrounding code and confirm the value is non-sensitive (theme defaults are fine; portal-shaped data is not).
 2. **New install hooks.** `jq .scripts node_modules/@bitrix24/b24ui-nuxt/package.json` and the same for `b24icons-vue`. Anything besides what's there today triggers a manual read of the script body.

@@ -54,7 +54,7 @@ describe('bx24mcp_submit_feedback', () => {
 
   it('creates a GitHub issue with the expected labels and returns the URL', async () => {
     createGithubIssue.mockResolvedValue({
-      url: 'https://github.com/bitrix24/templates-mcp/issues/7',
+      url: 'https://github.com/postroyka/purchase-ai-chat/issues/7',
       number: 7,
     })
 
@@ -73,13 +73,13 @@ describe('bx24mcp_submit_feedback', () => {
       'tool:b24_user_me',
       'severity:medium',
     ])
-    expect(result.content[0]!.text).toContain('https://github.com/bitrix24/templates-mcp/issues/7')
+    expect(result.content[0]!.text).toContain('https://github.com/postroyka/purchase-ai-chat/issues/7')
     expect(result.content[0]!.text).toContain('#7')
   })
 
   it('omits the tool label when relatedTool sanitises to empty', async () => {
     createGithubIssue.mockResolvedValue({
-      url: 'https://github.com/bitrix24/templates-mcp/issues/8',
+      url: 'https://github.com/postroyka/purchase-ai-chat/issues/8',
       number: 8,
     })
 
@@ -93,7 +93,7 @@ describe('bx24mcp_submit_feedback', () => {
 
   it('omits the severity label when severity is absent', async () => {
     createGithubIssue.mockResolvedValue({
-      url: 'https://github.com/bitrix24/templates-mcp/issues/9',
+      url: 'https://github.com/postroyka/purchase-ai-chat/issues/9',
       number: 9,
     })
 

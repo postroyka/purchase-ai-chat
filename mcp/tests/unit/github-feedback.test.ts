@@ -6,7 +6,7 @@ const runtimeConfig: {
   githubFeedbackRepo: string
 } = {
   githubFeedbackToken: 'ghp_test',
-  githubFeedbackRepo: 'bitrix24/templates-mcp',
+  githubFeedbackRepo: 'postroyka/purchase-ai-chat',
 }
 
 vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
@@ -40,24 +40,24 @@ describe('createGithubIssue', () => {
   beforeEach(() => {
     mockFetch.mockReset()
     runtimeConfig.githubFeedbackToken = 'ghp_test'
-    runtimeConfig.githubFeedbackRepo = 'bitrix24/templates-mcp'
+    runtimeConfig.githubFeedbackRepo = 'postroyka/purchase-ai-chat'
   })
 
   it('POSTs to the issues endpoint and returns the issue URL', async () => {
     mockFetch.mockResolvedValue(
-      okResponse({ html_url: 'https://github.com/bitrix24/templates-mcp/issues/42', number: 42 }),
+      okResponse({ html_url: 'https://github.com/postroyka/purchase-ai-chat/issues/42', number: 42 }),
     )
 
     const { createGithubIssue } = await loadFresh()
     const result = await createGithubIssue({ title: 't', body: 'b', labels: ['x'] })
 
     expect(result).toEqual({
-      url: 'https://github.com/bitrix24/templates-mcp/issues/42',
+      url: 'https://github.com/postroyka/purchase-ai-chat/issues/42',
       number: 42,
     })
 
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('https://api.github.com/repos/bitrix24/templates-mcp/issues')
+    expect(url).toBe('https://api.github.com/repos/postroyka/purchase-ai-chat/issues')
     expect(init.method).toBe('POST')
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer ghp_test')
     expect(JSON.parse(init.body as string)).toEqual({ title: 't', body: 'b', labels: ['x'] })
@@ -93,7 +93,7 @@ describe('createGithubIssue', () => {
   })
 
   it.each([
-    'bitrix24/templates-mcp',
+    'postroyka/purchase-ai-chat',
     'My-Org.x/repo_1.2',
   ])('accepts a well-formed owner/repo slug (%s) and calls fetch', async (repo) => {
     runtimeConfig.githubFeedbackRepo = repo
@@ -125,7 +125,7 @@ describe('createGithubIssue', () => {
 
     await expect(createGithubIssue({ title: 't', body: 'b', labels: [] })).rejects.toMatchObject({
       code: 'UPSTREAM',
-      message: expect.stringContaining('bitrix24/templates-mcp') as unknown as string,
+      message: expect.stringContaining('postroyka/purchase-ai-chat') as unknown as string,
     })
   })
 

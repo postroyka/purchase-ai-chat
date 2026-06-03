@@ -13,14 +13,15 @@ import {
 /**
  * Meta-tool that lets the AI agent surface its experience with this MCP
  * server. Each call creates a labelled GitHub issue in
- * `NUXT_GITHUB_FEEDBACK_REPO` (default: bitrix24/templates-mcp).
+ * `NUXT_GITHUB_FEEDBACK_REPO` (default: postroyka/purchase-ai-chat).
  *
- * See docs/FEEDBACK.md for when an agent should call this.
+ * The agent should call this to report a problem, suggest an improvement, or
+ * share a positive observation about this MCP server itself.
  */
 export default defineMcpTool({
   name: 'bx24mcp_submit_feedback',
   description:
-    'Submit feedback about the bx24-template-mcp server itself. Use this to report a problem, suggest an improvement, or share a positive observation about your experience using this MCP. Each call creates a GitHub issue in the project repository. Rate-limited to 5 attempts per hour (failed attempts count too). PRIVACY: the issue is created in a PUBLIC GitHub repository — do not include personal data (names, phone numbers, email addresses, government IDs, customer details from CRM records) in `summary` or `details`. Describe the technical problem, not the data that triggered it. This matters specifically for portals subject to GDPR, LGPD, or similar privacy regimes.',
+    'Submit feedback about the procure-ai MCP server itself. Use this to report a problem, suggest an improvement, or share a positive observation about your experience using this MCP. Each call creates a GitHub issue in the project repository. Rate-limited to 5 attempts per hour (failed attempts count too). PRIVACY: the issue is created in a PUBLIC GitHub repository — do not include personal data (names, phone numbers, email addresses, government IDs, customer details from CRM records) in `summary` or `details`. Describe the technical problem, not the data that triggered it. This matters specifically for portals subject to GDPR, LGPD, or similar privacy regimes.',
   inputSchema: {
     kind: z
       .enum(['positive', 'issue', 'suggestion'])

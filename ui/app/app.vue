@@ -33,8 +33,8 @@ useHead({
   }
 })
 
-const title = 'Nuxt Dashboard Template'
-const description = 'A professional template based on Bitrix24 UI, featuring a multi-page layout, data visualization, and a full set of controls for creating powerful applications.'
+const title = 'Procure AI'
+const description = 'Procure AI — upload supplier price lists and create processing jobs.'
 
 useSeoMeta({
   title,

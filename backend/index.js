@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { timingSafeEqual } from 'node:crypto';
 import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
 
@@ -37,6 +38,22 @@ const MIME_SNIFF_BYTES = 4100;
 const AUTH_PLACEHOLDER = 'replace-with-secure-token';
 
 /**
+ * Constant-time string comparison.
+ * crypto.timingSafeEqual throws when buffers differ in length, so length is
+ * checked first and a mismatch returns false instead of throwing. The length
+ * leak is acceptable for fixed-length bearer tokens.
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+function safeCompare(a, b) {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+/**
  * Bearer-token auth middleware.
  * - No token configured → 503 (force operator to set the secret)
  * - Placeholder value → 503 (same: copied from example without changing)
@@ -47,7 +64,7 @@ function requireAuth(req, res, next) {
     return res.status(503).json({ error: 'Service not configured: BACKEND_API_TOKEN is not set' });
   }
   const auth = req.headers['authorization'] || '';
-  if (auth === `Bearer ${BACKEND_API_TOKEN}`) return next();
+  if (safeCompare(auth, `Bearer ${BACKEND_API_TOKEN}`)) return next();
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
@@ -132,22 +149,36 @@ app.post('/upload', requireAuth, (req, res) => {
     const jobDir = path.join(__dirname, '..', UPLOAD_DIR, jobId);
     fs.mkdirSync(jobDir, { recursive: true });
 
-    const fileEntries = req.files.map((f) => {
-      const safeFilename = path.basename(f.originalname);
-      const resolvedJobDir = path.resolve(jobDir);
-      const destPath = path.join(resolvedJobDir, safeFilename);
-      if (!destPath.startsWith(resolvedJobDir + path.sep)) {
-        throw new Error(`Unsafe filename rejected: ${f.originalname}`);
+    let fileEntries;
+    try {
+      fileEntries = req.files.map((f) => {
+        const safeFilename = path.basename(f.originalname);
+        const resolvedJobDir = path.resolve(jobDir);
+        const destPath = path.join(resolvedJobDir, safeFilename);
+        if (!destPath.startsWith(resolvedJobDir + path.sep)) {
+          const err = new Error(`Unsafe filename rejected: ${f.originalname}`);
+          err.code = 'UNSAFE_FILENAME';
+          throw err;
+        }
+        fs.renameSync(f.path, destPath);
+        return {
+          name: safeFilename,
+          path: destPath,
+          status: 'pending',
+          result: null,
+          error: null,
+        };
+      });
+    } catch (err) {
+      // Clean up the partially-populated jobDir and any remaining tmp files so
+      // nothing is left on disk and the request doesn't hang.
+      fs.rmSync(jobDir, { recursive: true, force: true });
+      for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+      if (err.code === 'UNSAFE_FILENAME') {
+        return res.status(400).json({ error: err.message });
       }
-      fs.renameSync(f.path, destPath);
-      return {
-        name: safeFilename,
-        path: destPath,
-        status: 'pending',
-        result: null,
-        error: null,
-      };
-    });
+      return res.status(500).json({ error: 'Failed to store uploaded files' });
+    }
 
     const responsibleUserId = req.body.responsibleUserId || process.env.PUBLIC_PAGE_RESPONSIBLE_USER_ID || null;
 
@@ -189,7 +220,21 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-// Process job: iterate files sequentially
+// Serve the built UI. In Docker the UI is copied to /app/ui/public while the
+// backend runs from /app/backend/index.js, so the path is resolved relative to
+// __dirname. Registered after the API routes so it never shadows them; the root
+// path `/` resolves to index.html via express.static's default index behaviour.
+const UI_PUBLIC_DIR = path.join(__dirname, '..', 'ui', 'public');
+app.use(express.static(UI_PUBLIC_DIR));
+
+/**
+ * Process a job by iterating its files sequentially, running the agent on each
+ * and persisting status transitions (pending → processing → done/error) to the
+ * jobs store. Returns when all files are processed; never throws (per-file
+ * errors are captured on the file entry).
+ * @param {string} jobId - Id of a job previously stored via jobs.set.
+ * @returns {Promise<void>}
+ */
 async function processJob(jobId) {
   const job = await jobs.get(jobId);
   if (!job) return;
@@ -217,7 +262,13 @@ async function processJob(jobId) {
   await jobs.set(jobId, job);
 }
 
-// runAgent stub — TODO Week 2: replace with child_process.spawn('claude', ['--mcp-config', ...])
+/**
+ * Run the processing agent against a single uploaded file.
+ * Stub — TODO Week 2: replace with child_process.spawn('claude', ['--mcp-config', ...]).
+ * @param {string} _filePath - Absolute path to the uploaded file to process.
+ * @param {string|null} _responsibleUserId - Bitrix user id the result is attributed to, or null.
+ * @returns {Promise<object>} Agent result object (shape TBD; currently a stub status).
+ */
 async function runAgent(_filePath, _responsibleUserId) {
   // Avoid logging PII (file path, user id) — log only job context when available
   return { status: 'stub', message: 'agent not implemented yet' };

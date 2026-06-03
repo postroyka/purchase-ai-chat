@@ -35,6 +35,11 @@ COPY --from=ui-builder /app/ui/.output/public ./ui/public
 # Prompts (used by claude code agent)
 COPY prompts/ ./prompts/
 
+# Run as non-root. uploads/ is written at runtime, so chown the app dir.
+RUN addgroup -S appuser && adduser -S appuser -G appuser \
+  && mkdir -p /app/uploads && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 3000
 
 CMD ["node", "backend/index.js"]

@@ -14,8 +14,8 @@ import { AjaxError, SdkError } from '@bitrix24/b24jssdk'
  *
  * Adding a new code: append a `KEY: 'VALUE'` line below, then reference it
  * as `Bitrix24ErrorCode.KEY` at the throw site and in test assertions.
- * See `skills/manage-bx24-template-mcp/adding-tools.md`, section "Errors and
- * logging".
+ * See `docs/ARCHITECTURE.md` for how errors flow through the REST dispatch
+ * layer.
  */
 export const Bitrix24ErrorCode = {
   /** Default code: SDK-passed errors without a `.code` field AND

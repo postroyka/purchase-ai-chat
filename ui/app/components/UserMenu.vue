@@ -189,7 +189,7 @@ const items = computed<DropdownMenuItem[]>(() => [
       },
       {
         label: 'Dashboard',
-        to: 'https://github.com/bitrix24/templates-dashboard/',
+        to: 'https://github.com/postroyka/purchase-ai-chat',
         checked: true,
         type: 'checkbox'
       }
