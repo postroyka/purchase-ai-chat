@@ -129,7 +129,7 @@
 | `b24_pst_crm_find_supplier` | Шаг 2 | `unp` |
 | `b24_pst_crm_find_contract` | Шаг 3 | `supplierId` |
 | `b24_pst_crm_find_product` | Шаг 4, для каждой позиции | `vendorCode`, `name` |
-| `b24_pst_crm_create_deal` | Шаг 5 | `supplierId`, `contractId`, `products[]`, `sourceFile`, `responsibleUserId` |
+| `b24_pst_crm_create_deal` | Шаг 5 | `supplierId`, `contractId`, `items[]`, `sourceFile`, `responsibleUserId` |
 
 **Важно**: не вызывай `b24_pst_crm_create_deal`, если любой из предыдущих обязательных шагов завершился ошибкой.
 

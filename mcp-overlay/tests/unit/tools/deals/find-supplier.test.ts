@@ -29,6 +29,12 @@ describe('b24_pst_crm_find_supplier', () => {
     expect(result.success).toBe(false)
   })
 
+  it('rejects UNP longer than 9 digits via Zod schema', () => {
+    const schema = (tool as any).inputSchema
+    const result = schema.unp.safeParse('1234567890')
+    expect(result.success).toBe(false)
+  })
+
   it('accepts valid 9-digit UNP via Zod schema', () => {
     const schema = (tool as any).inputSchema
     const result = schema.unp.safeParse('123456789')

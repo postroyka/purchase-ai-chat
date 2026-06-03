@@ -1,10 +1,15 @@
 name: Deploy
 
-# Build images on push to main and publish them to GHCR.
+# Build images and publish them to GHCR.
+# Triggered only after the CI workflow succeeds on main — this gates the
+# deploy on the full test suite (backend, mcp, ui, test-mcp-overlay), so a
+# broken overlay can never reach production.
 # The production server runs Watchtower, which polls GHCR (~5 min) and
 # recreates the containers automatically — no SSH deploy step here.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
 
 # Prevent concurrent deploys — if two pushes land close together, cancel
@@ -21,6 +26,8 @@ jobs:
   build-and-push:
     name: Build and push Docker images to GHCR
     runs-on: ubuntu-latest
+    # Run only when the triggering CI workflow passed.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     # Only this job needs to write packages.
     permissions:
       contents: read
@@ -37,7 +44,10 @@ jobs:
             context: .
 
     steps:
+      # Check out the exact commit that CI validated, not just main's HEAD.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -59,6 +69,6 @@ jobs:
           # latest for Watchtower; sha-<sha> enables rollback to a specific build.
           tags: |
             ghcr.io/${{ github.repository_owner }}/procure-ai-${{ matrix.name }}:latest
-            ghcr.io/${{ github.repository_owner }}/procure-ai-${{ matrix.name }}:sha-${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/procure-ai-${{ matrix.name }}:sha-${{ github.event.workflow_run.head_sha }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}

@@ -56,4 +56,15 @@ describe('b24_pst_crm_create_deal', () => {
     const schema = (tool as any).inputSchema
     expect(schema.sourceFile.safeParse('').success).toBe(false)
   })
+
+  it('rejects empty contractId but accepts a non-empty one via Zod schema', () => {
+    const schema = (tool as any).inputSchema
+    expect(schema.contractId.safeParse('').success).toBe(false)
+    expect(schema.contractId.safeParse('77').success).toBe(true)
+  })
+
+  it('accepts contractId being omitted (optional) via Zod schema', () => {
+    const schema = (tool as any).inputSchema
+    expect(schema.contractId.safeParse(undefined).success).toBe(true)
+  })
 })
