@@ -13,8 +13,12 @@
 
         <UCard>
           <template #header>
-            <p class="font-medium">Выберите файлы</p>
-            <p class="text-sm text-gray-500 mt-1">Поддерживаются форматы: PDF, XLSX, DOCX. Максимальный размер: 20 МБ.</p>
+            <p class="font-medium">
+              Выберите файлы
+            </p>
+            <p class="text-sm text-gray-500 mt-1">
+              Поддерживаются форматы: PDF, XLSX, DOCX. Максимальный размер: 20 МБ.
+            </p>
           </template>
           <div class="space-y-4">
             <UInput
@@ -36,8 +40,12 @@
         <UCard v-if="jobId">
           <template #header>
             <div class="flex items-center gap-2">
-              <p class="font-medium">Статус обработки</p>
-              <UBadge :color="jobStatusColor" variant="subtle">{{ jobStatusLabel }}</UBadge>
+              <p class="font-medium">
+                Статус обработки
+              </p>
+              <UBadge :color="jobStatusColor" variant="subtle">
+                {{ jobStatusLabel }}
+              </UBadge>
             </div>
           </template>
           <div class="space-y-2">
@@ -65,7 +73,7 @@ const selectedFiles = ref<File[]>([])
 const uploading = ref(false)
 const uploadError = ref<string | null>(null)
 const jobId = ref<string | null>(null)
-const jobFiles = ref<Array<{ name: string; status: string; result?: unknown; error?: string }>>([])
+const jobFiles = ref<Array<{ name: string, status: string, result?: unknown, error?: string }>>([])
 const jobStatus = ref<string>('pending')
 
 let pollInterval: ReturnType<typeof setInterval> | null = null
@@ -84,18 +92,16 @@ async function uploadFiles() {
   const form = new FormData()
   for (const f of selectedFiles.value) form.append('files[]', f)
   try {
-    const res = await $fetch<{ jobId: string; files: Array<{ name: string }> }>('/api/upload', {
+    const res = await $fetch<{ jobId: string, files: Array<{ name: string }> }>('/api/upload', {
       method: 'POST',
-      body: form,
+      body: form
     })
     jobId.value = res.jobId
     jobFiles.value = res.files.map(f => ({ name: f.name, status: 'pending' }))
     startPolling()
-  }
-  catch (e: unknown) {
+  } catch (e: unknown) {
     uploadError.value = e instanceof Error ? e.message : 'Ошибка загрузки файлов'
-  }
-  finally {
+  } finally {
     uploading.value = false
   }
 }
@@ -106,7 +112,7 @@ function startPolling() {
   pollInterval = setInterval(async () => {
     if (!jobId.value) return
     try {
-      const data = await $fetch<{ status: string; files: Array<{ name: string; status: string; result?: unknown; error?: string }> }>(`/api/job/${jobId.value}/status`)
+      const data = await $fetch<{ status: string, files: Array<{ name: string, status: string, result?: unknown, error?: string }> }>(`/api/job/${jobId.value}/status`)
       pollErrorCount = 0
       jobStatus.value = data.status
       jobFiles.value = data.files
@@ -114,8 +120,7 @@ function startPolling() {
         clearInterval(pollInterval!)
         pollInterval = null
       }
-    }
-    catch {
+    } catch {
       pollErrorCount++
       if (pollErrorCount >= MAX_POLL_ERRORS) {
         clearInterval(pollInterval!)
@@ -126,7 +131,9 @@ function startPolling() {
   }, 2000)
 }
 
-onUnmounted(() => { if (pollInterval) clearInterval(pollInterval) })
+onUnmounted(() => {
+  if (pollInterval) clearInterval(pollInterval)
+})
 
 const JOB_STATUS_LABELS: Record<string, string> = { pending: 'Ожидание', processing: 'Обработка...', done: 'Готово' }
 const JOB_STATUS_COLORS: Record<string, BadgeColor> = { pending: 'gray', processing: 'blue', done: 'green' }
