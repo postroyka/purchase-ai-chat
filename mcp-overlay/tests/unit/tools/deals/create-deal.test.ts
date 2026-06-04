@@ -41,4 +41,30 @@ describe('b24_pst_crm_create_deal', () => {
     const result = schema.items.safeParse([{ name: 'test', priceExclVat: 1, quantity: 0 }])
     expect(result.success).toBe(false)
   })
+
+  it('rejects empty supplierId via Zod schema', () => {
+    const schema = (tool as any).inputSchema
+    expect(schema.supplierId.safeParse('').success).toBe(false)
+  })
+
+  it('rejects empty responsibleUserId via Zod schema', () => {
+    const schema = (tool as any).inputSchema
+    expect(schema.responsibleUserId.safeParse('').success).toBe(false)
+  })
+
+  it('rejects empty sourceFile via Zod schema', () => {
+    const schema = (tool as any).inputSchema
+    expect(schema.sourceFile.safeParse('').success).toBe(false)
+  })
+
+  it('rejects empty contractId but accepts a non-empty one via Zod schema', () => {
+    const schema = (tool as any).inputSchema
+    expect(schema.contractId.safeParse('').success).toBe(false)
+    expect(schema.contractId.safeParse('77').success).toBe(true)
+  })
+
+  it('accepts contractId being omitted (optional) via Zod schema', () => {
+    const schema = (tool as any).inputSchema
+    expect(schema.contractId.safeParse(undefined).success).toBe(true)
+  })
 })

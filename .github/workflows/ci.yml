@@ -13,12 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: pnpm/action-setup@08c4be7e2e672a47d11bd04269e27e5f3e8529cb # v6.0.0
+        with:
+          package_json_file: mcp/package.json
+
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: "22"
-
-      - name: Install pnpm
-        run: corepack enable && corepack prepare pnpm@11.5.0 --activate
 
       - name: Install dependencies
         working-directory: backend
@@ -37,12 +38,13 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: pnpm/action-setup@08c4be7e2e672a47d11bd04269e27e5f3e8529cb # v6.0.0
+        with:
+          package_json_file: mcp/package.json
+
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: "22"
-
-      - name: Install pnpm
-        run: corepack enable && corepack prepare pnpm@11.5.0 --activate
 
       - name: Install dependencies
         working-directory: mcp
@@ -64,18 +66,51 @@ jobs:
         working-directory: mcp
         run: pnpm build
 
+  test-mcp-overlay:
+    name: Test mcp-overlay deals tools
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: pnpm/action-setup@08c4be7e2e672a47d11bd04269e27e5f3e8529cb # v6.0.0
+        with:
+          package_json_file: mcp/package.json
+
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: mcp/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Guard — deals must not exist in upstream mcp
+        run: '[ ! -e server/mcp/tools/deals ] || (echo "ERROR: deals already exists in upstream (file or dir) — overlay conflict" && exit 1)'
+
+      - run: cp -r ../mcp-overlay/server/mcp/tools/deals server/mcp/tools/deals
+
+      # Copy overlay tests into mcp/tests/ so vitest's default include
+      # pattern (tests/**/*.test.ts) picks them up without config overrides.
+      - run: cp -r ../mcp-overlay/tests/unit tests/overlay
+
+      - run: pnpm exec vitest run tests/overlay
+
   ui:
     name: UI lint & build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: pnpm/action-setup@08c4be7e2e672a47d11bd04269e27e5f3e8529cb # v6.0.0
+        with:
+          package_json_file: mcp/package.json
+
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
           node-version: "22"
-
-      - name: Install pnpm
-        run: corepack enable && corepack prepare pnpm@11.5.0 --activate
 
       - name: Install dependencies
         working-directory: ui

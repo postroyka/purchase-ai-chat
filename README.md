@@ -68,6 +68,8 @@ curl http://localhost:3000/job/<jobId>/status \
 [bitrix24/templates-mcp](https://github.com/bitrix24/templates-mcp) —
 файлы хранятся прямо в репо, никаких submodule.
 
+⚠️ **Статус Week 1:** все 4 PST-инструмента (`b24_pst_crm_*`) — заглушки. Сквозной флоу не работает до реализации Week 2 (b24-controller + тела инструментов).
+
 PST-специфичные инструменты живут в `mcp-overlay/` и копируются поверх
 upstream при сборке образа (`Dockerfile.mcp`). Имена используют префикс
 `b24_pst_crm_*`, чтобы не пересекаться с `b24_crm_*` upstream.
@@ -143,3 +145,7 @@ make prod-up               # запустить app + mcp + redis + watchtower
 - [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) — требования и бизнес-правила  
   *(Полное ТЗ — `docs/ТЗ_Закупки_PST.md` v1.10 — хранится в Google Drive проекта)*
 - [prompts/main.md](prompts/main.md) — системный промпт агента
+
+---
+
+*Last reviewed: 2026-06-04 (PR #6 — multi-expert review ×3, all findings applied)*

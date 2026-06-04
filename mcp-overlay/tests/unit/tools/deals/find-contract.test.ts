@@ -16,4 +16,9 @@ describe('b24_pst_crm_find_contract', () => {
       'b24_pst_crm_find_contract is not implemented yet',
     )
   })
+
+  it('rejects empty supplierId via Zod schema', () => {
+    const schema = (tool as any).inputSchema
+    expect(schema.supplierId.safeParse('').success).toBe(false)
+  })
 })
