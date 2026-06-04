@@ -145,3 +145,7 @@ make prod-up               # запустить app + mcp + redis + watchtower
 - [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) — требования и бизнес-правила  
   *(Полное ТЗ — `docs/ТЗ_Закупки_PST.md` v1.10 — хранится в Google Drive проекта)*
 - [prompts/main.md](prompts/main.md) — системный промпт агента
+
+---
+
+*Last reviewed: 2026-06-04 (PR #6 — multi-expert review ×3, all findings applied)*

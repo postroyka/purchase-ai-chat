@@ -92,7 +92,7 @@ jobs:
 
       - run: cp -r ../mcp-overlay/server/mcp/tools/deals server/mcp/tools/deals
 
-      - run: pnpm exec vitest run ../mcp-overlay/tests/unit
+      - run: pnpm exec vitest run --include='../mcp-overlay/tests/unit/**/*.test.ts'
 
   ui:
     name: UI lint & build
