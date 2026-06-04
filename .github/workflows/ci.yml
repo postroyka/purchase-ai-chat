@@ -92,7 +92,11 @@ jobs:
 
       - run: cp -r ../mcp-overlay/server/mcp/tools/deals server/mcp/tools/deals
 
-      - run: pnpm exec vitest run --include='../mcp-overlay/tests/unit/**/*.test.ts'
+      # Copy overlay tests into mcp/tests/ so vitest's default include
+      # pattern (tests/**/*.test.ts) picks them up without config overrides.
+      - run: cp -r ../mcp-overlay/tests/unit tests/overlay
+
+      - run: pnpm exec vitest run tests/overlay
 
   ui:
     name: UI lint & build
