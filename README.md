@@ -57,7 +57,8 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 BASE=http://localhost:3000
 TOKEN=dev-token-local        # BACKEND_API_TOKEN из backend/.env.prod (или .env для локалки)
 
-# Health (без токена)
+# Health (без токена) — проверяет связь с Redis
+# → { "ok": true, "redis": "ok" }  или 503 { "ok": false, "redis": "unavailable" }
 curl "$BASE/health"
 
 # Загрузить файл
@@ -77,7 +78,7 @@ curl "$BASE/job/<jobId>/status" \
 $BASE  = "http://localhost:3000"
 $TOKEN = "dev-token-local"   # BACKEND_API_TOKEN из backend/.env.prod (или .env для локалки)
 
-# Health (без токена)
+# Health (без токена) — проверяет связь с Redis
 curl.exe -i "$BASE/health"
 
 # Загрузить файл (поле обязательно files[], не file)
@@ -185,4 +186,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-05 (PR #13 — Node 22.16.0 pin, dependabot.yml, multer 2.x, UI lint fixes)*
+*Last reviewed: 2026-06-05 (PR #33 — graceful shutdown, real /health + Redis ping, file cleanup, docker-compose healthcheck)*
