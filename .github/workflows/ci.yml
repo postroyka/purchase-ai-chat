@@ -21,6 +21,9 @@ jobs:
         with:
           node-version: "22.16.0"
 
+      - name: Verify Node + corepack + pnpm versions
+        run: node --version && corepack --version && pnpm --version
+
       - name: Install dependencies
         working-directory: backend
         run: pnpm install --frozen-lockfile
