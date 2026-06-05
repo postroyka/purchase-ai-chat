@@ -16,7 +16,7 @@ export function createJobsStore(config = {}) {
 }
 
 function createRedisStore(url, ttlSeconds) {
-  const client = new Redis(url, { lazyConnect: true, enableOfflineQueue: false });
+  const client = new Redis(url, { lazyConnect: true, enableOfflineQueue: false, commandTimeout: 3000 });
   client.connect().catch((e) => console.error('[jobs-store] Redis connect error:', e));
   client.on('error', (e) => console.error('[jobs-store] Redis error:', e));
 

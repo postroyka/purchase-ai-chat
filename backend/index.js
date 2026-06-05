@@ -72,7 +72,7 @@ export function createApp(config = {}) {
   const ttlHours = config.ttlHours ?? parseInt(process.env.JOB_TTL_HOURS ?? '24', 10);
 
   const app = express();
-  const jobs = createJobsStore({ redisUrl, ttlHours });
+  const jobs = config.jobs ?? createJobsStore({ redisUrl, ttlHours });
 
   // Track in-flight processJob calls so graceful shutdown can wait for them.
   let activeJobs = 0;

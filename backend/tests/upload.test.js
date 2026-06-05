@@ -80,6 +80,19 @@ describe('GET /health', () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.redis).toBe('ok');
   });
+
+  it('returns 503 when jobs store ping fails', async () => {
+    const brokenJobs = {
+      get: async () => null,
+      set: async () => {},
+      ping: async () => { throw new Error('Redis connection refused'); },
+    };
+    const brokenApp = createApp({ token: TOKEN, uploadDir: UPLOAD_DIR, jobs: brokenJobs });
+    const res = await request(brokenApp).get('/health');
+    expect(res.status).toBe(503);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.redis).toBe('unavailable');
+  });
 });
 
 // ── Auth ────────────────────────────────────────────────────────────────────
