@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createJobsStore } from '../jobs-store.js';
 
+// Suppress expected in-memory store warnings — not a test concern
+vi.spyOn(console, 'warn').mockImplementation(() => {});
+
 function makeJob(id) {
   return {
     jobId: id,
@@ -34,6 +37,8 @@ describe('createJobsStore — in-memory (no redisUrl)', () => {
     expect(got).toBeNull();
   });
 
+  // createdAt must be fixed at first write — subsequent set() calls must not
+  // update it, otherwise repeated status updates would reset the TTL clock.
   it('preserves original createdAt across updates', async () => {
     const job = makeJob('job-2');
     job.createdAt = 1000;

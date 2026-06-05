@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import path from 'path';
 import fs from 'fs';
@@ -11,6 +11,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN = 'test-upload-token-abc123';
 const UPLOAD_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'procure-upload-test-'));
 const FIXTURES = path.join(__dirname, 'fixtures');
+
+// Suppress expected in-memory store warnings — not a test concern
+vi.spyOn(console, 'warn').mockImplementation(() => {});
 
 const app = createApp({ token: TOKEN, uploadDir: UPLOAD_DIR });
 const auth = () => `Bearer ${TOKEN}`;
@@ -28,6 +31,8 @@ beforeAll(() => {
   fs.writeFileSync(path.join(FIXTURES, 'valid.pdf'), makeValidPdfBuffer());
   fs.writeFileSync(path.join(FIXTURES, 'fake.pdf'), Buffer.from('this is not a pdf'));
   fs.writeFileSync(path.join(FIXTURES, 'script.exe'), Buffer.from([0x4d, 0x5a]));
+  // 2 KB filler — large enough to reliably trigger LIMIT_FILE_SIZE at a 1 KB limit
+  fs.writeFileSync(path.join(FIXTURES, 'large.pdf'), Buffer.alloc(2048, 0x25));
 });
 
 afterAll(() => {
@@ -61,6 +66,17 @@ describe('Auth middleware', () => {
       uploadDir: UPLOAD_DIR,
     });
     const res = await request(placeholder).post('/upload');
+    expect(res.status).toBe(503);
+  });
+
+  it('returns 503 on /job/:id/status when token is the placeholder (with Bearer header)', async () => {
+    const placeholder = createApp({
+      token: 'replace-with-secure-token',
+      uploadDir: UPLOAD_DIR,
+    });
+    const res = await request(placeholder)
+      .get('/job/some-id/status')
+      .set('Authorization', 'Bearer replace-with-secure-token');
     expect(res.status).toBe(503);
   });
 
@@ -138,6 +154,10 @@ describe('POST /upload', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/too many files/i);
   });
+
+  // NOTE: LIMIT_FILE_SIZE cannot be reliably tested with supertest — it buffers
+  // the entire request in memory before sending, so busboy never fires the 'limit'
+  // event during streaming. Integration tests with a real HTTP client are needed.
 });
 
 // ── GET /job/:id/status ───────────────────────────────────────────────────────

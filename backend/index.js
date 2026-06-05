@@ -17,11 +17,16 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
-  'application/zip', // fallback for valid xlsx/docx whose OOXML header isn't detected
+  // application/zip is a valid fallback for xlsx/docx — only allowed when ext matches
+  'application/zip',
 ]);
 
+// file-type needs ≥4096 bytes to reliably detect OOXML (xlsx/docx) formats
 const MIME_SNIFF_BYTES = 4100;
 
+// Constant-time string comparison. Length mismatch short-circuits before timingSafeEqual
+// to avoid the "buffers must have the same length" throw; the length leak is acceptable
+// for fixed-length bearer tokens.
 function safeCompare(a, b) {
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(b, 'utf8');
@@ -33,6 +38,18 @@ function safeCompare(a, b) {
  * Create and configure the Express application.
  * All config is taken from the `config` argument (used by tests) with fallback
  * to process.env so that the production entry-point works without changes.
+ *
+ * @param {{
+ *   token?: string,
+ *   uploadDir?: string,
+ *   maxFileSizeMb?: number,
+ *   maxFilesPerRequest?: number,
+ *   allowedExtensions?: string,
+ *   redisUrl?: string,
+ *   ttlHours?: number,
+ *   responsibleUserId?: string,
+ * }} [config]
+ * @returns {import('express').Express}
  */
 export function createApp(config = {}) {
   const uploadDir = path.resolve(
@@ -77,23 +94,14 @@ export function createApp(config = {}) {
     },
   });
 
+  // Extension check is intentionally NOT in fileFilter: calling cb(error) there aborts
+  // the multipart stream mid-upload causing ECONNRESET on the client before the 400 is sent.
+  // Instead we accept all files here and check extensions after the upload completes.
   const upload = multer({
     storage,
     limits: {
       fileSize: maxFileSizeMb * 1024 * 1024,
       files: maxFilesPerRequest,
-    },
-    fileFilter: (_req, file, cb) => {
-      const ext = path.extname(file.originalname).replace('.', '').toLowerCase();
-      if (!allowedExtensions.includes(ext)) {
-        return cb(
-          Object.assign(
-            new Error(`File type .${ext} is not allowed. Allowed: ${allowedExtensions.join(', ')}`),
-            { code: 'INVALID_EXTENSION' },
-          ),
-        );
-      }
-      cb(null, true);
     },
   });
 
@@ -114,7 +122,19 @@ export function createApp(config = {}) {
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
-      // MIME validation via magic bytes.
+      // Extension check (moved out of fileFilter — see comment above multer setup)
+      for (const f of req.files) {
+        const ext = path.extname(f.originalname).replace('.', '').toLowerCase();
+        if (!allowedExtensions.includes(ext)) {
+          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          return res.status(400).json({
+            error: `File type .${ext} is not allowed. Allowed: ${allowedExtensions.join(', ')}`,
+          });
+        }
+      }
+
+      // MIME validation via magic bytes — reads only MIME_SNIFF_BYTES to avoid loading
+      // full files into memory (prevents zip-bomb DoS from large xlsx/docx).
       for (const f of req.files) {
         let buf;
         try {
@@ -128,11 +148,19 @@ export function createApp(config = {}) {
           return res.status(500).json({ error: 'Failed to read uploaded file' });
         }
 
+        const ext = path.extname(f.originalname).replace('.', '').toLowerCase();
         const detected = await fileTypeFromBuffer(buf);
         if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
           for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
           return res.status(400).json({
             error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected?.mime ?? 'unknown'}).`,
+          });
+        }
+        // application/zip is a structural fallback for xlsx/docx — reject if ext doesn't match
+        if (detected.mime === 'application/zip' && !['xlsx', 'docx'].includes(ext)) {
+          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          return res.status(400).json({
+            error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected.mime}).`,
           });
         }
       }
@@ -208,6 +236,8 @@ export function createApp(config = {}) {
   return app;
 }
 
+// Iterates a job's files sequentially, runs the agent on each, and persists
+// status transitions (pending → processing → done/error) to the jobs store.
 async function processJob(jobId, jobs) {
   const job = await jobs.get(jobId);
   if (!job) return;

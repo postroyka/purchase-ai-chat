@@ -1,5 +1,9 @@
 import Redis from 'ioredis';
 
+/**
+ * @param {{ redisUrl?: string, ttlHours?: number }} [config]
+ * @returns {{ get(id: string): Promise<object|null>, set(id: string, job: object): Promise<void> }}
+ */
 export function createJobsStore(config = {}) {
   const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? '';
   const ttlSeconds = (config.ttlHours ?? parseInt(process.env.JOB_TTL_HOURS ?? '24', 10)) * 3600;
@@ -51,6 +55,8 @@ function createRedisStore(url, ttlSeconds) {
 function createMemoryStore(ttlSeconds) {
   const map = new Map();
 
+  // Evict expired entries every 10 min (lightweight TTL for in-memory/dev/test).
+  // .unref() prevents this timer from keeping the Node.js process alive in tests.
   setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of map.entries()) {
@@ -58,7 +64,7 @@ function createMemoryStore(ttlSeconds) {
         map.delete(id);
       }
     }
-  }, 10 * 60 * 1000);
+  }, 10 * 60 * 1000).unref();
 
   return {
     async get(id) {
