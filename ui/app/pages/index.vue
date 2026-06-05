@@ -1,148 +1,329 @@
 <template>
-  <UDashboardPage>
-    <UDashboardPageHeader title="Загрузка предложений поставщиков" />
-    <UDashboardPageBody>
-      <div class="max-w-2xl space-y-6">
-        <UAlert
-          v-if="uploadError"
-          color="red"
-          variant="subtle"
-          :description="uploadError"
-          class="mb-2"
+  <B24DashboardPanel>
+    <template #header>
+      <div class="flex items-center gap-3 px-4 py-3 border-b border-base-300">
+        <div>
+          <h1 class="text-lg font-semibold text-base-master">
+            Загрузка прайс-листов поставщиков
+          </h1>
+          <p class="text-sm text-base-500 mt-0.5">
+            Загрузите файлы — система создаст сделки в Bitrix24 автоматически
+          </p>
+        </div>
+      </div>
+    </template>
+
+    <template #body>
+      <div class="max-w-2xl mx-auto py-6 px-4 space-y-5">
+
+        <!-- Зона загрузки файлов -->
+        <B24FileUpload
+          v-model="selectedFiles"
+          :multiple="true"
+          accept=".pdf,.xlsx,.docx"
+          variant="area"
+          layout="list"
+          label="Перетащите файлы или нажмите для выбора"
+          description="PDF, XLSX, DOCX · Максимум 20 МБ на файл · До 10 файлов за раз"
+          :file-delete="!uploading"
+          :disabled="uploading"
+          :reset="uploadDone"
+        >
+          <template #actions="{ files, open }">
+            <div class="flex items-center gap-3">
+              <B24Button
+                color="air-secondary"
+                :disabled="uploading"
+                @click="() => open()"
+              >
+                Выбрать файлы
+              </B24Button>
+              <B24Button
+                color="air-primary"
+                :disabled="!files?.length || uploading"
+                :loading="uploading"
+                @click="doUpload"
+              >
+                {{ uploading ? 'Загружаем...' : `Загрузить (${files?.length ?? 0})` }}
+              </B24Button>
+            </div>
+          </template>
+        </B24FileUpload>
+
+        <!-- Полоса прогресса: пока идёт загрузка или опрос -->
+        <B24Progress
+          v-if="uploading || polling"
+          :model-value="null"
+          animation="carousel"
+          color="air-primary"
+          size="xs"
         />
 
-        <UCard>
-          <template #header>
-            <p class="font-medium">
-              Выберите файлы
-            </p>
-            <p class="text-sm text-gray-500 mt-1">
-              Поддерживаются форматы: PDF, XLSX, DOCX. Максимальный размер: 20 МБ.
-            </p>
-          </template>
-          <div class="space-y-4">
-            <UInput
-              type="file"
-              multiple
-              accept=".pdf,.xlsx,.docx"
-              @change="onFilesSelected"
-            />
-            <UButton
-              :disabled="!selectedFiles.length || uploading"
-              :loading="uploading"
-              @click="uploadFiles"
-            >
-              Загрузить ({{ selectedFiles.length }} файл(ов))
-            </UButton>
-          </div>
-        </UCard>
+        <!-- Ошибка -->
+        <B24Alert
+          v-if="uploadError"
+          color="air-primary-alert"
+          title="Ошибка"
+          :description="uploadError"
+          :close="true"
+          @update:open="uploadError = null"
+        />
 
-        <UCard v-if="jobId">
+        <!-- Карточка статуса задачи -->
+        <B24Card v-if="job">
           <template #header>
-            <div class="flex items-center gap-2">
-              <p class="font-medium">
-                Статус обработки
-              </p>
-              <UBadge :color="jobStatusColor" variant="subtle">
-                {{ jobStatusLabel }}
-              </UBadge>
+            <div class="flex items-center justify-between">
+              <span class="font-medium text-base-master">Статус обработки</span>
+              <B24Badge
+                :label="JOB_LABELS[job.status] ?? job.status"
+                :color="JOB_COLORS[job.status] ?? 'air-secondary'"
+                size="sm"
+              />
             </div>
           </template>
-          <div class="space-y-2">
+
+          <div class="divide-y divide-base-200">
             <div
-              v-for="file in jobFiles"
+              v-for="file in job.files"
               :key="file.name"
-              class="flex items-center justify-between py-2 border-b last:border-0"
+              class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0"
             >
-              <span class="text-sm">{{ file.name }}</span>
-              <UBadge :color="fileStatusColor(file.status)" variant="subtle" size="sm">
-                {{ file.status }}
-              </UBadge>
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-sm text-base-700 truncate">{{ file.name }}</span>
+              </div>
+              <div class="flex items-center gap-2 shrink-0 ml-3">
+                <span
+                  v-if="file.error"
+                  class="text-xs text-red-500 max-w-[180px] truncate"
+                  :title="file.error"
+                >
+                  {{ file.error }}
+                </span>
+                <B24Badge
+                  :label="FILE_LABELS[file.status] ?? file.status"
+                  :color="FILE_COLORS[file.status] ?? 'air-secondary'"
+                  size="sm"
+                />
+              </div>
             </div>
           </div>
-        </UCard>
+
+          <template v-if="job.status === 'done'" #footer>
+            <div class="flex justify-end">
+              <B24Button
+                color="air-secondary"
+                size="sm"
+                @click="resetState"
+              >
+                Загрузить ещё
+              </B24Button>
+            </div>
+          </template>
+        </B24Card>
+
       </div>
-    </UDashboardPageBody>
-  </UDashboardPage>
+    </template>
+  </B24DashboardPanel>
 </template>
 
 <script setup lang="ts">
-type BadgeColor = 'gray' | 'blue' | 'green' | 'red'
+const toast = useToast()
+const config = useRuntimeConfig()
 
-const selectedFiles = ref<File[]>([])
-const uploading = ref(false)
-const uploadError = ref<string | null>(null)
-const jobId = ref<string | null>(null)
-const jobFiles = ref<Array<{ name: string, status: string, result?: unknown, error?: string }>>([])
-const jobStatus = ref<string>('pending')
+// ── Типы ─────────────────────────────────────────────────────────────────────
 
-let pollInterval: ReturnType<typeof setInterval> | null = null
-let pollErrorCount = 0
-const MAX_POLL_ERRORS = 5
+type BadgeColor =
+  | 'air-primary'
+  | 'air-primary-success'
+  | 'air-primary-alert'
+  | 'air-primary-warning'
+  | 'air-secondary'
+  | 'air-tertiary'
 
-function onFilesSelected(e: Event) {
-  const input = e.target as HTMLInputElement
-  selectedFiles.value = input.files ? Array.from(input.files) : []
+interface FileEntry {
+  name: string
+  status: 'pending' | 'processing' | 'done' | 'error'
+  result?: unknown
+  error?: string | null
 }
 
-async function uploadFiles() {
-  if (!selectedFiles.value.length) return
+interface JobStatus {
+  jobId: string
+  status: 'pending' | 'processing' | 'done' | 'error'
+  files: FileEntry[]
+}
+
+// ── Состояние ────────────────────────────────────────────────────────────────
+
+const selectedFiles = ref<File[] | null>(null)
+const uploading = ref(false)
+const polling = ref(false)
+const uploadError = ref<string | null>(null)
+const uploadDone = ref(false)
+const job = ref<JobStatus | null>(null)
+
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let pollErrors = 0
+const MAX_POLL_ERRORS = 5
+
+// ── Метки и цвета статусов ───────────────────────────────────────────────────
+
+const JOB_LABELS: Record<string, string> = {
+  pending: 'Ожидание',
+  processing: 'Обработка…',
+  done: 'Готово',
+  error: 'Ошибка',
+}
+
+const JOB_COLORS: Record<string, BadgeColor> = {
+  pending: 'air-secondary',
+  processing: 'air-primary',
+  done: 'air-primary-success',
+  error: 'air-primary-alert',
+}
+
+const FILE_LABELS: Record<string, string> = {
+  pending: 'Ожидание',
+  processing: 'Обработка…',
+  done: 'Готово',
+  error: 'Ошибка',
+}
+
+const FILE_COLORS: Record<string, BadgeColor> = {
+  pending: 'air-secondary',
+  processing: 'air-primary',
+  done: 'air-primary-success',
+  error: 'air-primary-alert',
+}
+
+// ── API ───────────────────────────────────────────────────────────────────────
+
+function authHeaders(): Record<string, string> {
+  const token = config.public.backendToken
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+// ── Загрузка ──────────────────────────────────────────────────────────────────
+
+async function doUpload() {
+  const files = selectedFiles.value
+  if (!files?.length) return
+
   uploading.value = true
   uploadError.value = null
+  uploadDone.value = false
+  job.value = null
+
   const form = new FormData()
-  for (const f of selectedFiles.value) form.append('files[]', f)
+  for (const f of files) form.append('files[]', f)
+
   try {
-    const res = await $fetch<{ jobId: string, files: Array<{ name: string }> }>('/api/upload', {
-      method: 'POST',
-      body: form
+    const res = await $fetch<{ jobId: string; files: Array<{ name: string; status: string }> }>(
+      '/upload',
+      { method: 'POST', body: form, headers: authHeaders() },
+    )
+
+    job.value = {
+      jobId: res.jobId,
+      status: 'pending',
+      files: res.files.map(f => ({ name: f.name, status: 'pending' })),
+    }
+
+    startPolling(res.jobId)
+  }
+  catch (e: unknown) {
+    const msg = extractErrorMessage(e)
+    uploadError.value = msg
+    toast.add({
+      title: 'Ошибка загрузки',
+      description: msg,
+      color: 'air-primary-alert',
+      duration: 6000,
     })
-    jobId.value = res.jobId
-    jobFiles.value = res.files.map(f => ({ name: f.name, status: 'pending' }))
-    startPolling()
-  } catch (e: unknown) {
-    uploadError.value = e instanceof Error ? e.message : 'Ошибка загрузки файлов'
-  } finally {
+  }
+  finally {
     uploading.value = false
   }
 }
 
-function startPolling() {
-  if (pollInterval) clearInterval(pollInterval)
-  pollErrorCount = 0
-  pollInterval = setInterval(async () => {
-    if (!jobId.value) return
+// ── Опрос статуса ─────────────────────────────────────────────────────────────
+
+function startPolling(jobId: string) {
+  stopPolling()
+  polling.value = true
+  pollErrors = 0
+
+  pollTimer = setInterval(async () => {
     try {
-      const data = await $fetch<{ status: string, files: Array<{ name: string, status: string, result?: unknown, error?: string }> }>(`/api/job/${jobId.value}/status`)
-      pollErrorCount = 0
-      jobStatus.value = data.status
-      jobFiles.value = data.files
+      const data = await $fetch<JobStatus>(`/job/${jobId}/status`, {
+        headers: authHeaders(),
+      })
+      pollErrors = 0
+      job.value = data
+
       if (data.status === 'done' || data.status === 'error') {
-        clearInterval(pollInterval!)
-        pollInterval = null
+        stopPolling()
+        uploadDone.value = true
+
+        if (data.status === 'done') {
+          const doneCount = data.files.filter(f => f.status === 'done').length
+          toast.add({
+            title: 'Обработка завершена',
+            description: `${doneCount} из ${data.files.length} файлов успешно обработано`,
+            color: 'air-primary-success',
+            duration: 5000,
+          })
+        }
+        else {
+          toast.add({
+            title: 'Обработка завершена с ошибками',
+            description: 'Некоторые файлы не удалось обработать — проверьте статус',
+            color: 'air-primary-warning',
+            duration: 6000,
+          })
+        }
       }
-    } catch {
-      pollErrorCount++
-      if (pollErrorCount >= MAX_POLL_ERRORS) {
-        clearInterval(pollInterval!)
-        pollInterval = null
-        uploadError.value = 'Не удалось получить статус задачи. Попробуйте обновить страницу.'
+    }
+    catch {
+      pollErrors++
+      if (pollErrors >= MAX_POLL_ERRORS) {
+        stopPolling()
+        uploadError.value = 'Не удалось получить статус задачи. Обновите страницу.'
       }
     }
   }, 2000)
 }
 
-onUnmounted(() => {
-  if (pollInterval) clearInterval(pollInterval)
-})
-
-const JOB_STATUS_LABELS: Record<string, string> = { pending: 'Ожидание', processing: 'Обработка...', done: 'Готово' }
-const JOB_STATUS_COLORS: Record<string, BadgeColor> = { pending: 'gray', processing: 'blue', done: 'green' }
-const FILE_STATUS_COLORS: Record<string, BadgeColor> = { pending: 'gray', processing: 'blue', done: 'green', error: 'red' }
-
-const jobStatusLabel = computed(() => JOB_STATUS_LABELS[jobStatus.value] ?? jobStatus.value)
-const jobStatusColor = computed((): BadgeColor => JOB_STATUS_COLORS[jobStatus.value] ?? 'gray')
-
-function fileStatusColor(status: string): BadgeColor {
-  return FILE_STATUS_COLORS[status] ?? 'gray'
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+  polling.value = false
 }
+
+// ── Сброс ────────────────────────────────────────────────────────────────────
+
+function resetState() {
+  stopPolling()
+  job.value = null
+  uploadError.value = null
+  uploadDone.value = false
+  selectedFiles.value = null
+}
+
+// ── Утилиты ──────────────────────────────────────────────────────────────────
+
+function extractErrorMessage(e: unknown): string {
+  if (e && typeof e === 'object' && 'data' in e) {
+    const data = (e as { data?: { error?: string } }).data
+    if (data?.error) return data.error
+  }
+  if (e instanceof Error) return e.message
+  return 'Неизвестная ошибка'
+}
+
+// ── Очистка ───────────────────────────────────────────────────────────────────
+
+onUnmounted(stopPolling)
 </script>
