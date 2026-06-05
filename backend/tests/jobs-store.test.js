@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createJobsStore } from '../jobs-store.js';
 
-// Suppress expected in-memory store warnings — not a test concern
+// Suppress expected store noise — warn (in-memory) and error (Redis parse/schema failures)
 vi.spyOn(console, 'warn').mockImplementation(() => {});
+vi.spyOn(console, 'error').mockImplementation(() => {});
 
 function makeJob(id) {
   return {
