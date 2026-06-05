@@ -7,17 +7,20 @@
 ## Архитектура
 
 ```
-UI (Nuxt, :3000) ──upload/poll──▶ backend (Express, :3000) ──Claude Code──▶ MCP (Nuxt, :3000)
-                                                                              b24_pst_crm_find_supplier
-                                                                              b24_pst_crm_find_contract
-                                                                              b24_pst_crm_find_product
-                                                                              b24_pst_crm_create_deal
-                                        ▲
-                                        │
-                                     Redis (jobs persistence)
+                    dev: :3001          prod: :3000 (Express раздаёт UI-статику)
+UI (Nuxt SPA) ──upload/poll──▶ backend (Express, :3000) ──Claude Code──▶ MCP (:3000, internal)
+                                                                          b24_pst_crm_find_supplier
+                                                                          b24_pst_crm_find_contract
+                                                                          b24_pst_crm_find_product
+                                                                          b24_pst_crm_create_deal
+                                      ▲
+                                      │
+                                   Redis (jobs persistence)
 ```
 
-MCP-сервис не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3000/mcp`).
+- **Dev**: Nuxt dev-server на `:3001`, backend на `:3000`. devProxy в nuxt.config.ts перенаправляет `/upload`, `/job`, `/health` на backend.
+- **Prod**: Nuxt собирается в статику (`ui/.output/public/`), Express раздаёт её через `express.static` — один процесс, один порт `:3000`.
+- MCP не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3000/mcp`).
 
 ## Быстрый старт
 

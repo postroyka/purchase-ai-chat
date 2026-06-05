@@ -46,8 +46,13 @@ export default defineNuxtConfig({
 
   compatibilityDate: '2024-07-11',
 
+  devServer: {
+    // Explicit port so Nuxt dev never clashes with backend on :3000.
+    port: 3001,
+  },
+
   nitro: {
-    // In local dev the UI runs on its own port; proxy API calls to the backend.
+    // In local dev the UI dev-server runs on :3001; API calls are proxied to backend on :3000.
     // In production the backend Express server serves the built static files directly.
     devProxy: {
       '/upload': { target: 'http://localhost:3000/upload', changeOrigin: true },
