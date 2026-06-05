@@ -2,7 +2,7 @@ import Redis from 'ioredis';
 
 /**
  * @param {{ redisUrl?: string, ttlHours?: number }} [config]
- * @returns {{ get(id: string): Promise<object|null>, set(id: string, job: object): Promise<void> }}
+ * @returns {{ get(id: string): Promise<object|null>, set(id: string, job: object): Promise<void>, ping(): Promise<void> }}
  */
 export function createJobsStore(config = {}) {
   const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? '';
@@ -49,6 +49,9 @@ function createRedisStore(url, ttlSeconds) {
         throw e;
       }
     },
+    async ping() {
+      await client.ping();
+    },
   };
 }
 
@@ -73,6 +76,9 @@ function createMemoryStore(ttlSeconds) {
     async set(id, job) {
       const existing = map.get(id);
       map.set(id, { ...job, createdAt: existing?.createdAt ?? job.createdAt ?? Date.now() });
+    },
+    async ping() {
+      // in-memory store is always available
     },
   };
 }

@@ -74,6 +74,10 @@ export function createApp(config = {}) {
   const app = express();
   const jobs = createJobsStore({ redisUrl, ttlHours });
 
+  // Track in-flight processJob calls so graceful shutdown can wait for them.
+  let activeJobs = 0;
+  app.getActiveJobCount = () => activeJobs;
+
   function requireAuth(req, res, next) {
     if (!token || token === AUTH_PLACEHOLDER) {
       return res.status(503).json({ error: 'Service not configured: BACKEND_API_TOKEN is not set' });
@@ -204,9 +208,10 @@ export function createApp(config = {}) {
       };
       await jobs.set(jobId, job);
 
+      activeJobs++;
       processJob(jobId, jobs).catch((e) =>
         console.error(`[processJob] unhandled error for job ${jobId}:`, e),
-      );
+      ).finally(() => { activeJobs--; });
 
       return res.status(201).json({
         jobId,
@@ -226,8 +231,16 @@ export function createApp(config = {}) {
     });
   });
 
-  // GET /health — no auth, used by Docker healthcheck
-  app.get('/health', (_req, res) => res.json({ ok: true }));
+  // GET /health — no auth, used by Docker healthcheck.
+  // Checks Redis connectivity so nginx-proxy and Docker know when the instance is ready.
+  app.get('/health', async (_req, res) => {
+    try {
+      await jobs.ping();
+      return res.json({ ok: true, redis: 'ok' });
+    } catch {
+      return res.status(503).json({ ok: false, redis: 'unavailable' });
+    }
+  });
 
   // Serve built UI (only present in Docker image).
   const UI_PUBLIC_DIR = path.join(__dirname, '..', 'ui', 'public');
@@ -263,6 +276,15 @@ async function processJob(jobId, jobs) {
 
   job.status = job.files.every((f) => f.status === 'error') ? 'error' : 'done';
   await jobs.set(jobId, job);
+
+  // Clean up uploaded files after processing — agent has already read them.
+  if (job.dir) {
+    try {
+      fs.rmSync(job.dir, { recursive: true, force: true });
+    } catch (e) {
+      console.warn(`[processJob] could not clean up job dir ${job.dir}:`, e.message);
+    }
+  }
 }
 
 // TODO Week 2: replace with child_process.spawn('claude', ['--mcp-config', ...])
@@ -274,7 +296,27 @@ async function runAgent(_filePath, _responsibleUserId) {
 if (process.argv[1] === __filename) {
   const PORT = process.env.PORT ?? 3000;
   const app = createApp();
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`[backend] procure-ai backend listening on port ${PORT}`);
   });
+
+  async function shutdown(signal) {
+    console.log(`[backend] ${signal} received — graceful shutdown started`);
+    // Stop accepting new connections
+    server.close();
+    // Wait up to 30 s for in-flight processJob calls to finish
+    const deadline = Date.now() + 30_000;
+    while (app.getActiveJobCount() > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    if (app.getActiveJobCount() > 0) {
+      console.error('[backend] shutdown deadline exceeded — forcing exit');
+      process.exit(1);
+    }
+    console.log('[backend] all jobs finished — exiting cleanly');
+    process.exit(0);
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }

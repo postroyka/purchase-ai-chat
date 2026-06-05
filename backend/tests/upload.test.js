@@ -26,6 +26,33 @@ function makeValidPdfBuffer() {
   return Buffer.from(header + obj + xref + trailer);
 }
 
+// Minimal valid ZIP (empty archive) — xlsx/docx are ZIP-based.
+// file-type detects this as application/zip, which is allowed for xlsx/docx extensions.
+function makeMinimalZipBuffer() {
+  // End-of-central-directory record only: PK\x05\x06 + 18 zero bytes = 22 bytes
+  return Buffer.from([
+    0x50, 0x4b, 0x05, 0x06, // EOCD signature
+    0x00, 0x00, 0x00, 0x00, // disk number, start disk
+    0x00, 0x00, 0x00, 0x00, // entries on disk, total entries
+    0x00, 0x00, 0x00, 0x00, // central dir size
+    0x00, 0x00, 0x00, 0x00, // central dir offset
+    0x00, 0x00,             // comment length
+  ]);
+}
+
+// Poll job status until terminal state or timeout.
+async function waitForJob(jobId, maxMs = 2000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const res = await request(app)
+      .get(`/job/${jobId}/status`)
+      .set('Authorization', auth());
+    if (res.body.status === 'done' || res.body.status === 'error') return res.body;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`Job ${jobId} did not reach terminal state in ${maxMs}ms`);
+}
+
 beforeAll(() => {
   fs.mkdirSync(FIXTURES, { recursive: true });
   fs.writeFileSync(path.join(FIXTURES, 'valid.pdf'), makeValidPdfBuffer());
@@ -33,6 +60,10 @@ beforeAll(() => {
   fs.writeFileSync(path.join(FIXTURES, 'script.exe'), Buffer.from([0x4d, 0x5a]));
   // 2 KB filler — large enough to reliably trigger LIMIT_FILE_SIZE at a 1 KB limit
   fs.writeFileSync(path.join(FIXTURES, 'large.pdf'), Buffer.alloc(2048, 0x25));
+  // Minimal valid ZIP used as xlsx/docx fixtures
+  const zip = makeMinimalZipBuffer();
+  fs.writeFileSync(path.join(FIXTURES, 'valid.xlsx'), zip);
+  fs.writeFileSync(path.join(FIXTURES, 'valid.docx'), zip);
 });
 
 afterAll(() => {
@@ -43,10 +74,11 @@ afterAll(() => {
 // ── Health ──────────────────────────────────────────────────────────────────
 
 describe('GET /health', () => {
-  it('returns ok without auth', async () => {
+  it('returns ok with redis status, no auth required', async () => {
     const res = await request(app).get('/health');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+    expect(res.body.redis).toBe('ok');
   });
 });
 
@@ -183,5 +215,87 @@ describe('GET /job/:id/status', () => {
     expect(status.status).toBe(200);
     expect(status.body.jobId).toBe(upload.body.jobId);
     expect(['pending', 'processing', 'done']).toContain(status.body.status);
+  });
+
+  it('response includes files array with name/status/result/error fields', async () => {
+    const upload = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    expect(upload.status).toBe(201);
+
+    const job = await waitForJob(upload.body.jobId);
+    expect(job.files).toHaveLength(1);
+    const file = job.files[0];
+    expect(file).toHaveProperty('name');
+    expect(file).toHaveProperty('status');
+    expect(file).toHaveProperty('result');
+    expect(file).toHaveProperty('error');
+    expect(file.name).toBe('valid.pdf');
+  });
+});
+
+// ── xlsx / docx happy path ────────────────────────────────────────────────────
+
+describe('xlsx and docx upload', () => {
+  it('accepts a valid .xlsx file', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.xlsx'), {
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.files[0].name).toBe('valid.xlsx');
+  });
+
+  it('accepts a valid .docx file', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.docx'), {
+        contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.files[0].name).toBe('valid.docx');
+  });
+});
+
+// ── Multi-file upload ─────────────────────────────────────────────────────────
+
+describe('Multi-file upload', () => {
+  it('accepts multiple files in one request', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' })
+      .attach('files[]', path.join(FIXTURES, 'valid.xlsx'), {
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.files).toHaveLength(2);
+    expect(res.body.files.map((f) => f.name)).toEqual(
+      expect.arrayContaining(['valid.pdf', 'valid.xlsx']),
+    );
+  });
+});
+
+// ── File cleanup after job ────────────────────────────────────────────────────
+
+describe('File cleanup', () => {
+  it('removes job directory from disk after job completes', async () => {
+    const upload = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    expect(upload.status).toBe(201);
+
+    const jobId = upload.body.jobId;
+    const jobDir = path.join(UPLOAD_DIR, jobId);
+
+    await waitForJob(jobId);
+
+    // Directory removed after job finishes (stub agent completes instantly)
+    expect(fs.existsSync(jobDir)).toBe(false);
   });
 });
