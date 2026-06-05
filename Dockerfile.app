@@ -1,5 +1,5 @@
 # ---- backend deps ----
-FROM node:22-alpine AS backend-deps
+FROM node:22.16.0-alpine3.22 AS backend-deps
 
 RUN corepack enable && corepack prepare pnpm@11.5.0 --activate
 
@@ -8,7 +8,7 @@ COPY backend/package.json backend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 # ---- ui build ----
-FROM node:22-alpine AS ui-builder
+FROM node:22.16.0-alpine3.22 AS ui-builder
 
 RUN corepack enable && corepack prepare pnpm@11.5.0 --activate
 
@@ -20,7 +20,7 @@ COPY ui/ ./
 RUN pnpm build
 
 # ---- runtime ----
-FROM node:22-alpine
+FROM node:22.16.0-alpine3.22
 
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
