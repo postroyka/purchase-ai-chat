@@ -7,17 +7,20 @@
 ## Архитектура
 
 ```
-UI (Nuxt, :3000) ──upload/poll──▶ backend (Express, :3000) ──Claude Code──▶ MCP (Nuxt, :3000)
-                                                                              b24_pst_crm_find_supplier
-                                                                              b24_pst_crm_find_contract
-                                                                              b24_pst_crm_find_product
-                                                                              b24_pst_crm_create_deal
-                                        ▲
-                                        │
-                                     Redis (jobs persistence)
+                    dev: :3001          prod: :3000 (Express раздаёт UI-статику)
+UI (Nuxt SPA) ──upload/poll──▶ backend (Express, :3000) ──Claude Code──▶ MCP (:3000, internal)
+                                                                          b24_pst_crm_find_supplier
+                                                                          b24_pst_crm_find_contract
+                                                                          b24_pst_crm_find_product
+                                                                          b24_pst_crm_create_deal
+                                      ▲
+                                      │
+                                   Redis (jobs persistence)
 ```
 
-MCP-сервис не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3000/mcp`).
+- **Dev**: Nuxt dev-server на `:3001`, backend на `:3000`. devProxy в nuxt.config.ts перенаправляет `/upload`, `/job`, `/health` на backend.
+- **Prod**: Nuxt собирается в статику (`ui/.output/public/`), Express раздаёт её через `express.static` — один процесс, один порт `:3000`.
+- MCP не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3000/mcp`).
 
 ## Быстрый старт
 
@@ -49,18 +52,46 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 
 ## Мониторинг задач (API)
 
+**Linux / macOS (bash):**
 ```bash
+BASE=http://localhost:3000
+TOKEN=dev-token-local        # BACKEND_API_TOKEN из backend/.env.prod (или .env для локалки)
+
+# Health (без токена)
+curl "$BASE/health"
+
 # Загрузить файл
-curl -X POST http://localhost:3000/upload \
-  -H "Authorization: Bearer $BACKEND_API_TOKEN" \
+curl -X POST "$BASE/upload" \
+  -H "Authorization: Bearer $TOKEN" \
   -F "files[]=@invoice.pdf"
 # → { "jobId": "uuid", "files": [{ "name": "invoice.pdf", "status": "pending" }] }
 
 # Проверить статус
-curl http://localhost:3000/job/<jobId>/status \
-  -H "Authorization: Bearer $BACKEND_API_TOKEN"
+curl "$BASE/job/<jobId>/status" \
+  -H "Authorization: Bearer $TOKEN"
 # → { "jobId": "...", "status": "done", "files": [...] }
 ```
+
+**Windows (PowerShell):**
+```powershell
+$BASE  = "http://localhost:3000"
+$TOKEN = "dev-token-local"   # BACKEND_API_TOKEN из backend/.env.prod (или .env для локалки)
+
+# Health (без токена)
+curl.exe -i "$BASE/health"
+
+# Загрузить файл (поле обязательно files[], не file)
+$json = curl.exe -s -X POST "$BASE/upload" `
+  -H "Authorization: Bearer $TOKEN" `
+  -F "files[]=@invoice.pdf;type=application/pdf"
+$json
+$jobId = ($json | ConvertFrom-Json).jobId
+
+# Проверить статус
+curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
+```
+
+> ⚠️ В PowerShell используй `curl.exe` (не алиас `curl`), иначе синтаксис флагов другой.
 
 ## MCP — upstream и кастомные инструменты
 
@@ -148,4 +179,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-04 (PR #6 — multi-expert review ×3, all findings applied)*
+*Last reviewed: 2026-06-05 (PR #12 — backend factory refactor, B24FileUpload UI)*

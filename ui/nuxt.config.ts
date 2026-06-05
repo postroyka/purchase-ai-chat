@@ -30,7 +30,11 @@ export default defineNuxtConfig({
      * @see https://nuxt.com/docs/guide/going-further/runtime-config#example
      */
     public: {
-      siteUrl: prodUrl
+      siteUrl: prodUrl,
+      // Token for backend API calls from the browser. Set NUXT_PUBLIC_BACKEND_TOKEN env var.
+      // In production, the UI is served by the backend process on the same origin —
+      // the token never leaves the same server boundary.
+      backendToken: process?.env.NUXT_PUBLIC_BACKEND_TOKEN ?? '',
     }
   },
 
@@ -42,7 +46,19 @@ export default defineNuxtConfig({
 
   compatibilityDate: '2024-07-11',
 
+  devServer: {
+    // Explicit port so Nuxt dev never clashes with backend on :3000.
+    port: 3001,
+  },
+
   nitro: {
+    // In local dev the UI dev-server runs on :3001; API calls are proxied to backend on :3000.
+    // In production the backend Express server serves the built static files directly.
+    devProxy: {
+      '/upload': { target: 'http://localhost:3000/upload', changeOrigin: true },
+      '/job': { target: 'http://localhost:3000/job', changeOrigin: true },
+      '/health': { target: 'http://localhost:3000/health', changeOrigin: true },
+    },
     prerender: {
       routes: [
         ...pagesService
