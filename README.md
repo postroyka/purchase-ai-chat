@@ -49,18 +49,43 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 
 ## Мониторинг задач (API)
 
+**Linux / macOS (bash):**
 ```bash
+BASE=http://localhost:3000
+TOKEN=dev-token-local        # BACKEND_API_TOKEN из backend/.env
+
 # Загрузить файл
-curl -X POST http://localhost:3000/upload \
-  -H "Authorization: Bearer $BACKEND_API_TOKEN" \
+curl -X POST "$BASE/upload" \
+  -H "Authorization: Bearer $TOKEN" \
   -F "files[]=@invoice.pdf"
 # → { "jobId": "uuid", "files": [{ "name": "invoice.pdf", "status": "pending" }] }
 
 # Проверить статус
-curl http://localhost:3000/job/<jobId>/status \
-  -H "Authorization: Bearer $BACKEND_API_TOKEN"
+curl "$BASE/job/<jobId>/status" \
+  -H "Authorization: Bearer $TOKEN"
 # → { "jobId": "...", "status": "done", "files": [...] }
 ```
+
+**Windows (PowerShell):**
+```powershell
+$BASE  = "http://localhost:3000"
+$TOKEN = "dev-token-local"   # BACKEND_API_TOKEN из backend/.env
+
+# Health (без токена)
+curl.exe -i "$BASE/health"
+
+# Загрузить файл (поле обязательно files[], не file)
+$json = curl.exe -s -X POST "$BASE/upload" `
+  -H "Authorization: Bearer $TOKEN" `
+  -F "files[]=@invoice.pdf;type=application/pdf"
+$json
+$jobId = ($json | ConvertFrom-Json).jobId
+
+# Проверить статус
+curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
+```
+
+> ⚠️ В PowerShell используй `curl.exe` (не алиас `curl`), иначе синтаксис флагов другой.
 
 ## MCP — upstream и кастомные инструменты
 
@@ -148,4 +173,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-04 (PR #6 — multi-expert review ×3, all findings applied)*
+*Last reviewed: 2026-06-05 (PR #12 — backend factory refactor, B24FileUpload UI)*
