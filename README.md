@@ -185,4 +185,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-05 (PR #12 — backend factory refactor, B24FileUpload UI)*
+*Last reviewed: 2026-06-05 (PR #13 — Node 22.16.0 pin, dependabot.yml, multer 2.x, UI lint fixes)*
