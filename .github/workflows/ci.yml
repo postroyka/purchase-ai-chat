@@ -19,7 +19,10 @@ jobs:
 
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
-          node-version: "22"
+          node-version: "22.16.0"
+
+      - name: Verify Node + corepack + pnpm versions
+        run: node --version && corepack --version && pnpm --version
 
       - name: Install dependencies
         working-directory: backend
@@ -44,7 +47,7 @@ jobs:
 
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
-          node-version: "22"
+          node-version: "22.16.0"
 
       - name: Install dependencies
         working-directory: mcp
@@ -81,7 +84,7 @@ jobs:
 
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
-          node-version: 22
+          node-version: "22.16.0"
           cache: pnpm
           cache-dependency-path: mcp/pnpm-lock.yaml
 
@@ -110,7 +113,7 @@ jobs:
 
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
-          node-version: "22"
+          node-version: "22.16.0"
 
       - name: Install dependencies
         working-directory: ui

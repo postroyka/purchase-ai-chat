@@ -128,10 +128,16 @@ make prod-redeploy
 
 ## Разработка
 
+Требуется **Node.js 22 LTS** с corepack:
 ```bash
-cd backend && pnpm install && pnpm dev   # порт 3000
-cd mcp     && pnpm install && pnpm dev    # порт 3000
-cd ui      && pnpm install && pnpm dev    # порт 3000 (proxy → backend)
+node --version   # v22.x.x
+corepack enable  # один раз
+```
+
+```bash
+cd backend && pnpm install && pnpm dev   # :3000
+cd mcp     && pnpm install && pnpm dev   # :3000 (internal)
+cd ui      && pnpm install && pnpm dev   # :3001 (proxy /upload /job → backend :3000)
 ```
 
 ## Тесты
@@ -179,4 +185,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-05 (PR #12 — backend factory refactor, B24FileUpload UI)*
+*Last reviewed: 2026-06-05 (PR #13 — Node 22.16.0 pin, dependabot.yml, multer 2.x, UI lint fixes)*

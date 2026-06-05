@@ -2,7 +2,6 @@
   <HomeLoader v-if="isLoading" />
   <div v-else class="min-h-screen flex flex-col items-center bg-base-50">
     <div class="w-full max-w-2xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
-
       <!-- Шапка-герой -->
       <header class="text-center">
         <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight text-base-master">
@@ -107,7 +106,6 @@
           </B24Button>
         </div>
       </section>
-
     </div>
   </div>
 </template>
@@ -124,13 +122,13 @@ const isLoading = inject<Readonly<Ref<boolean>>>('isLoading', ref(false))
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
-type BadgeColor =
-  | 'air-primary'
-  | 'air-primary-success'
-  | 'air-primary-alert'
-  | 'air-primary-warning'
-  | 'air-secondary'
-  | 'air-tertiary'
+type BadgeColor
+  = | 'air-primary'
+    | 'air-primary-success'
+    | 'air-primary-alert'
+    | 'air-primary-warning'
+    | 'air-secondary'
+    | 'air-tertiary'
 
 interface FileEntry {
   name: string
@@ -163,14 +161,14 @@ const JOB_LABELS: Record<string, string> = {
   pending: 'Ожидание',
   processing: 'Обработка…',
   done: 'Готово',
-  error: 'Ошибка',
+  error: 'Ошибка'
 }
 
 const JOB_COLORS: Record<string, BadgeColor> = {
   pending: 'air-secondary',
   processing: 'air-primary',
   done: 'air-primary-success',
-  error: 'air-primary-alert',
+  error: 'air-primary-alert'
 }
 
 const FILE_LABELS = JOB_LABELS
@@ -204,30 +202,28 @@ async function doUpload() {
   for (const f of files) form.append('files[]', f)
 
   try {
-    const res = await $fetch<{ jobId: string; files: Array<{ name: string; status: string }> }>(
+    const res = await $fetch<{ jobId: string, files: Array<{ name: string, status: string }> }>(
       '/upload',
-      { method: 'POST', body: form, headers: authHeaders() },
+      { method: 'POST', body: form, headers: authHeaders() }
     )
 
     job.value = {
       jobId: res.jobId,
       status: 'pending',
-      files: res.files.map(f => ({ name: f.name, status: 'pending' })),
+      files: res.files.map(f => ({ name: f.name, status: 'pending' }))
     }
 
     startPolling(res.jobId)
-  }
-  catch (e: unknown) {
+  } catch (e: unknown) {
     const msg = extractErrorMessage(e)
     uploadError.value = msg
     toast.add({
       title: 'Ошибка загрузки',
       description: msg,
       color: 'air-primary-alert',
-      duration: 6000,
+      duration: 6000
     })
-  }
-  finally {
+  } finally {
     uploading.value = false
   }
 }
@@ -242,7 +238,7 @@ function startPolling(jobId: string) {
   pollTimer = setInterval(async () => {
     try {
       const data = await $fetch<JobStatus>(`/job/${jobId}/status`, {
-        headers: authHeaders(),
+        headers: authHeaders()
       })
       pollErrors = 0
       job.value = data
@@ -256,20 +252,18 @@ function startPolling(jobId: string) {
             title: 'Обработка завершена',
             description: `${doneCount} из ${data.files.length} файлов успешно обработано`,
             color: 'air-primary-success',
-            duration: 5000,
+            duration: 5000
           })
-        }
-        else {
+        } else {
           toast.add({
             title: 'Обработка завершена с ошибками',
             description: 'Некоторые файлы не удалось обработать — проверьте статус',
             color: 'air-primary-warning',
-            duration: 6000,
+            duration: 6000
           })
         }
       }
-    }
-    catch {
+    } catch {
       pollErrors++
       if (pollErrors >= MAX_POLL_ERRORS) {
         stopPolling()

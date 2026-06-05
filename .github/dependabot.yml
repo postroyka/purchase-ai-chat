@@ -1,0 +1,54 @@
+version: 2
+
+updates:
+  # Docker — allow only patch updates within Node 22 LTS (active until April 2027).
+  # IMPORTANT: do NOT bump the Node major or minor version without a deliberate decision.
+  # Node 23+ removed corepack from the default distribution, which breaks pnpm
+  # installation in our Dockerfiles. Any Node major/minor bump requires:
+  #   1. Updating the corepack install step (or switching to `npm install -g pnpm`)
+  #   2. Rebuilding and validating the full Docker image before merging.
+  # Node 22 LTS schedule: https://nodejs.org/en/about/previous-releases
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Patch updates only: 22.16.0 → 22.16.x is ok; 22.16 → 22.17 or 22 → 23 is blocked.
+      - dependency-name: node
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+
+  # GitHub Actions — patch/minor only, block major bumps.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # Backend npm deps.
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+
+  # UI npm deps.
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+
+  # MCP npm deps.
+  - package-ecosystem: npm
+    directory: /mcp
+    schedule:
+      interval: weekly
+
+  # mcp-overlay npm deps (PST-specific tools, separate package.json).
+  - package-ecosystem: npm
+    directory: /mcp-overlay
+    schedule:
+      interval: weekly
