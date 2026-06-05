@@ -19,15 +19,15 @@ updates:
           - version-update:semver-major
           - version-update:semver-minor
 
-  # GitHub Actions — patch/minor only, block major bumps.
+  # GitHub Actions — allow all updates including major bumps.
+  # GitHub Actions bump major versions primarily to update the Node.js runtime
+  # (e.g. Node 20 → Node 24). Blocking major bumps caused us to miss the
+  # mandatory Node 24 migration (deadline June 16 2026). Review each Dependabot
+  # PR before merging, but do not auto-block by version type.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      - dependency-name: "*"
-        update-types:
-          - version-update:semver-major
 
   # Backend npm deps.
   - package-ecosystem: npm

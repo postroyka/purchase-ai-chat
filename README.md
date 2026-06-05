@@ -186,4 +186,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-05 (PR #33 — graceful shutdown, real /health + Redis ping, file cleanup, docker-compose healthcheck)*
+*Last reviewed: 2026-06-05 (PR #34 — GitHub Actions Node 24 migration, Dockerfile.mcp overlay fix, docker-validate CI job, dependabot unblock)*
