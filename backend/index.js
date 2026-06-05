@@ -124,7 +124,7 @@ export function createApp(config = {}) {
 
       // Extension check (moved out of fileFilter — see comment above multer setup)
       for (const f of req.files) {
-        const ext = path.extname(f.originalname).replace('.', '').toLowerCase();
+        const ext = path.extname(f.originalname).slice(1).toLowerCase();
         if (!allowedExtensions.includes(ext)) {
           for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
           return res.status(400).json({
@@ -148,7 +148,7 @@ export function createApp(config = {}) {
           return res.status(500).json({ error: 'Failed to read uploaded file' });
         }
 
-        const ext = path.extname(f.originalname).replace('.', '').toLowerCase();
+        const ext = path.extname(f.originalname).slice(1).toLowerCase();
         const detected = await fileTypeFromBuffer(buf);
         if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
           for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
@@ -238,6 +238,8 @@ export function createApp(config = {}) {
 
 // Iterates a job's files sequentially, runs the agent on each, and persists
 // status transitions (pending → processing → done/error) to the jobs store.
+// NOTE: assumes single-process deployment — no distributed locking. Multi-instance
+// deployments would need a queue (e.g. BullMQ) to prevent duplicate processing.
 async function processJob(jobId, jobs) {
   const job = await jobs.get(jobId);
   if (!job) return;

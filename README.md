@@ -52,7 +52,10 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 **Linux / macOS (bash):**
 ```bash
 BASE=http://localhost:3000
-TOKEN=dev-token-local        # BACKEND_API_TOKEN из backend/.env
+TOKEN=dev-token-local        # BACKEND_API_TOKEN из backend/.env.prod (или .env для локалки)
+
+# Health (без токена)
+curl "$BASE/health"
 
 # Загрузить файл
 curl -X POST "$BASE/upload" \
@@ -69,7 +72,7 @@ curl "$BASE/job/<jobId>/status" \
 **Windows (PowerShell):**
 ```powershell
 $BASE  = "http://localhost:3000"
-$TOKEN = "dev-token-local"   # BACKEND_API_TOKEN из backend/.env
+$TOKEN = "dev-token-local"   # BACKEND_API_TOKEN из backend/.env.prod (или .env для локалки)
 
 # Health (без токена)
 curl.exe -i "$BASE/health"
