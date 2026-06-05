@@ -46,7 +46,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@ai-sdk/openai": "^3.0.66",
+    "@ai-sdk/openai": "^3.0.68",
     "@anthropic-ai/mcpb": "^2.1.2",
     "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.2",
