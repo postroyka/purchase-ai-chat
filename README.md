@@ -186,4 +186,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-05 (PR #34 — GitHub Actions Node 24, Dockerfile.mcp overlay fix, dependabot unblock)*
+*Last reviewed: 2026-06-05 (PR #34 — GitHub Actions Node 24 migration, Dockerfile.mcp overlay fix, docker-validate CI job, dependabot unblock)*
