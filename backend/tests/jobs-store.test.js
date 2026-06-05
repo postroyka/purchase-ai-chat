@@ -1,11 +1,5 @@
-/**
- * Tests for the jobs store (backend/jobs-store.js).
- *
- * REDIS_URL is read into a module-scope constant when jobs-store.js is imported,
- * so each scenario sets the env var and then dynamically imports a fresh copy of
- * the module via vi.resetModules() + a cache-busting query string.
- */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createJobsStore } from '../jobs-store.js';
 
 function makeJob(id) {
   return {
@@ -18,14 +12,11 @@ function makeJob(id) {
   };
 }
 
-describe('createJobsStore — in-memory (no REDIS_URL)', () => {
+describe('createJobsStore — in-memory (no redisUrl)', () => {
   let store;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    process.env.REDIS_URL = '';
-    const mod = await import('../jobs-store.js?inmem=' + Math.random());
-    store = mod.createJobsStore();
+  beforeEach(() => {
+    store = createJobsStore({ redisUrl: '' });
   });
 
   it('set then get returns the stored job', async () => {
@@ -72,17 +63,19 @@ describe('createJobsStore — Redis path (mocked ioredis)', () => {
       }
       return { default: FakeRedis };
     });
-    process.env.REDIS_URL = 'redis://localhost:6379';
   });
 
   afterEach(() => {
     vi.doUnmock('ioredis');
-    process.env.REDIS_URL = '';
   });
 
+  async function makeRedisStore() {
+    const mod = await import('../jobs-store.js?mock=' + Math.random());
+    return mod.createJobsStore({ redisUrl: 'redis://localhost:6379' });
+  }
+
   it('set serialises the job with setex under a job: key', async () => {
-    const mod = await import('../jobs-store.js?redis=' + Math.random());
-    const store = mod.createJobsStore();
+    const store = await makeRedisStore();
     const job = makeJob('r-1');
     await store.set('r-1', job);
     expect(setexMock).toHaveBeenCalledTimes(1);
@@ -94,8 +87,7 @@ describe('createJobsStore — Redis path (mocked ioredis)', () => {
 
   it('get parses and validates a well-formed job', async () => {
     getMock.mockResolvedValue(JSON.stringify(makeJob('r-2')));
-    const mod = await import('../jobs-store.js?redis=' + Math.random());
-    const store = mod.createJobsStore();
+    const store = await makeRedisStore();
     const got = await store.get('r-2');
     expect(getMock).toHaveBeenCalledWith('job:r-2');
     expect(got.jobId).toBe('r-2');
@@ -103,24 +95,21 @@ describe('createJobsStore — Redis path (mocked ioredis)', () => {
 
   it('get returns null for a missing key', async () => {
     getMock.mockResolvedValue(null);
-    const mod = await import('../jobs-store.js?redis=' + Math.random());
-    const store = mod.createJobsStore();
+    const store = await makeRedisStore();
     const got = await store.get('missing');
     expect(got).toBeNull();
   });
 
   it('get returns null (does not throw) when Redis returns invalid JSON', async () => {
     getMock.mockResolvedValue('not valid json');
-    const mod = await import('../jobs-store.js?redis=' + Math.random());
-    const store = mod.createJobsStore();
+    const store = await makeRedisStore();
     const got = await store.get('corrupted');
     expect(got).toBeNull();
   });
 
   it('get returns null for schema-invalid stored data', async () => {
     getMock.mockResolvedValue(JSON.stringify({ jobId: 5, status: 'x' }));
-    const mod = await import('../jobs-store.js?redis=' + Math.random());
-    const store = mod.createJobsStore();
+    const store = await makeRedisStore();
     const got = await store.get('bad');
     expect(got).toBeNull();
   });

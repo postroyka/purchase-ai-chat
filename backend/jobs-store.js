@@ -1,18 +1,14 @@
 import Redis from 'ioredis';
 
-const REDIS_URL = process.env.REDIS_URL || '';
-const JOB_TTL_SECONDS = parseInt(process.env.JOB_TTL_HOURS || '24', 10) * 3600;
+export function createJobsStore(config = {}) {
+  const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? '';
+  const ttlSeconds = (config.ttlHours ?? parseInt(process.env.JOB_TTL_HOURS ?? '24', 10)) * 3600;
 
-/**
- * Returns a jobs store backed by Redis if REDIS_URL is set, otherwise in-memory.
- * Both implementations expose the same async get/set interface.
- */
-export function createJobsStore() {
-  if (REDIS_URL) {
-    return createRedisStore(REDIS_URL, JOB_TTL_SECONDS);
+  if (redisUrl) {
+    return createRedisStore(redisUrl, ttlSeconds);
   }
   console.warn('[jobs-store] REDIS_URL not set — using in-memory store (data lost on restart)');
-  return createMemoryStore(JOB_TTL_SECONDS);
+  return createMemoryStore(ttlSeconds);
 }
 
 function createRedisStore(url, ttlSeconds) {
@@ -32,7 +28,6 @@ function createRedisStore(url, ttlSeconds) {
           console.error(`[jobs-store] JSON.parse error for job:${id}:`, parseErr);
           return null;
         }
-        // Basic schema validation — guard against corrupted or malicious Redis data
         if (typeof job !== 'object' || job === null) return null;
         if (typeof job.jobId !== 'string' || typeof job.status !== 'string') return null;
         if (!Array.isArray(job.files)) return null;
@@ -56,7 +51,6 @@ function createRedisStore(url, ttlSeconds) {
 function createMemoryStore(ttlSeconds) {
   const map = new Map();
 
-  // Clean up expired entries every 10 minutes
   setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of map.entries()) {
@@ -71,7 +65,6 @@ function createMemoryStore(ttlSeconds) {
       return map.get(id) ?? null;
     },
     async set(id, job) {
-      // Preserve original createdAt; set it only on first write
       const existing = map.get(id);
       map.set(id, { ...job, createdAt: existing?.createdAt ?? job.createdAt ?? Date.now() });
     },
