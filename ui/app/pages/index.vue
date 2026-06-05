@@ -27,7 +27,6 @@
           description="PDF, XLSX, DOCX · Максимум 20 МБ на файл · До 10 файлов за раз"
           :file-delete="!uploading"
           :disabled="uploading"
-          :reset="uploadDone"
         >
           <template #actions="{ files, open }">
             <div class="flex items-center gap-3">
@@ -159,7 +158,6 @@ const selectedFiles = ref<File[] | null>(null)
 const uploading = ref(false)
 const polling = ref(false)
 const uploadError = ref<string | null>(null)
-const uploadDone = ref(false)
 const job = ref<JobStatus | null>(null)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -211,7 +209,6 @@ async function doUpload() {
 
   uploading.value = true
   uploadError.value = null
-  uploadDone.value = false
   job.value = null
 
   const form = new FormData()
@@ -263,7 +260,6 @@ function startPolling(jobId: string) {
 
       if (data.status === 'done' || data.status === 'error') {
         stopPolling()
-        uploadDone.value = true
 
         if (data.status === 'done') {
           const doneCount = data.files.filter(f => f.status === 'done').length
@@ -308,7 +304,6 @@ function resetState() {
   stopPolling()
   job.value = null
   uploadError.value = null
-  uploadDone.value = false
   selectedFiles.value = null
 }
 
