@@ -9,9 +9,9 @@ RUN corepack enable && corepack prepare pnpm@11.5.0 --activate
 COPY mcp/package.json mcp/pnpm-lock.yaml mcp/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
-# Copy upstream source, then overlay PST tools on top.
+# Copy upstream source, then overlay only the server code (not tests/docs).
 COPY mcp/ .
-COPY mcp-overlay/ .
+COPY mcp-overlay/server/ ./server/
 
 RUN pnpm build
 
