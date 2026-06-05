@@ -12,7 +12,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
+// Resolve relative to cwd so tests can pass an absolute path via env var
+// (path.join on Windows does not discard an absolute second argument).
+const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || 'uploads');
 const MAX_FILE_SIZE_MB = parseInt(process.env.MAX_FILE_SIZE_MB || '20', 10);
 const MAX_FILES_PER_REQUEST = parseInt(process.env.MAX_FILES_PER_REQUEST || '10', 10);
 const ALLOWED_EXTENSIONS = (process.env.ALLOWED_EXTENSIONS || 'pdf,xlsx,docx')
@@ -73,7 +75,7 @@ const jobs = createJobsStore();
 // Multer storage: files land in a tmp dir first, then moved after MIME check.
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const tmpDir = path.join(__dirname, '..', UPLOAD_DIR, '_tmp');
+    const tmpDir = path.join(UPLOAD_DIR, '_tmp');
     fs.mkdirSync(tmpDir, { recursive: true });
     cb(null, tmpDir);
   },
@@ -146,7 +148,7 @@ app.post('/upload', requireAuth, (req, res) => {
     }
 
     const jobId = uuidv4();
-    const jobDir = path.join(__dirname, '..', UPLOAD_DIR, jobId);
+    const jobDir = path.join(UPLOAD_DIR, jobId);
     fs.mkdirSync(jobDir, { recursive: true });
 
     let fileEntries;
