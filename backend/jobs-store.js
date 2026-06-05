@@ -75,7 +75,12 @@ function createMemoryStore(ttlSeconds) {
     },
     async set(id, job) {
       const existing = map.get(id);
-      map.set(id, { ...job, createdAt: existing?.createdAt ?? job.createdAt ?? Date.now() });
+      // Deep-copy files array so callers cannot mutate stored entries by reference.
+      map.set(id, {
+        ...job,
+        files: job.files.map((f) => ({ ...f })),
+        createdAt: existing?.createdAt ?? job.createdAt ?? Date.now(),
+      });
     },
     async ping() {
       // in-memory store is always available

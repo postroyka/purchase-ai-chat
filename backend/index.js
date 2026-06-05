@@ -302,10 +302,14 @@ if (process.argv[1] === __filename) {
 
   async function shutdown(signal) {
     console.log(`[backend] ${signal} received — graceful shutdown started`);
-    // Stop accepting new connections
+    // closeAllConnections() drains keep-alive connections immediately so no
+    // new requests can arrive after shutdown begins (server.close() alone only
+    // stops accepting new TCP connections, not existing keep-alive ones).
+    server.closeAllConnections?.();
     server.close();
-    // Wait up to 30 s for in-flight processJob calls to finish
-    const deadline = Date.now() + 30_000;
+    // Wait up to 25 s — leave 5 s headroom before Docker's stop-timeout (30 s)
+    // so the process exits cleanly before Docker sends SIGKILL.
+    const deadline = Date.now() + 25_000;
     while (app.getActiveJobCount() > 0 && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 200));
     }

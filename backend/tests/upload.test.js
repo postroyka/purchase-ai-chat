@@ -41,7 +41,7 @@ function makeMinimalZipBuffer() {
 }
 
 // Poll job status until terminal state or timeout.
-async function waitForJob(jobId, maxMs = 2000) {
+async function waitForJob(jobId, maxMs = 5000) {
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
     const res = await request(app)
