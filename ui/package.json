@@ -14,9 +14,9 @@
   },
   "dependencies": {
     "@bitrix24/b24icons-vue": "^2.0.7",
-    "@bitrix24/b24ui-nuxt": "^2.6.0",
-    "@bitrix24/b24jssdk": "^1.0.5",
-    "@bitrix24/b24jssdk-nuxt": "^1.0.5",
+    "@bitrix24/b24ui-nuxt": "^2.8.0",
+    "@bitrix24/b24jssdk": "^1.2.0",
+    "@bitrix24/b24jssdk-nuxt": "^1.2.0",
     "@internationalized/date": "^3.12.1",
     "@tanstack/table-core": "^8.21.3",
     "@tanstack/vue-table": "^8.21.3",

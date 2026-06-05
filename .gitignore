@@ -14,4 +14,4 @@ backend/uploads-test/
 backend/tests/fixtures/
 backend/tests/fixtures*/
 backend/tests/*/valid.pdf
-home/
+/home/
