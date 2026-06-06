@@ -8,6 +8,20 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SYSTEM_PROMPT_PATH = join(__dirname, '..', 'prompts', 'main.md');
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+// Grace period between SIGTERM and SIGKILL on timeout — gives claude a chance
+// to flush output and exit cleanly before we force-kill.
+const SIGKILL_GRACE_MS = 5_000;
+
+// Env vars that claude CLI needs — subset of process.env (principle of least privilege).
+const AGENT_ENV_KEYS = [
+  'PATH', 'HOME', 'USER', 'TMPDIR', 'TEMP', 'TMP',
+  'ANTHROPIC_API_KEY',        // required for API access
+  'CLAUDE_CODE_USE_BEDROCK',  // optional Bedrock provider
+  'CLAUDE_CODE_USE_VERTEX',   // optional Vertex provider
+  'AWS_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
+  'GOOGLE_CLOUD_PROJECT', 'GOOGLE_APPLICATION_CREDENTIALS',
+  'NODE_ENV',
+];
 
 /**
  * Run the procurement AI agent on a single file.
@@ -28,6 +42,7 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
  *   mcpToken?: string,
  *   model?: string,
  *   timeoutMs?: number,
+ *   jobId?: string,
  *   spawnFn?: typeof import('node:child_process').spawn,
  * }} AgentConfig
  */
@@ -38,6 +53,7 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const model = config.model ?? process.env.CLAUDE_MODEL ?? null;
   const timeoutMs = config.timeoutMs
     ?? parseInt(process.env.AGENT_TIMEOUT_MS ?? String(DEFAULT_TIMEOUT_MS), 10);
+  const jobId = config.jobId ?? null;
   const spawnFn = config.spawnFn ?? spawn;
 
   const systemPrompt = readFileSync(SYSTEM_PROMPT_PATH, 'utf8');
@@ -47,12 +63,21 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   ].join('\n');
 
   // Write MCP config to a temp file — the token must not appear in process args
-  // (visible in `ps aux`), so we write it to a file only accessible to this process.
-  const tmpDir = mkdtempSync(join(tmpdir(), 'procure-mcp-'));
+  // (visible in `ps aux`), so we write it to a file accessible only to this process.
+  let tmpDir;
+  const mcpConfig = buildMcpConfig(mcpUrl, mcpToken);
+  try {
+    tmpDir = mkdtempSync(join(tmpdir(), 'procure-mcp-'));
+    writeFileSync(join(tmpDir, 'config.json'), JSON.stringify(mcpConfig), {
+      mode: 0o600, // owner-read-write only
+    });
+  } catch (err) {
+    if (tmpDir) {
+      try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    }
+    throw err;
+  }
   const mcpConfigPath = join(tmpDir, 'config.json');
-  writeFileSync(mcpConfigPath, JSON.stringify(buildMcpConfig(mcpUrl, mcpToken)), {
-    mode: 0o600, // owner-read-write only
-  });
 
   try {
     return await spawnClaude({
@@ -63,18 +88,24 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
       userMessage,
       mcpConfigPath,
       timeoutMs,
+      jobId,
     });
   } finally {
-    // Always clean up — config file contains auth token
-    try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    // Always clean up — config file contains auth token.
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch (e) {
+      console.error(`[agent-runner] failed to remove temp MCP config dir ${tmpDir}:`, e.message);
+    }
   }
 }
 
 /**
- * Build MCP server config object for the `--mcp-config` flag.
- * @param {string} mcpUrl
- * @param {string} mcpToken
- * @returns {object}
+ * Build the MCP server config object written to the `--mcp-config` temp file.
+ *
+ * @param {string} mcpUrl - HTTP(S) URL of the MCP server endpoint
+ * @param {string|null|undefined} mcpToken - Bearer token; omitted when falsy
+ * @returns {{ mcpServers: { 'procure-ai': { url: string, headers?: object } } }}
  */
 export function buildMcpConfig(mcpUrl, mcpToken) {
   const server = { url: mcpUrl };
@@ -84,7 +115,25 @@ export function buildMcpConfig(mcpUrl, mcpToken) {
   return { mcpServers: { 'procure-ai': server } };
 }
 
-function spawnClaude({ spawnFn, claudeBin, model, systemPrompt, userMessage, mcpConfigPath, timeoutMs }) {
+/** @param {string} text @returns {string} */
+function redactToken(text) {
+  return text.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+}
+
+function buildAgentEnv() {
+  const env = {};
+  for (const key of AGENT_ENV_KEYS) {
+    if (process.env[key] != null) env[key] = process.env[key];
+  }
+  return env;
+}
+
+function spawnClaude({
+  spawnFn, claudeBin, model, systemPrompt, userMessage,
+  mcpConfigPath, timeoutMs, jobId,
+}) {
+  const tag = jobId ? `[agent job=${jobId}]` : '[agent]';
+
   return new Promise((resolve, reject) => {
     const args = [
       '--print',
@@ -97,17 +146,19 @@ function spawnClaude({ spawnFn, claudeBin, model, systemPrompt, userMessage, mcp
     if (model) args.push('--model', model);
     args.push(userMessage);
 
-    const proc = spawnFn(claudeBin, args, {
-      env: process.env,
-    });
+    const t0 = Date.now();
+    const proc = spawnFn(claudeBin, args, { env: buildAgentEnv() });
 
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let sigkillHandle = null;
 
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
       proc.kill('SIGTERM');
+      // SIGKILL fallback if process ignores SIGTERM
+      sigkillHandle = setTimeout(() => proc.kill('SIGKILL'), SIGKILL_GRACE_MS);
     }, timeoutMs);
 
     proc.stdout?.on('data', (chunk) => { stdout += chunk; });
@@ -115,6 +166,7 @@ function spawnClaude({ spawnFn, claudeBin, model, systemPrompt, userMessage, mcp
 
     proc.on('error', (err) => {
       clearTimeout(timeoutHandle);
+      clearTimeout(sigkillHandle);
       if (err.code === 'ENOENT') {
         reject(new Error(
           `Claude Code CLI not found at "${claudeBin}". `
@@ -127,17 +179,28 @@ function spawnClaude({ spawnFn, claudeBin, model, systemPrompt, userMessage, mcp
 
     proc.on('close', (code) => {
       clearTimeout(timeoutHandle);
+      clearTimeout(sigkillHandle);
+      const durationMs = Date.now() - t0;
 
       if (timedOut) {
+        console.error(`${tag} timed out after ${timeoutMs}ms`);
         reject(new Error(`Agent timed out after ${timeoutMs}ms`));
         return;
       }
 
+      if (stderr.trim()) {
+        // Log stderr even on success — may contain MCP warnings useful for debugging.
+        console.warn(`${tag} stderr: ${redactToken(stderr).slice(0, 500)}`);
+      }
+
       if (code !== 0) {
-        const detail = stderr.trim() || stdout.trim() || `exit code ${code}`;
+        const rawDetail = stderr.trim() || stdout.trim() || `exit code ${code}`;
+        const detail = redactToken(rawDetail);
         reject(new Error(`Agent process exited with code ${code}: ${detail.slice(0, 500)}`));
         return;
       }
+
+      console.log(`${tag} completed in ${durationMs}ms`);
 
       // --output-format json wraps the response: { result: "<agent text>", is_error: bool, ... }
       let wrapper;
@@ -149,7 +212,7 @@ function spawnClaude({ spawnFn, claudeBin, model, systemPrompt, userMessage, mcp
       }
 
       if (wrapper.is_error) {
-        reject(new Error(`Agent returned an error: ${wrapper.result?.slice(0, 500) ?? 'unknown'}`));
+        reject(new Error(`Agent returned an error: ${String(wrapper.result ?? 'unknown').slice(0, 500)}`));
         return;
       }
 
@@ -169,8 +232,13 @@ function spawnClaude({ spawnFn, claudeBin, model, systemPrompt, userMessage, mcp
  * Extract the last valid JSON object or array from a string.
  * The agent may include prose before/after the JSON block.
  *
+ * Tries three strategies in order:
+ *   1. Whole text as JSON
+ *   2. Last fenced code block (```json ... ``` or ``` ... ```)
+ *   3. Rightmost well-formed {...} or [...] found by bracket-depth scan
+ *
  * @param {string} text
- * @returns {object|null}
+ * @returns {object|array|null}
  */
 export function extractJson(text) {
   // 1. Try the whole text as JSON (ideal: agent outputs pure JSON)
@@ -183,16 +251,21 @@ export function extractJson(text) {
   }
 
   // 3. Find the rightmost } or ] and walk backwards to its matching opener.
-  //    This handles agent output where JSON is preceded by explanation text.
+  //    Depth counters for { } and [ ] are independent so mixed nesting is handled
+  //    correctly (e.g. {"a":[1,2]} — closing ] must not count toward { depth).
   for (let i = text.length - 1; i >= 0; i--) {
     const ch = text[i];
     if (ch !== '}' && ch !== ']') continue;
-    const opener = ch === '}' ? '{' : '[';
-    let depth = 0;
+    const isObj = ch === '}';
+    let objDepth = 0;
+    let arrDepth = 0;
     for (let j = i; j >= 0; j--) {
-      if (text[j] === ch) depth++;
-      else if (text[j] === opener) depth--;
-      if (depth === 0) {
+      if (text[j] === '}') objDepth++;
+      else if (text[j] === '{') objDepth--;
+      else if (text[j] === ']') arrDepth++;
+      else if (text[j] === '[') arrDepth--;
+      // We've reached the opener when the targeted counter hits zero.
+      if ((isObj && objDepth === 0) || (!isObj && arrDepth === 0)) {
         try { return JSON.parse(text.slice(j, i + 1)); } catch {}
         break;
       }

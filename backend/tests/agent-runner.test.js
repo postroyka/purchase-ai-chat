@@ -1,16 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { runAgent, buildMcpConfig, extractJson } from '../agent-runner.js';
 
 // Helper: create a mock spawn function that simulates a child process.
-// opts.exitCode defaults to 0, opts.stdout is written before close.
 function makeMockSpawn({ stdout = '', stderr = '', exitCode = 0, errorCode = null } = {}) {
   return vi.fn(() => {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
     proc.kill = vi.fn((signal) => {
-      // Simulate kill by emitting close asynchronously
       setImmediate(() => proc.emit('close', null));
     });
 
@@ -31,11 +29,11 @@ function makeMockSpawn({ stdout = '', stderr = '', exitCode = 0, errorCode = nul
 }
 
 // Valid wrapper output from `claude --output-format json`
-function wrapResult(agentJson) {
+function wrapResult(agentJson, { is_error = false } = {}) {
   return JSON.stringify({
     type: 'result',
     subtype: 'success',
-    is_error: false,
+    is_error,
     result: typeof agentJson === 'string' ? agentJson : JSON.stringify(agentJson),
     session_id: 'test-session',
     num_turns: 5,
@@ -51,7 +49,6 @@ const VALID_DEAL_RESULT = {
   sourceFile: '/uploads/job1/invoice.pdf',
 };
 
-// Minimal agent config for all tests — injects mock spawnFn and short timeout
 const BASE_CONFIG = { timeoutMs: 1000 };
 
 describe('runAgent', () => {
@@ -103,18 +100,30 @@ describe('runAgent', () => {
     expect(bin).toBe('/custom/claude');
   });
 
-  it('throws on timeout', async () => {
+  it('does not pass NUXT_MCP_AUTH_TOKEN in process args (uses temp file)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await runAgent('/f.pdf', null, {
+      ...BASE_CONFIG, spawnFn, mcpToken: 'super-secret-token',
+    });
+    const [_bin, args] = spawnFn.mock.calls[0];
+    const argsStr = args.join(' ');
+    expect(argsStr).not.toContain('super-secret-token');
+  });
+
+  it('throws on timeout and sends SIGTERM', async () => {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
-    proc.kill = vi.fn(() => {
-      setImmediate(() => proc.emit('close', null));
+    proc.kill = vi.fn((signal) => {
+      if (signal === 'SIGTERM') setImmediate(() => proc.emit('close', null));
     });
-    const spawnFn = vi.fn(() => proc); // never emits close on its own
+    const spawnFn = vi.fn(() => proc);
 
     await expect(
       runAgent('/f.pdf', null, { ...BASE_CONFIG, timeoutMs: 50, spawnFn }),
     ).rejects.toThrow('timed out');
+
+    expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
   it('throws when process exits with non-zero code', async () => {
@@ -122,6 +131,16 @@ describe('runAgent', () => {
     await expect(
       runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn }),
     ).rejects.toThrow(/exit.*1/);
+  });
+
+  it('redacts Bearer token from error message when stderr contains it', async () => {
+    const spawnFn = makeMockSpawn({
+      exitCode: 1,
+      stderr: 'Authorization: Bearer secret-token-abc',
+    });
+    await expect(
+      runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn }),
+    ).rejects.toThrow(/\[REDACTED\]/);
   });
 
   it('throws when claude binary is not found (ENOENT)', async () => {
@@ -139,39 +158,41 @@ describe('runAgent', () => {
   });
 
   it('throws when wrapper is_error is true', async () => {
-    const errorWrapper = JSON.stringify({
-      is_error: true,
-      result: 'API rate limit exceeded',
-    });
+    const errorWrapper = JSON.stringify({ is_error: true, result: 'API rate limit exceeded' });
     const spawnFn = makeMockSpawn({ stdout: errorWrapper });
     await expect(
       runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn }),
     ).rejects.toThrow(/API rate limit/);
   });
 
+  it('handles wrapper.result that is not a string — falls back to stdout', async () => {
+    const wrapper = JSON.stringify({
+      is_error: false,
+      result: { dealId: 'd-99' }, // object instead of string
+    });
+    const spawnFn = makeMockSpawn({ stdout: wrapper });
+    // Falls back to extractJson(stdout) — the outer JSON string has no deal directly,
+    // but extractJson will find the inner { dealId } object in the text.
+    const result = await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
+    expect(result).toBeTruthy();
+  });
+
   it('throws when agent result contains no JSON', async () => {
-    const spawnFn = makeMockSpawn({ stdout: wrapResult('Processing complete. No structured data found.') });
+    const spawnFn = makeMockSpawn({ stdout: wrapResult('Processing complete. No structured data.') });
     await expect(
       runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn }),
     ).rejects.toThrow(/no JSON/i);
   });
 
-  it('writes and cleans up temp MCP config file', async () => {
-    const writtenPaths = [];
-    const cleanedPaths = [];
-
-    // We can't easily intercept fs calls without mocking the module.
-    // Instead, verify no leftover /tmp/procure-mcp-* dirs after the run.
+  it('cleans up temp MCP config after successful run', async () => {
     const { readdirSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
-
     const before = readdirSync(tmpdir()).filter((d) => d.startsWith('procure-mcp-'));
 
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
 
     const after = readdirSync(tmpdir()).filter((d) => d.startsWith('procure-mcp-'));
-    // New dirs created during this run should be cleaned up
     const newDirs = after.filter((d) => !before.includes(d));
     expect(newDirs).toHaveLength(0);
   });
@@ -198,8 +219,18 @@ describe('buildMcpConfig', () => {
     });
   });
 
-  it('omits headers when token is empty', () => {
+  it('omits headers when token is empty string', () => {
     const cfg = buildMcpConfig('http://mcp:3000/mcp', '');
+    expect(cfg.mcpServers['procure-ai'].headers).toBeUndefined();
+  });
+
+  it('omits headers when token is null', () => {
+    const cfg = buildMcpConfig('http://mcp:3000/mcp', null);
+    expect(cfg.mcpServers['procure-ai'].headers).toBeUndefined();
+  });
+
+  it('omits headers when token is undefined', () => {
+    const cfg = buildMcpConfig('http://mcp:3000/mcp', undefined);
     expect(cfg.mcpServers['procure-ai'].headers).toBeUndefined();
   });
 
@@ -218,7 +249,7 @@ describe('extractJson', () => {
     expect(extractJson('[1,2,3]')).toEqual([1, 2, 3]);
   });
 
-  it('extracts JSON from surrounding prose', () => {
+  it('extracts JSON object from surrounding prose', () => {
     const text = 'Here is the result:\n{"dealId":"d-1","ok":true}\nEnd.';
     expect(extractJson(text)).toEqual({ dealId: 'd-1', ok: true });
   });
@@ -228,16 +259,24 @@ describe('extractJson', () => {
     expect(extractJson(text)).toEqual({ status: 'done' });
   });
 
-  it('extracts last JSON when multiple JSON objects appear', () => {
+  it('extracts last JSON when multiple JSON objects appear in prose', () => {
     const text = 'Intermediate: {"step":1}\nFinal: {"step":2,"ok":true}';
-    const result = extractJson(text);
-    // Should get the last valid complete JSON
-    expect(result).toBeTruthy();
+    expect(extractJson(text)).toEqual({ step: 2, ok: true });
   });
 
-  it('handles nested JSON correctly', () => {
+  it('handles nested object inside prose (mixed {} and [] nesting)', () => {
+    const text = 'Result:\n{"a":{"b":1},"arr":[1,2,3]}\ndone.';
+    expect(extractJson(text)).toEqual({ a: { b: 1 }, arr: [1, 2, 3] });
+  });
+
+  it('handles deeply nested JSON correctly', () => {
     const nested = '{"a":{"b":{"c":42}},"arr":[1,2,3]}';
     expect(extractJson(nested)).toEqual({ a: { b: { c: 42 } }, arr: [1, 2, 3] });
+  });
+
+  it('extracts array from prose', () => {
+    const text = 'Items: [1,2,3] processed.';
+    expect(extractJson(text)).toEqual([1, 2, 3]);
   });
 
   it('returns null for plain text with no JSON', () => {
