@@ -3,7 +3,7 @@
 # `mcp` and `redis` stay on the internal `procure-net` only.
 services:
   app:
-    image: ghcr.io/postroyka/procure-ai-app:latest
+    image: ghcr.io/postroyka/procure-ai-app:${APP_IMAGE_TAG:-latest}
     container_name: procure-app
     deploy:
       resources:
@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
 
   mcp:
-    image: ghcr.io/postroyka/procure-ai-mcp:latest
+    image: ghcr.io/postroyka/procure-ai-mcp:${MCP_IMAGE_TAG:-latest}
     container_name: procure-mcp
     env_file:
       - .env.prod

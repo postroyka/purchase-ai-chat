@@ -157,12 +157,12 @@ git subtree pull --prefix=mcp https://github.com/bitrix24/templates-mcp main --s
 
 **Откат образа на предыдущую версию:**
 ```bash
-# На сервере — найти нужный sha-тег в GHCR и подставить в compose
-# Пример: откат app на конкретный коммит
-docker pull ghcr.io/postroyka/procure-ai-app:sha-<commit-sha>
-# Отредактировать .env.prod: добавить IMAGE_TAG=sha-<commit-sha>
-# Или напрямую в docker-compose.prod.yml заменить :latest на нужный тег
+# compose читает тег из ${APP_IMAGE_TAG:-latest} / ${MCP_IMAGE_TAG:-latest}.
+# Закрепить нужный sha-тег из GHCR через .env.prod:
+echo "APP_IMAGE_TAG=sha-<commit-sha>" >> .env.prod   # при необходимости и MCP_IMAGE_TAG
 make prod-redeploy
+# Watchtower будет держать закреплённый sha (он не двигается). Вернуть авто-обновление —
+# убрать строку APP_IMAGE_TAG из .env.prod и снова `make prod-redeploy`.
 ```
 
 ## Разработка
@@ -174,10 +174,12 @@ corepack enable  # один раз
 ```
 
 ```bash
-cd backend && pnpm install && pnpm dev   # :3000
-cd mcp     && pnpm install && pnpm dev   # :3000 (internal)
-cd ui      && pnpm install && pnpm dev   # :3001 (proxy /upload /job → backend :3000)
+cd backend && pnpm install && pnpm dev              # :3000
+cd mcp     && pnpm install && PORT=3002 pnpm dev     # :3002 (отдельно от backend :3000 и UI :3001)
+cd ui      && pnpm install && pnpm dev               # :3001 (проксирует /upload /job → backend :3000)
 ```
+> Backend ходит в MCP по `MCP_SERVER_URL` (см. `backend/.env.example` → `http://localhost:3002/mcp`).
+> Для большинства задач MCP локально не нужен (инструменты — заглушки), его можно не запускать.
 
 ## Тесты
 
@@ -236,6 +238,10 @@ claude --version   # → 2.1.168 (Claude Code)
 
 > Для ARM-сервера замените `linux-x64` на `linux-arm64`. Папку `~/.local/bin` установщик
 > мог создать сам — `mkdir -p` оставлен на всякий случай.
+>
+> Альтернатива с проверкой целостности: `npm install -g @anthropic-ai/claude-code@2.1.168`
+> (npm проверяет integrity по lockfile) — этот же способ используется в `Dockerfile.app`.
+> При прямом скачивании бинарника сверьте контрольную сумму, если для релиза публикуется манифест.
 
 **2. Конфиг `~/.claude/settings.json`** (папку `~/.claude` мог создать установщик — `mkdir -p` подстрахует):
 
@@ -262,6 +268,12 @@ EOF
 > `$`-символы и скобки внутри. После создания вставьте реальный ключ вместо
 > `ВСТАВЬ_СЮДА_СВОЙ_DEEPSEEK_КЛЮЧ` (например, `nano ~/.claude/settings.json`); ключ берётся
 > на platform.deepseek.com. **Реальный ключ не коммитить** — он живёт только на сервере.
+
+> 🔒 Ограничьте доступ к файлу с ключом и не дайте ему попасть в git:
+> ```bash
+> chmod 600 ~/.claude/settings.json
+> ```
+> Если на сервере есть git-репозиторий, добавьте `.claude/` в `~/.gitignore_global`.
 
 Проверка валидности JSON (распечаталось без ошибки → формат ок):
 

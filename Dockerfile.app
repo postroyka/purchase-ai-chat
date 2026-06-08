@@ -23,7 +23,7 @@ RUN pnpm build
 FROM node:22.16.0-alpine3.22
 
 # Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code@2.1.165
+RUN npm install -g @anthropic-ai/claude-code@2.1.168
 
 WORKDIR /app
 

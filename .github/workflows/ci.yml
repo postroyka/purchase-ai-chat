@@ -29,7 +29,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Check syntax
-        run: node --check backend/index.js
+        run: node --check backend/index.js && node --check backend/agent-runner.js && node --check backend/jobs-store.js
 
       - name: Run tests
         working-directory: backend

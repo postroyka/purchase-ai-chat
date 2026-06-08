@@ -85,6 +85,7 @@
 > curl -fsSL -H "Authorization: Bearer $GH_PAT" -H "Accept: application/vnd.github.raw" \
 >   -o smoke-test.sh \
 >   "https://api.github.com/repos/postroyka/purchase-ai-chat/contents/scripts/smoke-test.sh?ref=main"
+> unset GH_PAT   # убрать токен из окружения сразу после использования
 > ```
 
 ### На сервере (Linux/Ubuntu)
