@@ -151,8 +151,12 @@ const polling = ref(false)
 const uploadError = ref<string | null>(null)
 const job = ref<JobStatus | null>(null)
 
-let pollTimer: ReturnType<typeof setInterval> | null = null
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+let pollController: AbortController | null = null
 let pollErrors = 0
+let pollDelay = 2000
+const POLL_MIN_MS = 2000
+const POLL_MAX_MS = 30000
 const MAX_POLL_ERRORS = 5
 
 // ── Метки и цвета статусов ───────────────────────────────────────────────────
@@ -236,49 +240,72 @@ function startPolling(jobId: string) {
   stopPolling()
   polling.value = true
   pollErrors = 0
+  pollDelay = POLL_MIN_MS
+  scheduleNextPoll(jobId)
+}
 
-  pollTimer = setInterval(async () => {
-    try {
-      const data = await $fetch<JobStatus>(`/job/${jobId}/status`, {
-        headers: authHeaders()
-      })
-      pollErrors = 0
-      job.value = data
+function scheduleNextPoll(jobId: string) {
+  pollTimer = setTimeout(() => pollOnce(jobId), pollDelay)
+}
 
-      if (data.status === 'done' || data.status === 'error') {
-        stopPolling()
+async function pollOnce(jobId: string) {
+  const controller = new AbortController()
+  pollController = controller
+  try {
+    const data = await $fetch<JobStatus>(`/job/${jobId}/status`, {
+      headers: authHeaders(),
+      signal: controller.signal
+    })
+    pollErrors = 0
+    job.value = data
 
-        if (data.status === 'done') {
-          const doneCount = data.files.filter(f => f.status === 'done').length
-          toast.add({
-            title: 'Обработка завершена',
-            description: `${doneCount} из ${data.files.length} файлов успешно обработано`,
-            color: 'air-primary-success',
-            duration: 5000
-          })
-        } else {
-          toast.add({
-            title: 'Обработка завершена с ошибками',
-            description: 'Некоторые файлы не удалось обработать — проверьте статус',
-            color: 'air-primary-warning',
-            duration: 6000
-          })
-        }
+    if (data.status === 'done' || data.status === 'error') {
+      stopPolling()
+
+      if (data.status === 'done') {
+        const doneCount = data.files.filter(f => f.status === 'done').length
+        toast.add({
+          title: 'Обработка завершена',
+          description: `${doneCount} из ${data.files.length} файлов успешно обработано`,
+          color: 'air-primary-success',
+          duration: 5000
+        })
+      } else {
+        toast.add({
+          title: 'Обработка завершена с ошибками',
+          description: 'Некоторые файлы не удалось обработать — проверьте статус',
+          color: 'air-primary-warning',
+          duration: 6000
+        })
       }
-    } catch {
-      pollErrors++
-      if (pollErrors >= MAX_POLL_ERRORS) {
-        stopPolling()
-        uploadError.value = 'Не удалось получить статус задачи. Обновите страницу.'
-      }
+      return
     }
-  }, 2000)
+
+    // Постепенный backoff: длинные задания не опрашиваем каждые 2 с (до 30 с).
+    pollDelay = Math.min(pollDelay * 1.5, POLL_MAX_MS)
+    scheduleNextPoll(jobId)
+  } catch {
+    // Запрос отменён (stopPolling / уход со страницы) — выходим без перезапуска.
+    if (controller.signal.aborted) return
+    pollErrors++
+    if (pollErrors >= MAX_POLL_ERRORS) {
+      stopPolling()
+      uploadError.value = 'Не удалось получить статус задачи. Обновите страницу.'
+      return
+    }
+    pollDelay = Math.min(pollDelay * 1.5, POLL_MAX_MS)
+    scheduleNextPoll(jobId)
+  }
 }
 
 function stopPolling() {
   if (pollTimer) {
-    clearInterval(pollTimer)
+    clearTimeout(pollTimer)
     pollTimer = null
+  }
+  if (pollController) {
+    pollController.abort()
+    pollController = null
   }
   polling.value = false
 }
