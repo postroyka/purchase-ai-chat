@@ -46,7 +46,7 @@ const VALID_DEAL_RESULT = {
   supplier: { unp: '123456789', name: 'ООО Поставщик', supplierId: 's-1' },
   contract: { contractId: 'c-42' },
   currency: 'BYN',
-  items: [{ vendorCode: 'ART-1', name: 'Товар', price: 10.00, quantity: 5, unit: 'шт', productId: 'p-99' }],
+  items: [{ vendorCode: 'ART-1', name: 'Товар', priceExclVat: 10.00, quantity: 5, unit: 'шт', productId: 'p-99' }],
   deal: { dealId: 'd-7', url: 'https://b24.example.com/crm/deal/7/' },
   sourceFile: '/uploads/job1/invoice.pdf',
 };
@@ -78,6 +78,17 @@ describe('runAgent', () => {
     expect(args).toContain('--output-format');
     expect(args).toContain('json');
     expect(args).toContain('--dangerously-skip-permissions');
+  });
+
+  it('denies dangerous tools via --disallowedTools and keeps the prompt last', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
+    const [_bin, args] = spawnFn.mock.calls[0];
+    const idx = args.indexOf('--disallowedTools');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toContain('Bash');             // single comma-separated value
+    expect(args[idx + 2]).toMatch(/^--/);                // followed by a flag, not the prompt
+    expect(args[args.length - 1]).toContain('FILE_PATH:'); // prompt stays the final positional arg
   });
 
   it('passes --model when model is configured', async () => {

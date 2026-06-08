@@ -70,8 +70,9 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const systemPrompt = getSystemPrompt();
 
   // Validate filePath to prevent prompt injection via crafted file names.
-  // Path must not contain newlines, null bytes, or other control characters.
-  if (/[\x00-\x1f]/.test(filePath)) {
+  // Reject ASCII control chars (incl. newline/null) plus the Unicode line separators
+  // U+2028/U+2029, which some models treat as line breaks inside the prompt.
+  if (/[\x00-\x1f\u2028\u2029]/.test(filePath)) {
     throw new Error(`Invalid filePath — contains control characters: ${JSON.stringify(filePath)}`);
   }
 
@@ -228,9 +229,15 @@ function spawnClaude({
       '--output-format', 'json', // structured JSON wrapper around the result
       '--system-prompt', systemPrompt,
       '--mcp-config', mcpConfigPath,
+      // Defense-in-depth against prompt injection from untrusted file content: deny the
+      // tools the agent never needs (it only requires Read + the b24_pst_crm_* MCP tools),
+      // so an injected instruction can't shell out, tamper with files, or exfiltrate.
+      // Deny rules are honoured even under --dangerously-skip-permissions. Placed before a
+      // boolean flag so the variadic list never swallows the trailing user message.
+      '--disallowedTools', 'Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch',
       // Required so the agent can read uploaded files without interactive prompts.
       // Mitigated by: container runs as non-root, uploads are in a dedicated directory,
-      // and filePath is validated above to prevent prompt injection.
+      // filePath is validated above, and the prompt marks file content as untrusted input.
       '--dangerously-skip-permissions',
     ];
     if (model) args.push('--model', model);
