@@ -157,14 +157,16 @@ const MAX_POLL_ERRORS = 5
 
 // ── Метки и цвета статусов ───────────────────────────────────────────────────
 
-const JOB_LABELS: Record<string, string> = {
+type StatusKey = 'pending' | 'processing' | 'done' | 'error'
+
+const JOB_LABELS: Record<StatusKey, string> = {
   pending: 'Ожидание',
   processing: 'Обработка…',
   done: 'Готово',
   error: 'Ошибка'
 }
 
-const JOB_COLORS: Record<string, BadgeColor> = {
+const JOB_COLORS: Record<StatusKey, BadgeColor> = {
   pending: 'air-secondary',
   processing: 'air-primary',
   done: 'air-primary-success',
