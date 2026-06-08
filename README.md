@@ -41,18 +41,39 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | Переменная | Контейнер | Обязательно | Описание |
 |---|---|---|---|
 | `BACKEND_API_TOKEN` | app | ✅ | Bearer-токен для `/upload` и `/job/:id/status` |
+| `REDIS_PASSWORD` | app/redis | ✅ | Пароль Redis (тот же подставляется в `REDIS_URL` в compose) |
 | `NUXT_MCP_AUTH_TOKEN` | mcp | ✅ | Bearer-токен для `/mcp` endpoint |
 | `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Webhook Bitrix24 с правами CRM |
 | `PUBLIC_PAGE_BASIC_AUTH_PASS` | app | ✅ | Пароль публичной страницы |
-| `REDIS_URL` | app | — | URL Redis (по умолчанию: `redis://redis:6379`) |
+| `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | app | ✅¹ | Домен приложения для nginx-proxy + acme |
+| `LETSENCRYPT_EMAIL` | acme | ✅¹ | E-mail для Let's Encrypt (глобально в acme-companion) |
+| `REDIS_URL` | app | — | URL Redis (в compose формируется из `REDIS_PASSWORD`) |
+| `MCP_SERVER_URL` | app | — | URL MCP внутри сети (по умолчанию: `http://mcp:3000/mcp`) |
+| `B24_DEAL_CATEGORY_ID` | mcp | — | Воронка сделок (по умолчанию: `1` «Закупки») |
+| `B24_DEAL_DEFAULT_STAGE_ID` | mcp | — | Стадия сделки (по умолчанию: `C1:NEW`) |
+| `B24_CONTRACTS_API_URL` | mcp | — | URL внешнего REST-контроллера договоров (см. ниже) |
+| `PUBLIC_PAGE_ENABLED` | app | — | Включить публичную страницу (по умолчанию: `true`) |
+| `PUBLIC_PAGE_BASIC_AUTH_USER` | app | — | Логин публичной страницы (по умолчанию: `procure`) |
 | `PUBLIC_PAGE_RESPONSIBLE_USER_ID` | app | — | ID пользователя Б24 по умолчанию |
 | `JOB_TTL_HOURS` | app | — | Время хранения задач в Redis (по умолчанию: 24) |
 | `MAX_FILE_SIZE_MB` | app | — | Макс. размер файла (по умолчанию: 20) |
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
+| `ALLOWED_EXTENSIONS` | app | — | Разрешённые расширения (по умолчанию: `pdf,xlsx,docx`) |
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
 | `AGENT_TIMEOUT_MS` | app | — | Таймаут запуска агента в мс (по умолчанию: 300000 = 5 мин) |
 | `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
-| `MCP_SERVER_URL` | app | — | URL MCP-сервера (по умолчанию: `http://mcp:3000/mcp`) |
+| `ANTHROPIC_API_KEY` | app | ✅² | Ключ Claude API для агента (можно задать и через `~/.anthropic`) |
+| `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX` + `AWS_*` / `GOOGLE_*` | app | — | Альтернативные провайдеры Claude (Bedrock/Vertex) — пробрасываются агенту |
+| `NODE_ENV` / `PORT` / `UPLOAD_DIR` | app | — | Стандартные настройки рантайма |
+
+¹ Обязательны при деплое за общим nginx-proxy (прод). Для локального запуска не нужны.
+² Обязателен для реальной работы агента; в `.env.prod.example` вынесен в комментарий (передаётся через `~/.anthropic` или env).
+
+> **AI-провайдер.** Текущая реализация агента использует **Claude Code** (`CLAUDE_CODE_BIN`,
+> `ANTHROPIC_API_KEY`). Переменные `DEEPSEEK_*` из ТЗ/брифа в коде пока не задействованы.
+>
+> **`B24_CONTRACTS_API_URL` (поиск договоров)** указывает на **внешний** REST-контроллер
+> на стороне Bitrix24 BUS — это не каталог в этом репозитории, а отдельный сервис заказчика.
 
 ## Мониторинг задач (API)
 
@@ -104,7 +125,14 @@ curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
 [bitrix24/templates-mcp](https://github.com/bitrix24/templates-mcp) —
 файлы хранятся прямо в репо, никаких submodule.
 
-⚠️ **Статус Week 1:** все 4 PST-инструмента (`b24_pst_crm_*`) — заглушки. Сквозной флоу не работает до реализации Week 2 (b24-controller + тела инструментов).
+> ⚠️ **Документация внутри `mcp/` (`mcp/docs/*`, `mcp/skills/*`) — это upstream
+> templates-mcp**, она описывает образ `bx24-template-mcp` и его команды
+> (`make up/redeploy`, теги `v*`, путь `/opt/bx24-template-mcp`). Для **procure-ai**
+> это неверные инструкции — ориентируйтесь на корневой `README.md`, `Makefile`
+> (`make prod-up`/`prod-redeploy`) и `docs/SERVER_SETUP.md`. Кастомные инструменты
+> добавляются в `mcp-overlay/`, а не в `mcp/server/...` (иначе потеряются при subtree pull).
+
+⚠️ **Статус:** backend и агент (`backend/agent-runner.js`, спавн Claude Code CLI) реализованы — сквозной прогон работает **до MCP-слоя**. Заглушками остались только 4 PST-инструмента (`b24_pst_crm_*`): они бросают «not implemented (Week 2)», поэтому сделки в Б24 пока не создаются (нужны тела инструментов + внешний b24-controller).
 
 PST-специфичные инструменты живут в `mcp-overlay/` и копируются поверх
 upstream при сборке образа (`Dockerfile.mcp`). Имена используют префикс

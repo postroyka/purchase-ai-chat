@@ -61,6 +61,8 @@ export default defineNuxtConfig({
     },
     prerender: {
       routes: [
+        // Корневой маршрут — иначе index.html не генерируется и Express отдаёт 404 на «/».
+        '/',
         ...pagesService
       ],
       crawlLinks: true,

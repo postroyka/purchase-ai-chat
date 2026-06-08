@@ -12,7 +12,7 @@
 
 ```bash
 pnpm install
-pnpm dev          # http://localhost:3000
+pnpm dev          # http://localhost:3001 (dev-сервер; API проксируется на backend :3000)
 pnpm lint
 pnpm build        # статика собирается в .output/public
 ```

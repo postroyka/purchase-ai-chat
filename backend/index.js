@@ -25,6 +25,11 @@ const ALLOWED_MIME_TYPES = new Set([
 // file-type needs ≥4096 bytes to reliably detect OOXML (xlsx/docx) formats
 const MIME_SNIFF_BYTES = 4100;
 
+// Caps for agent-derived fields persisted to Redis and returned via the API,
+// so a malformed/oversized agent response can't bloat the store or the response.
+const MAX_RESULT_BYTES = 100_000;
+const MAX_ERROR_CHARS = 300;
+
 // Constant-time string comparison. Length mismatch short-circuits before timingSafeEqual
 // to avoid the "buffers must have the same length" throw; the length leak is acceptable
 // for fixed-length bearer tokens.
@@ -33,6 +38,14 @@ function safeCompare(a, b) {
   const bufB = Buffer.from(b, 'utf8');
   if (bufA.length !== bufB.length) return false;
   return timingSafeEqual(bufA, bufB);
+}
+
+// Best-effort removal of multer's temp files. Used on every early-return error
+// path in /upload so a rejected upload never leaves orphans in uploads/_tmp.
+function cleanupTmpFiles(files) {
+  for (const file of files ?? []) {
+    try { fs.unlinkSync(file.path); } catch {}
+  }
 }
 
 /**
@@ -75,6 +88,19 @@ export function createApp(config = {}) {
   const ttlHours = config.ttlHours ?? parseInt(process.env.JOB_TTL_HOURS ?? '24', 10);
 
   const app = express();
+
+  // Baseline security headers (helmet-equivalent subset). Kept dependency-free so the
+  // prod image still builds with `pnpm install --frozen-lockfile --prod`; can be swapped
+  // for the `helmet` package in the dedicated security PR.
+  app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-DNS-Prefetch-Control', 'off');
+    next();
+  });
+
   const jobs = config.jobs ?? createJobsStore({ redisUrl, ttlHours });
   const agentConfig = config.agentConfig ?? {};
 
@@ -134,7 +160,7 @@ export function createApp(config = {}) {
       for (const f of req.files) {
         const ext = path.extname(f.originalname).slice(1).toLowerCase();
         if (!allowedExtensions.includes(ext)) {
-          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          cleanupTmpFiles(req.files);
           return res.status(400).json({
             error: `File type .${ext} is not allowed. Allowed: ${allowedExtensions.join(', ')}`,
           });
@@ -152,25 +178,34 @@ export function createApp(config = {}) {
           fs.closeSync(fd);
           buf = buf.subarray(0, bytesRead);
         } catch {
-          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          cleanupTmpFiles(req.files);
           return res.status(500).json({ error: 'Failed to read uploaded file' });
         }
 
         const ext = path.extname(f.originalname).slice(1).toLowerCase();
         const detected = await fileTypeFromBuffer(buf);
         if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
-          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          cleanupTmpFiles(req.files);
           return res.status(400).json({
             error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected?.mime ?? 'unknown'}).`,
           });
         }
         // application/zip is a structural fallback for xlsx/docx — reject if ext doesn't match
         if (detected.mime === 'application/zip' && !['xlsx', 'docx'].includes(ext)) {
-          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          cleanupTmpFiles(req.files);
           return res.status(400).json({
             error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected.mime}).`,
           });
         }
+      }
+
+      // Validate optional responsibleUserId from the request body (the public page
+      // sends it). Must be a positive integer — it is later passed to the agent / Б24.
+      const rawResponsible = req.body?.responsibleUserId;
+      const hasResponsible = rawResponsible != null && String(rawResponsible) !== '';
+      if (hasResponsible && !/^\d+$/.test(String(rawResponsible))) {
+        cleanupTmpFiles(req.files);
+        return res.status(400).json({ error: 'responsibleUserId must be a positive integer' });
       }
 
       const jobId = uuidv4();
@@ -193,14 +228,14 @@ export function createApp(config = {}) {
         });
       } catch (err) {
         fs.rmSync(jobDir, { recursive: true, force: true });
-        for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+        cleanupTmpFiles(req.files);
         if (err.code === 'UNSAFE_FILENAME') {
           return res.status(400).json({ error: err.message });
         }
         return res.status(500).json({ error: 'Failed to store uploaded files' });
       }
 
-      const responsibleUserId = req.body?.responsibleUserId ?? responsibleUserIdDefault;
+      const responsibleUserId = hasResponsible ? String(rawResponsible) : responsibleUserIdDefault;
 
       const job = {
         jobId,
@@ -268,12 +303,22 @@ async function processJob(jobId, jobs, agentConfig = {}) {
     fileEntry.status = 'processing';
     await jobs.set(jobId, job);
     try {
-      fileEntry.result = await runAgent(fileEntry.path, job.responsibleUserId, agentConfig);
+      // Pass jobId into the agent config so agent-runner log lines are traceable
+      // when multiple jobs run concurrently.
+      const result = await runAgent(fileEntry.path, job.responsibleUserId, { ...agentConfig, jobId });
+      // Guard against an abnormally large agent result bloating Redis / the API response.
+      let tooLarge = false;
+      try { tooLarge = JSON.stringify(result).length > MAX_RESULT_BYTES; } catch { /* non-serialisable */ }
+      fileEntry.result = tooLarge
+        ? { truncated: true, message: 'agent result too large — omitted' }
+        : result;
       fileEntry.status = 'done';
     } catch (err) {
-      console.error(`[processJob] error processing file ${fileEntry.name}:`, err);
+      console.error(`[processJob] error processing file ${fileEntry.name} (job ${jobId}):`, err);
       fileEntry.status = 'error';
-      fileEntry.error = err.message;
+      // Truncate the message before it is persisted/returned. Deeper secret redaction
+      // is tracked in the security hardening issue.
+      fileEntry.error = String(err?.message ?? 'agent error').slice(0, MAX_ERROR_CHARS);
     }
     await jobs.set(jobId, job);
   }
