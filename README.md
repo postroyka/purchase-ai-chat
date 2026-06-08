@@ -69,8 +69,11 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 ¹ Обязательны при деплое за общим nginx-proxy (прод). Для локального запуска не нужны.
 ² Обязателен для реальной работы агента; в `.env.prod.example` вынесен в комментарий (передаётся через `~/.anthropic` или env).
 
-> **AI-провайдер.** Текущая реализация агента использует **Claude Code** (`CLAUDE_CODE_BIN`,
-> `ANTHROPIC_API_KEY`). Переменные `DEEPSEEK_*` из ТЗ/брифа в коде пока не задействованы.
+> **AI-провайдер.** Агент работает на **Claude Code** CLI (`CLAUDE_CODE_BIN`). Провайдер модели
+> задаётся настройками Claude Code: по умолчанию Anthropic (`ANTHROPIC_API_KEY`), на сервере CLI
+> переключён на **DeepSeek** через `~/.claude/settings.json` (`ANTHROPIC_BASE_URL` →
+> `api.deepseek.com/anthropic`) — см. [Установка Claude Code CLI на сервере](#установка-claude-code-cli-на-сервере-провайдер-deepseek).
+> Отдельные `DEEPSEEK_*` переменные из ТЗ/брифа в коде по-прежнему не задействованы.
 >
 > **`B24_CONTRACTS_API_URL` (поиск договоров)** указывает на **внешний** REST-контроллер
 > на стороне Bitrix24 BUS — это не каталог в этом репозитории, а отдельный сервис заказчика.
@@ -209,6 +212,88 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 Обновление файлов на сервере — тем же `curl -fsSLO`, без `git pull`.
 Принудительный редеплой без ожидания Watchtower — `make prod-redeploy`.
+
+### Установка Claude Code CLI на сервере (провайдер DeepSeek)
+
+Агент (`backend/agent-runner.js`) запускает **Claude Code CLI** (`CLAUDE_CODE_BIN`, по умолчанию
+`claude` из `PATH`). На сервере CLI ставится нативным бинарником и переключается на провайдера
+**DeepSeek** через `~/.claude/settings.json` (Anthropic-совместимый endpoint).
+
+**1. Установка бинарника** (Ubuntu, `linux-x64`):
+
+```bash
+BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
+VER=$(curl -fsSL "$BUCKET/latest")
+mkdir -p ~/.local/bin
+curl -fsSL -o ~/.local/bin/claude "$BUCKET/$VER/linux-x64/claude"
+chmod +x ~/.local/bin/claude
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+claude --version   # → 2.1.168 (Claude Code)
+```
+
+> Для ARM-сервера замените `linux-x64` на `linux-arm64`. Папку `~/.local/bin` установщик
+> мог создать сам — `mkdir -p` оставлен на всякий случай.
+
+**2. Конфиг `~/.claude/settings.json`** (папку `~/.claude` мог создать установщик — `mkdir -p` подстрахует):
+
+```bash
+mkdir -p ~/.claude
+cat > ~/.claude/settings.json << 'EOF'
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "ВСТАВЬ_СЮДА_СВОЙ_DEEPSEEK_КЛЮЧ",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+  }
+}
+EOF
+```
+
+> ⚠️ Кавычки вокруг `'EOF'` (одинарные) обязательны — иначе шелл попытается раскрыть
+> `$`-символы и скобки внутри. После создания вставьте реальный ключ вместо
+> `ВСТАВЬ_СЮДА_СВОЙ_DEEPSEEK_КЛЮЧ` (например, `nano ~/.claude/settings.json`); ключ берётся
+> на platform.deepseek.com. **Реальный ключ не коммитить** — он живёт только на сервере.
+
+Проверка валидности JSON (распечаталось без ошибки → формат ок):
+
+```bash
+cat ~/.claude/settings.json | python3 -m json.tool
+```
+
+**3. Проверка связки.** Быстрый headless-тест — сразу видно, доходит ли запрос до DeepSeek:
+
+```bash
+claude -p "ответь одним словом: работает"
+```
+
+Пришёл текст — связка живая. `401/403` — неверный ключ; таймаут — сервер не достаёт
+`api.deepseek.com`. Дальше интерактивно:
+
+```bash
+claude
+```
+
+Внутри сессии выполнить `/status` и проверить два поля: `base URL` = `api.deepseek.com/anthropic`,
+модель = `deepseek-v4-pro[1m]`. Если осталось что-то Anthropic'овское — `settings.json` не
+подхватился (проверьте путь и валидность JSON).
+
+> При первом запуске `claude` может предложить логин/онбординг через браузер. Поскольку
+> `ANTHROPIC_AUTH_TOKEN` задан, OAuth не нужен — пропускайте (Esc / «уже есть ключ»), CLI
+> работает по токену из конфига.
+
+> ⚠️ **Хост vs контейнер.** Шаги выше настраивают `claude` CLI на самом сервере (хосте) — для
+> операторских задач и ручной проверки. Контейнер `procure-app` запускает собственный бинарник
+> Claude Code из образа с урезанным окружением (allowlist `AGENT_ENV_KEYS` в
+> `backend/agent-runner.js` не пробрасывает `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`), поэтому
+> хостовый `~/.claude/settings.json` на него автоматически не влияет. Чтобы и агент в контейнере
+> ходил в DeepSeek, конфиг нужно доставить внутрь контейнера (смонтировать `~/.claude` или встроить
+> в образ) — задавать `ANTHROPIC_BASE_URL` через `.env.prod` недостаточно, его отфильтрует allowlist.
 
 ## Документация
 

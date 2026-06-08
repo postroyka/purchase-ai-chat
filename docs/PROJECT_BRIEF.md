@@ -6,7 +6,7 @@
 
 ## Роль
 
-Инженер реализует проект автоматизации обработки предложений поставщиков для ООО «Строительный Берег» (`postroyka.by`). Стек — Bitrix24 + Node.js + Claude Code (headless) + DeepSeek *(DeepSeek в текущей реализации не задействован — агент работает на Claude Code)*. Работаем строго по ТЗ. Инкрементальные коммиты, прод не трогаем без явного подтверждения.
+Инженер реализует проект автоматизации обработки предложений поставщиков для ООО «Строительный Берег» (`postroyka.by`). Стек — Bitrix24 + Node.js + Claude Code (headless) + DeepSeek *(DeepSeek подключён как модель-провайдер для Claude Code CLI на сервере — `~/.claude/settings.json`, см. «Статус инфраструктуры»; отдельные `DEEPSEEK_*` переменные из ТЗ в коде не используются)*. Работаем строго по ТЗ. Инкрементальные коммиты, прод не трогаем без явного подтверждения.
 
 ---
 
@@ -18,7 +18,7 @@
 |---|---|---|
 | UI | app | `bitrix24/templates-dashboard` поверх Bitrix24 UI Kit |
 | Backend | app | Node.js REST API, оркестрация `claude code`, журнал заданий, cron-cleanup |
-| AI | app | `claude code` headless, промпт из `prompts/main.md` (DeepSeek из ТЗ пока не используется) |
+| AI | app | `claude code` headless, промпт из `prompts/main.md` (движок — Claude Code CLI; провайдер модели задаётся его настройками, на сервере CLI настроен на DeepSeek — см. README; `DEEPSEEK_*` из ТЗ в коде не используются) |
 | MCP | mcp | Собственный MCP-сервер на базе `bitrix24/templates-mcp` |
 
 ### Docker — два контейнера
@@ -93,11 +93,22 @@ procure-ai/
 | `B24_CONTRACTS_API_URL` | внешний REST-контроллер договоров (сервис заказчика, не в этом репо) |
 | `B24_DEAL_CATEGORY_ID` | `1` |
 | `B24_DEAL_DEFAULT_STAGE_ID` | `C1:NEW` |
-| `DEEPSEEK_*` | из ТЗ; **в текущей реализации не используется** — агент работает на Claude Code |
+| `DEEPSEEK_*` | из ТЗ; в коде не используются. DeepSeek подключён как провайдер модели через Claude Code (`~/.claude/settings.json`, `ANTHROPIC_BASE_URL`), а не через эти переменные |
 | `PUBLIC_PAGE_ENABLED` | `true` (демо) |
 | `PUBLIC_PAGE_BASIC_AUTH_USER` | `procure` |
 | `PUBLIC_PAGE_BASIC_AUTH_PASS` | только на сервере |
 | `PUBLIC_PAGE_RESPONSIBLE_USER_ID` | `20` |
+
+---
+
+## Статус инфраструктуры
+
+- ✅ **2026-06-08 — Claude Code CLI + DeepSeek.** На сервере установлен Claude Code CLI
+  (нативный бинарник, v2.1.168) и переключён на провайдера **DeepSeek** через
+  `~/.claude/settings.json` (`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`,
+  модель `deepseek-v4-pro[1m]`). Пошаговая инструкция — в `README.md`, раздел
+  «Установка Claude Code CLI на сервере (провайдер DeepSeek)». Это настройка CLI на хосте;
+  контейнер `procure-app` использует собственный бинарник Claude Code из образа.
 
 ---
 
