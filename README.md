@@ -70,9 +70,11 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 ² Обязателен для реальной работы агента; в `.env.prod.example` вынесен в комментарий (передаётся через `~/.anthropic` или env).
 
 > **AI-провайдер.** Агент работает на **Claude Code** CLI (`CLAUDE_CODE_BIN`). Провайдер модели
-> задаётся настройками Claude Code: по умолчанию Anthropic (`ANTHROPIC_API_KEY`), на сервере CLI
-> переключён на **DeepSeek** через `~/.claude/settings.json` (`ANTHROPIC_BASE_URL` →
-> `api.deepseek.com/anthropic`) — см. [Установка Claude Code CLI на сервере](#установка-claude-code-cli-на-сервере-провайдер-deepseek).
+> задаётся переменными окружения: Anthropic (`ANTHROPIC_API_KEY`) либо **DeepSeek**
+> (`ANTHROPIC_BASE_URL` → `api.deepseek.com/anthropic`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`).
+> В контейнере они задаются через `.env.prod` (проброшены allowlist `AGENT_ENV_KEYS`); для ручного
+> CLI на хосте — через `~/.claude/settings.json` (см.
+> [Установка Claude Code CLI на сервере](#установка-claude-code-cli-на-сервере-провайдер-deepseek)).
 > Отдельные `DEEPSEEK_*` переменные из ТЗ/брифа в коде по-прежнему не задействованы.
 >
 > **`B24_CONTRACTS_API_URL` (поиск договоров)** указывает на **внешний** REST-контроллер
@@ -288,12 +290,11 @@ claude
 > работает по токену из конфига.
 
 > ⚠️ **Хост vs контейнер.** Шаги выше настраивают `claude` CLI на самом сервере (хосте) — для
-> операторских задач и ручной проверки. Контейнер `procure-app` запускает собственный бинарник
-> Claude Code из образа с урезанным окружением (allowlist `AGENT_ENV_KEYS` в
-> `backend/agent-runner.js` не пробрасывает `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`), поэтому
-> хостовый `~/.claude/settings.json` на него автоматически не влияет. Чтобы и агент в контейнере
-> ходил в DeepSeek, конфиг нужно доставить внутрь контейнера (смонтировать `~/.claude` или встроить
-> в образ) — задавать `ANTHROPIC_BASE_URL` через `.env.prod` недостаточно, его отфильтрует allowlist.
+> операторских задач и ручной проверки. Прод-агент работает в контейнере `procure-app` со своим
+> бинарником Claude Code и читает провайдера из переменных окружения, а не из хостового
+> `~/.claude/settings.json`. Чтобы контейнер ходил в DeepSeek, задайте в `.env.prod`
+> `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL` — они проброшены в агент через
+> allowlist `AGENT_ENV_KEYS` (`backend/agent-runner.js`); см. блок «AI — Claude Code Agent» в `.env.prod.example`.
 
 ## Документация
 

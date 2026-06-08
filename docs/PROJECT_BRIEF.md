@@ -18,7 +18,7 @@
 |---|---|---|
 | UI | app | `bitrix24/templates-dashboard` поверх Bitrix24 UI Kit |
 | Backend | app | Node.js REST API, оркестрация `claude code`, журнал заданий, cron-cleanup |
-| AI | app | `claude code` headless, промпт из `prompts/main.md` (движок — Claude Code CLI; провайдер модели задаётся его настройками, на сервере CLI настроен на DeepSeek — см. README; `DEEPSEEK_*` из ТЗ в коде не используются) |
+| AI | app | `claude code` headless, промпт из `prompts/main.md` (движок — Claude Code CLI; провайдер модели — Anthropic или DeepSeek через env `ANTHROPIC_*` в контейнере, см. README; `DEEPSEEK_*` из ТЗ в коде не используются) |
 | MCP | mcp | Собственный MCP-сервер на базе `bitrix24/templates-mcp` |
 
 ### Docker — два контейнера
@@ -107,8 +107,9 @@ procure-ai/
   (нативный бинарник, v2.1.168) и переключён на провайдера **DeepSeek** через
   `~/.claude/settings.json` (`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`,
   модель `deepseek-v4-pro[1m]`). Пошаговая инструкция — в `README.md`, раздел
-  «Установка Claude Code CLI на сервере (провайдер DeepSeek)». Это настройка CLI на хосте;
-  контейнер `procure-app` использует собственный бинарник Claude Code из образа.
+  «Установка Claude Code CLI на сервере (провайдер DeepSeek)». На хосте провайдер задаётся через
+  `~/.claude/settings.json`; прод-агент в контейнере — через `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/
+  `ANTHROPIC_MODEL` в `.env.prod` (проброшены allowlist `AGENT_ENV_KEYS` в `backend/agent-runner.js`).
 
 ---
 

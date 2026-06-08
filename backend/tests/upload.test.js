@@ -231,6 +231,85 @@ describe('Auth middleware', () => {
   });
 });
 
+// ── Basic auth (public page) ──────────────────────────────────────────────────
+
+describe('Basic auth (public page)', () => {
+  const BASIC_PASS = 'super-secret-page-pass';
+  const basicHeader = (user, pass) =>
+    `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+
+  // App with BOTH a Bearer token and Basic page credentials configured.
+  const dualAuthApp = createApp({
+    token: TOKEN,
+    uploadDir: UPLOAD_DIR,
+    basicAuthUser: 'procure',
+    basicAuthPass: BASIC_PASS,
+  });
+
+  it('accepts a valid Basic credential on /job/:id/status (dual auth)', async () => {
+    const res = await request(dualAuthApp)
+      .get('/job/nope/status')
+      .set('Authorization', basicHeader('procure', BASIC_PASS));
+    expect(res.status).toBe(404); // auth passed → job simply not found
+  });
+
+  it('still accepts the Bearer token when Basic is also configured', async () => {
+    const res = await request(dualAuthApp)
+      .get('/job/nope/status')
+      .set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects a wrong Basic password with 401', async () => {
+    const res = await request(dualAuthApp)
+      .get('/job/nope/status')
+      .set('Authorization', basicHeader('procure', 'wrong'));
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a wrong Basic user with 401', async () => {
+    const res = await request(dualAuthApp)
+      .get('/job/nope/status')
+      .set('Authorization', basicHeader('intruder', BASIC_PASS));
+    expect(res.status).toBe(401);
+  });
+
+  it('guards the served UI with Basic auth (401 + WWW-Authenticate, then 200)', async () => {
+    const uiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-public-'));
+    fs.writeFileSync(path.join(uiDir, 'index.html'), '<html>ok</html>');
+    try {
+      const pageApp = createApp({
+        token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: BASIC_PASS, uiPublicDir: uiDir,
+      });
+      const noauth = await request(pageApp).get('/');
+      expect(noauth.status).toBe(401);
+      expect(noauth.headers['www-authenticate']).toMatch(/Basic/);
+
+      const ok = await request(pageApp)
+        .get('/')
+        .set('Authorization', basicHeader('procure', BASIC_PASS));
+      expect(ok.status).toBe(200);
+      expect(ok.text).toContain('ok');
+    } finally {
+      fs.rmSync(uiDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 503 for the UI when the public page is enabled but the password is unset', async () => {
+    const uiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-public-'));
+    fs.writeFileSync(path.join(uiDir, 'index.html'), '<html>ok</html>');
+    try {
+      const pageApp = createApp({
+        token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: '', uiPublicDir: uiDir,
+      });
+      const res = await request(pageApp).get('/');
+      expect(res.status).toBe(503);
+    } finally {
+      fs.rmSync(uiDir, { recursive: true, force: true });
+    }
+  });
+});
+
 // ── POST /upload ─────────────────────────────────────────────────────────────
 
 describe('POST /upload', () => {

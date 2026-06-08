@@ -13,6 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const AUTH_PLACEHOLDER = 'replace-with-secure-token';
+const BASIC_AUTH_PLACEHOLDER = 'replace-with-secure-password';
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -62,6 +63,10 @@ function cleanupTmpFiles(files) {
  *   redisUrl?: string,
  *   ttlHours?: number,
  *   responsibleUserId?: string,
+ *   basicAuthUser?: string,
+ *   basicAuthPass?: string,
+ *   publicPageEnabled?: boolean,
+ *   uiPublicDir?: string,
  *   agentConfig?: import('./agent-runner.js').AgentConfig,
  *   jobs?: object,
  * }} [config]
@@ -86,6 +91,11 @@ export function createApp(config = {}) {
     config.responsibleUserId ?? process.env.PUBLIC_PAGE_RESPONSIBLE_USER_ID ?? null;
   const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? '';
   const ttlHours = config.ttlHours ?? parseInt(process.env.JOB_TTL_HOURS ?? '24', 10);
+  const basicAuthUser = config.basicAuthUser ?? process.env.PUBLIC_PAGE_BASIC_AUTH_USER ?? 'procure';
+  const basicAuthPass = config.basicAuthPass ?? process.env.PUBLIC_PAGE_BASIC_AUTH_PASS ?? '';
+  const publicPageEnabled = config.publicPageEnabled
+    ?? ((process.env.PUBLIC_PAGE_ENABLED ?? 'true') !== 'false');
+  const uiPublicDir = config.uiPublicDir ?? path.join(__dirname, '..', 'ui', 'public');
 
   const app = express();
 
@@ -108,13 +118,51 @@ export function createApp(config = {}) {
   let activeJobs = 0;
   app.getActiveJobCount = () => activeJobs;
 
-  function requireAuth(req, res, next) {
-    if (!token || token === AUTH_PLACEHOLDER) {
-      return res.status(503).json({ error: 'Service not configured: BACKEND_API_TOKEN is not set' });
-    }
+  const bearerConfigured = () => Boolean(token) && token !== AUTH_PLACEHOLDER;
+  const basicAuthConfigured = () =>
+    publicPageEnabled && Boolean(basicAuthPass) && basicAuthPass !== BASIC_AUTH_PLACEHOLDER;
+
+  // Validate an HTTP Basic credential against the configured public-page user/pass.
+  // Both fields are compared in constant time; a missing/garbled header returns false.
+  function checkBasicAuth(req) {
     const auth = req.headers['authorization'] ?? '';
-    if (safeCompare(auth, `Bearer ${token}`)) return next();
+    if (!auth.startsWith('Basic ')) return false;
+    let decoded;
+    try { decoded = Buffer.from(auth.slice(6), 'base64').toString('utf8'); } catch { return false; }
+    const sep = decoded.indexOf(':');
+    if (sep < 0) return false;
+    // Evaluate both comparisons (no short-circuit) so timing doesn't reveal which half matched.
+    const userOk = safeCompare(decoded.slice(0, sep), basicAuthUser);
+    const passOk = safeCompare(decoded.slice(sep + 1), basicAuthPass);
+    return userOk && passOk;
+  }
+
+  // API auth for /upload and /job/:id/status. Accepts EITHER the Bearer API token
+  // (programmatic / smoke-test clients) OR — when the public page is enabled — a valid
+  // Basic credential. A browser that authenticated for the page resends Basic automatically
+  // on same-origin requests, so the UI needs no API token baked into its bundle.
+  function requireAuth(req, res, next) {
+    if (bearerConfigured() && safeCompare(req.headers['authorization'] ?? '', `Bearer ${token}`)) {
+      return next();
+    }
+    if (basicAuthConfigured() && checkBasicAuth(req)) return next();
+    if (!bearerConfigured() && !basicAuthConfigured()) {
+      return res.status(503).json({
+        error: 'Service not configured: set BACKEND_API_TOKEN or PUBLIC_PAGE_BASIC_AUTH_USER/PASS',
+      });
+    }
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Page-level Basic auth guarding the served UI. Fails closed: if the public page is
+  // enabled but the password is unset/placeholder, returns 503 rather than serving openly.
+  function requirePageAuth(req, res, next) {
+    if (!basicAuthConfigured()) {
+      return res.status(503).send('Service not configured: PUBLIC_PAGE_BASIC_AUTH_PASS is not set');
+    }
+    if (checkBasicAuth(req)) return next();
+    res.setHeader('WWW-Authenticate', 'Basic realm="procure-ai", charset="UTF-8"');
+    return res.status(401).send('Authentication required');
   }
 
   const storage = multer.diskStorage({
@@ -281,9 +329,12 @@ export function createApp(config = {}) {
     }
   });
 
-  // Serve built UI (only present in Docker image).
-  const UI_PUBLIC_DIR = path.join(__dirname, '..', 'ui', 'public');
-  app.use(express.static(UI_PUBLIC_DIR));
+  // Serve built UI (only present in Docker image), guarded by Basic auth when the public
+  // page is enabled. Mounted only if the build output exists, so dev runs (UI served
+  // separately on :3001) and tests are unaffected.
+  if (publicPageEnabled && fs.existsSync(uiPublicDir)) {
+    app.use(requirePageAuth, express.static(uiPublicDir));
+  }
 
   return app;
 }

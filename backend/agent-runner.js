@@ -24,6 +24,9 @@ const AGENT_ENV_KEYS = [
   // Windows profile dirs — claude stores its auth session under %APPDATA%\Claude\
   'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH',
   'ANTHROPIC_API_KEY',        // required for API access (alternative to session auth)
+  // Provider override — lets the containerised agent target an Anthropic-compatible
+  // endpoint (e.g. DeepSeek) via .env.prod instead of a host-only ~/.claude/settings.json.
+  'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
   'CLAUDE_CODE_USE_BEDROCK',  // optional Bedrock provider
   'CLAUDE_CODE_USE_VERTEX',   // optional Vertex provider
   'AWS_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
