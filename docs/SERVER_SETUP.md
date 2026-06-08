@@ -128,16 +128,22 @@ powershell -ExecutionPolicy Bypass -File .\smoke-test.ps1
 Доставьте на сервер **скрипт и эталонный счёт** (рядом друг с другом):
 
 ```bash
-cd ~/procure-ai
-# через scp с машины, где есть репозиторий:
-scp scripts/agent-e2e-test.sh          ubuntu@СЕРВЕР:~/procure-ai/
-scp scripts/samples/etalon-invoice.pdf ubuntu@СЕРВЕР:~/procure-ai/
+# через scp с машины, где есть репозиторий (обе цели одной командой):
+scp scripts/agent-e2e-test.sh scripts/samples/etalon-invoice.pdf ubuntu@СЕРВЕР:~/procure-ai/
+
 # затем на сервере:
+cd ~/procure-ai
+grep -q '^ANTHROPIC_API_KEY=..' .env.prod || echo "⚠ ANTHROPIC_API_KEY не задан в .env.prod — агент упадёт!"
 bash agent-e2e-test.sh
 ```
 
 Скрипт сам подхватит лежащий рядом `etalon-invoice.pdf`. Свой файл —
 `FILE=/path/to/price.xlsx bash agent-e2e-test.sh`.
+
+> **Локально на Windows** (где claude авторизован по подписке, вне Docker) —
+> та же проверка одной командой через PowerShell-версию:
+> `powershell -ExecutionPolicy Bypass -File .\scripts\agent-e2e-test.ps1`
+> (по умолчанию `http://localhost:3000` и эталон из `scripts/samples/`).
 
 > **⚠️ Авторизация claude в Docker.** Подписочная сессия Claude.ai внутри
 > контейнера не работает — агенту нужен `ANTHROPIC_API_KEY` в `.env.prod`

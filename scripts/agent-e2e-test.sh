@@ -46,6 +46,23 @@ POLL_TIMEOUT="${POLL_TIMEOUT:-360}"
 APP_CONTAINER="${APP_CONTAINER:-procure-app}"
 
 hdr() { echo; echo "=== $1 ==="; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Надёжное извлечение поля из JSON: jq → python3 → sed (последний шанс).
+# $1=json  $2=jq-выражение  $3=python-выражение  $4=sed-выражение (опц.)
+json_get() {
+  local j="$1" v=""
+  if have jq; then v=$(printf '%s' "$j" | jq -r "$2 // empty" 2>/dev/null); fi
+  if [ -z "$v" ] && have python3; then
+    v=$(printf '%s' "$j" | python3 -c "import sys,json
+try:
+    d=json.load(sys.stdin); x=$3; print('' if x is None else x)
+except Exception:
+    pass" 2>/dev/null)
+  fi
+  if [ -z "$v" ] && [ -n "${4:-}" ]; then v=$(printf '%s' "$j" | sed -n "$4" 2>/dev/null | head -1); fi
+  printf '%s' "$v"
+}
 
 # --- Токен авторизации: из окружения или из .env.prod рядом со скриптом ----
 TOKEN="${BACKEND_API_TOKEN:-}"
@@ -148,9 +165,15 @@ UP_ARGS=(-X POST "$BASE/upload" -H "Authorization: Bearer $TOKEN"
          -F "files[]=@$UPLOAD_FILE")
 [ -n "$RESPONSIBLE_ID" ] && UP_ARGS+=(-F "responsibleUserId=$RESPONSIBLE_ID")
 RESP=$("${CURL[@]}" "${UP_ARGS[@]}" 2>/dev/null)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "✗ curl при загрузке вернул ошибку (код $rc) — сервер недоступен / таймаут / ошибка TLS."
+  echo "  Проверьте DOMAIN/RESOLVE_IP/INSECURE и что контейнеры подняты."
+  exit 1
+fi
 echo "Ответ: $RESP"
 
-JOB_ID=$(printf '%s' "$RESP" | sed -n 's/.*"jobId":"\([^"]*\)".*/\1/p')
+JOB_ID=$(json_get "$RESP" '.jobId' "d.get('jobId')" 's/.*"jobId":"\([^"]*\)".*/\1/p')
 if [ -z "$JOB_ID" ]; then
   echo "✗ Не удалось получить jobId — загрузка не прошла. Проверьте токен/домен/контейнеры."
   exit 1
@@ -163,8 +186,9 @@ START=$(date +%s)
 STATUS_JSON=""
 JOB_STATUS=""
 while :; do
-  STATUS_JSON=$("${CURL[@]}" -H "Authorization: Bearer $TOKEN" "$BASE/job/$JOB_ID/status" 2>/dev/null)
-  JOB_STATUS=$(printf '%s' "$STATUS_JSON" | sed -n 's/.*"status":"\([a-z]*\)".*/\1/p' | head -1)
+  # Ошибку опроса не считаем фатальной — сеть может моргнуть, продолжаем опрос.
+  STATUS_JSON=$("${CURL[@]}" -H "Authorization: Bearer $TOKEN" "$BASE/job/$JOB_ID/status" 2>/dev/null) || true
+  JOB_STATUS=$(json_get "$STATUS_JSON" '.status' "d.get('status')" 's/.*"status":"\([a-z]*\)".*/\1/p')
   elapsed=$(( $(date +%s) - START ))
   printf '\r  [%3ss] статус job: %-12s' "$elapsed" "${JOB_STATUS:-?}"
   case "$JOB_STATUS" in
@@ -184,9 +208,9 @@ else
   printf '%s\n' "$STATUS_JSON"
 fi
 
-# Достаём статус и текст ошибки первого файла.
-FILE_STATUS=$(printf '%s' "$STATUS_JSON" | sed -n 's/.*"files":\[{[^}]*"status":"\([a-z]*\)".*/\1/p' | head -1)
-FILE_ERROR=$(printf '%s' "$STATUS_JSON" | sed -n 's/.*"error":"\(.*\)"}.*/\1/p' | head -1)
+# Достаём статус и текст ошибки первого файла (jq/python — корректно для любых символов).
+FILE_STATUS=$(json_get "$STATUS_JSON" '.files[0].status' "d['files'][0].get('status')")
+FILE_ERROR=$(json_get "$STATUS_JSON" '.files[0].error' "d['files'][0].get('error')")
 
 # --- 3. Логи агента из контейнера -----------------------------------------
 hdr "3. Логи агента (контейнер $APP_CONTAINER)"
