@@ -357,6 +357,27 @@ describe('Concurrency cap & store errors', () => {
   });
 });
 
+// ── File type validation (regression) ────────────────────────────────────────
+
+describe('File type validation (regression)', () => {
+  it('rejects legacy .xls files (not in allowed extensions)', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', Buffer.from('legacy excel'), { filename: 'prices.xls' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/\.xls/);
+  });
+
+  it('rejects a ZIP payload disguised as .pdf (MIME ≠ extension)', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeMinimalZipBuffer(), { filename: 'evil.pdf' });
+    expect(res.status).toBe(400);
+  });
+});
+
 // ── POST /upload ─────────────────────────────────────────────────────────────
 
 describe('POST /upload', () => {

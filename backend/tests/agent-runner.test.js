@@ -158,6 +158,32 @@ describe('runAgent', () => {
     expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
+  it('escalates to SIGKILL when SIGTERM is ignored after timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.stdin = { end: vi.fn() };
+      proc.kill = vi.fn((signal) => {
+        // Simulate a process that ignores SIGTERM; only SIGKILL ends it.
+        if (signal === 'SIGKILL') proc.emit('close', null);
+      });
+      const spawnFn = vi.fn(() => proc);
+
+      const p = runAgent('/f.pdf', null, { timeoutMs: 50, spawnFn });
+      const assertion = expect(p).rejects.toThrow('timed out');
+      await vi.advanceTimersByTimeAsync(50);    // timeout fires → SIGTERM (ignored)
+      await vi.advanceTimersByTimeAsync(5000);  // grace elapses → SIGKILL → close
+      await assertion;
+
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(proc.kill).toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('throws when process exits with non-zero code', async () => {
     const spawnFn = makeMockSpawn({ exitCode: 1, stderr: 'claude: command failed' });
     await expect(
