@@ -109,7 +109,16 @@ describe('runAgent', () => {
     expect(opts.stdio).toEqual(['pipe', 'pipe', 'pipe']);
     // Never spawn through a shell — this is what keeps cmd.exe/sh metacharacters
     // in the file path / prompt from being interpreted (CVE-2024-27980 class).
-    expect(opts.shell).toBeFalsy();
+    expect(opts.shell).toBeUndefined();
+  });
+
+  it('throws when claudeBin contains path traversal (..)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await expect(
+      runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn, claudeBin: '../../bin/sh' }),
+    ).rejects.toThrow(/path traversal/);
+    // Guard must short-circuit before ever spawning anything.
+    expect(spawnFn).not.toHaveBeenCalled();
   });
 
   it('closes stdin immediately after spawn', async () => {
@@ -151,7 +160,9 @@ describe('runAgent', () => {
   });
 
   it('escalates to SIGKILL when SIGTERM is ignored', async () => {
-    vi.useFakeTimers();
+    // Fake only the timer fns — leave Date/microtasks real so durationMs and
+    // queueMicrotask in the mock behave normally.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const proc = new EventEmitter();
       proc.stdout = new EventEmitter();

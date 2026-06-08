@@ -181,10 +181,14 @@ export function resolveClaudeSpawn(claudeBin) {
     if (jsEntry && existsSync(jsEntry)) {
       return { command: process.execPath, prefixArgs: [jsEntry] };
     }
-    // Found the .cmd shim but couldn't resolve its JS target — fail loudly instead
-    // of silently passing a .cmd to spawn (which throws an opaque error on Node ≥18.20).
+    // Found the .cmd shim but couldn't resolve a usable JS target — fail loudly
+    // (distinguishing "unparseable" from "parsed but missing" aids Windows debugging)
+    // instead of silently passing a .cmd to spawn (opaque error on Node ≥18.20).
+    const reason = jsEntry
+      ? `resolved to "${jsEntry}" but that file does not exist`
+      : 'could not be parsed from the shim';
     throw new Error(
-      `Found Claude .cmd shim at "${cmdPath}" but could not resolve its JS entrypoint. `
+      `Found Claude .cmd shim at "${cmdPath}" but its JS entrypoint ${reason}. `
       + 'Set CLAUDE_CODE_BIN to the cli.js path directly.',
     );
   }
@@ -217,7 +221,9 @@ function findWindowsCmdShim(claudeBin) {
 function extractCmdShimTarget(cmdPath) {
   let contents;
   try { contents = readFileSync(cmdPath, 'utf8'); } catch { return null; }
-  const match = contents.match(/%[~]?dp0%?[\\/]?([^"'\s]+\.(?:c|m)?js)/i);
+  // Capture only a relative entrypoint (no leading separator) so a tampered shim
+  // can't point the resolver at an absolute path elsewhere on disk.
+  const match = contents.match(/%[~]?dp0%?[\\/]?([^/\\"'\s][^"'\s]*\.(?:c|m)?js)/i);
   if (!match) return null;
   return join(dirname(cmdPath), match[1]);
 }

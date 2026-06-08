@@ -140,11 +140,18 @@ powershell -ExecutionPolicy Bypass -File .\smoke-test.ps1
 ```bash
 docker volume ls | grep -E 'nginx-certs|acme-data'   # ожидаем procure-ai_*
 ```
-> ⚠️ `docker compose -p procure-ai down -v` удалит и эти тома → потеря сертификата
-> (будет перевыпущен при следующем `init-nginxproxy`). Без `-v` тома сохраняются.
+> ⚠️ Эти тома объявлены в стеке прокси (`procure-proxy`), поэтому опасны именно
+> `docker compose -p procure-proxy down -v` или `docker volume rm procure-ai_nginx-certs
+> procure-ai_acme-data` — они удалят сертификат (будет перевыпущен при следующем
+> `init-nginxproxy`). Обычные `down`/`down -v` стека приложения (`procure-ai`) их **не трогают**.
 
 ### Разовая миграция уже работающего сервера на изоляцию проектов
 Если прокси сейчас поднят под старым (общим) проектом, перевести его на `procure-proxy`:
+
+> ⚠️ **Кратковременный downtime.** Между `docker rm -f` и стартом нового прокси порты
+> 80/443 не отвечают (обычно &lt;1 мин). Выполняйте в нерабочее время. Порядок важен:
+> если запустить `init-nginxproxy` до `rm -f`, будет ошибка `container name already in use`.
+
 ```bash
 cd ~/procure-ai
 docker rm -f nginx-proxy acme-companion   # снести старые контейнеры (тома с cert остаются)
@@ -152,6 +159,7 @@ make init-nginxproxy                       # поднять заново уже 
 make prod-redeploy                         # теперь безопасно
 bash smoke-test.sh
 ```
+> Если `init-nginxproxy` упал с `name already in use` — `docker rm -f` прошёл не до конца, повторите его.
 
 ---
 

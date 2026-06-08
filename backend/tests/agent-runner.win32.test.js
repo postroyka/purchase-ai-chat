@@ -56,7 +56,7 @@ describe('resolveClaudeSpawn (win32 branch)', () => {
     const SHIM = '/opt/claude/claude.cmd';
     h.existsSync.mockImplementation((p) => p === SHIM); // shim exists, JS target does not match
     h.readFileSync.mockReturnValue('@echo off\r\nrem unrecognised shim format\r\n');
-    expect(() => resolveClaudeSpawn('/opt/claude/claude')).toThrow(/could not resolve its JS entrypoint/);
+    expect(() => resolveClaudeSpawn('/opt/claude/claude')).toThrow(/JS entrypoint could not be parsed/);
   });
 
   it('still runs an explicit .js entrypoint via node regardless of platform', () => {

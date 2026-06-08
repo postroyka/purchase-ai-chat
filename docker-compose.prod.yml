@@ -105,6 +105,7 @@ services:
     # --scope limits this instance to containers labelled watchtower.scope=procure-ai
     # (app, mcp) — hard isolation from any other stack/watchtower on the host.
     command: --interval 300 --cleanup --label-enable --scope procure-ai --stop-timeout 30s
+    # scope only — no watchtower.enable label: Watchtower must NOT self-update (pinned image).
     labels:
       - "com.centurylinklabs.watchtower.scope=procure-ai"
     environment:
@@ -132,6 +133,9 @@ networks:
   proxy-net:
     external: true
 
+# Only app-owned volumes here. TLS cert volumes (nginx-certs/acme-data) belong to
+# the proxy stack (docker-compose.nginxproxy.yml, project procure-proxy) — a
+# `down -v` here does NOT touch them.
 volumes:
   uploads:
   redis-data:
