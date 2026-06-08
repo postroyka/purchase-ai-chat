@@ -59,6 +59,7 @@ function cleanupTmpFiles(files) {
  *   uploadDir?: string,
  *   maxFileSizeMb?: number,
  *   maxFilesPerRequest?: number,
+ *   maxConcurrentJobs?: number,
  *   allowedExtensions?: string,
  *   redisUrl?: string,
  *   ttlHours?: number,
@@ -80,6 +81,8 @@ export function createApp(config = {}) {
     ?? parseInt(process.env.MAX_FILE_SIZE_MB ?? '20', 10);
   const maxFilesPerRequest = config.maxFilesPerRequest
     ?? parseInt(process.env.MAX_FILES_PER_REQUEST ?? '10', 10);
+  const maxConcurrentJobs = config.maxConcurrentJobs
+    ?? parseInt(process.env.MAX_CONCURRENT_JOBS ?? '4', 10);
   const allowedExtensions = (
     config.allowedExtensions
     ?? (process.env.ALLOWED_EXTENSIONS ?? 'pdf,xlsx,docx')
@@ -189,6 +192,11 @@ export function createApp(config = {}) {
 
   // POST /upload
   app.post('/upload', requireAuth, (req, res) => {
+    // Concurrency cap: each accepted job spawns a claude subprocess, so bound how many
+    // run at once to prevent resource exhaustion (DoS) from many parallel uploads.
+    if (activeJobs >= maxConcurrentJobs) {
+      return res.status(429).json({ error: 'Server busy — too many jobs in progress. Please retry shortly.' });
+    }
     upload.array('files[]')(req, res, async (err) => {
       if (err) {
         if (err.code === 'LIMIT_FILE_SIZE') {
@@ -263,23 +271,19 @@ export function createApp(config = {}) {
       let fileEntries;
       try {
         fileEntries = req.files.map((f) => {
-          const safeFilename = path.basename(f.originalname);
-          const resolvedJobDir = path.resolve(jobDir);
-          const destPath = path.join(resolvedJobDir, safeFilename);
-          if (!destPath.startsWith(resolvedJobDir + path.sep)) {
-            throw Object.assign(new Error(`Unsafe filename rejected: ${f.originalname}`), {
-              code: 'UNSAFE_FILENAME',
-            });
-          }
+          // Store under a generated UUID name (keeping only the already-validated
+          // extension) so an attacker-controlled original filename never reaches the
+          // on-disk path or the agent's FILE_PATH. Path traversal is impossible by
+          // construction. The display name keeps the original basename for the UI.
+          const displayName = path.basename(f.originalname);
+          const ext = path.extname(displayName).toLowerCase();
+          const destPath = path.join(jobDir, `${uuidv4()}${ext}`);
           fs.renameSync(f.path, destPath);
-          return { name: safeFilename, path: destPath, status: 'pending', result: null, error: null };
+          return { name: displayName, path: destPath, status: 'pending', result: null, error: null };
         });
       } catch (err) {
         fs.rmSync(jobDir, { recursive: true, force: true });
         cleanupTmpFiles(req.files);
-        if (err.code === 'UNSAFE_FILENAME') {
-          return res.status(400).json({ error: err.message });
-        }
         return res.status(500).json({ error: 'Failed to store uploaded files' });
       }
 
@@ -293,7 +297,13 @@ export function createApp(config = {}) {
         dir: jobDir,
         createdAt: Date.now(),
       };
-      await jobs.set(jobId, job);
+      try {
+        await jobs.set(jobId, job);
+      } catch (e) {
+        console.error(`[upload] failed to persist job ${jobId}:`, e.message);
+        fs.rmSync(jobDir, { recursive: true, force: true });
+        return res.status(503).json({ error: 'Job store unavailable — please retry' });
+      }
 
       activeJobs++;
       processJob(jobId, jobs, agentConfig).catch((e) =>
@@ -309,7 +319,13 @@ export function createApp(config = {}) {
 
   // GET /job/:id/status
   app.get('/job/:id/status', requireAuth, async (req, res) => {
-    const job = await jobs.get(req.params.id);
+    let job;
+    try {
+      job = await jobs.get(req.params.id);
+    } catch (e) {
+      console.error(`[job status] store error for ${req.params.id}:`, e.message);
+      return res.status(503).json({ error: 'Job store unavailable — please retry' });
+    }
     if (!job) return res.status(404).json({ error: 'Job not found' });
     return res.json({
       jobId: job.jobId,

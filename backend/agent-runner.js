@@ -359,27 +359,33 @@ export function extractJson(text) {
     try { return JSON.parse(fenceMatch[1]); } catch {}
   }
 
-  // 3. Find the rightmost } or ] and walk backwards to its matching opener.
-  //    Depth counters for { } and [ ] are independent so mixed nesting is handled
-  //    correctly (e.g. {"a":[1,2]} — closing ] must not count toward { depth).
-  for (let i = text.length - 1; i >= 0; i--) {
-    const ch = text[i];
-    if (ch !== '}' && ch !== ']') continue;
-    const isObj = ch === '}';
-    let objDepth = 0;
-    let arrDepth = 0;
-    for (let j = i; j >= 0; j--) {
-      if (text[j] === '}') objDepth++;
-      else if (text[j] === '{') objDepth--;
-      else if (text[j] === ']') arrDepth++;
-      else if (text[j] === '[') arrDepth--;
-      // We've reached the opener when the targeted counter hits zero.
-      if ((isObj && objDepth === 0) || (!isObj && arrDepth === 0)) {
-        try { return JSON.parse(text.slice(j, i + 1)); } catch {}
+  // 3. Scan forward for balanced {…} / […] blocks, skipping any braces/brackets that
+  //    appear inside JSON string literals (with backslash-escape handling). Returns the
+  //    LAST block that parses — matches the agent's habit of emitting prose then JSON.
+  let result = null;
+  for (let i = 0; i < text.length; i++) {
+    const open = text[i];
+    if (open !== '{' && open !== '[') continue;
+    const close = open === '{' ? '}' : ']';
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === open) depth++;
+      else if (ch === close && --depth === 0) {
+        // Keep the last parseable block; advance i past it to continue scanning.
+        try { result = JSON.parse(text.slice(i, j + 1)); i = j; } catch { /* not JSON — keep scanning */ }
         break;
       }
     }
   }
-
-  return null;
+  return result;
 }

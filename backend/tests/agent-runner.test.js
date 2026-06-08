@@ -318,6 +318,16 @@ describe('extractJson', () => {
     expect(extractJson(text)).toEqual([1, 2, 3]);
   });
 
+  it('ignores unbalanced braces inside string values (string-aware scan)', () => {
+    const text = 'Result: {"msg":"unbalanced } brace","ok":true} done.';
+    expect(extractJson(text)).toEqual({ msg: 'unbalanced } brace', ok: true });
+  });
+
+  it('ignores brackets and escaped quotes inside string values', () => {
+    const text = 'note {"label":"[draft] \\"q\\"","n":2} end';
+    expect(extractJson(text)).toEqual({ label: '[draft] "q"', n: 2 });
+  });
+
   it('returns null for plain text with no JSON', () => {
     expect(extractJson('No JSON here, just text.')).toBeNull();
   });

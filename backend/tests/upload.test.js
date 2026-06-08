@@ -310,6 +310,53 @@ describe('Basic auth (public page)', () => {
   });
 });
 
+// ── Concurrency cap & store errors ───────────────────────────────────────────
+
+describe('Concurrency cap & store errors', () => {
+  it('returns 429 when the concurrency cap is reached', async () => {
+    const busy = createApp({ token: TOKEN, uploadDir: UPLOAD_DIR, maxConcurrentJobs: 0 });
+    const res = await request(busy).post('/upload').set('Authorization', auth());
+    expect(res.status).toBe(429);
+  });
+
+  it('returns 503 on /job/:id/status when the store throws', async () => {
+    const brokenJobs = {
+      get: async () => { throw new Error('ECONNREFUSED'); },
+      set: async () => {},
+      ping: async () => 'PONG',
+    };
+    const a = createApp({ token: TOKEN, uploadDir: UPLOAD_DIR, jobs: brokenJobs });
+    const res = await request(a).get('/job/x/status').set('Authorization', auth());
+    expect(res.status).toBe(503);
+  });
+
+  it('returns 503 on /upload when persisting the job fails', async () => {
+    const brokenJobs = {
+      get: async () => null,
+      set: async () => { throw new Error('ECONNREFUSED'); },
+      ping: async () => 'PONG',
+    };
+    const a = createApp({
+      token: TOKEN, uploadDir: UPLOAD_DIR, jobs: brokenJobs,
+      agentConfig: { spawnFn: makeMockAgentSpawn() },
+    });
+    const res = await request(a)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeValidPdfBuffer(), { filename: 'invoice.pdf' });
+    expect(res.status).toBe(503);
+  });
+
+  it('stores files under a generated name, exposing only the basename to the UI', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeValidPdfBuffer(), { filename: '../../evil name.pdf' });
+    expect(res.status).toBe(201);
+    expect(res.body.files[0].name).toBe('evil name.pdf'); // basename only, no traversal
+  });
+});
+
 // ── POST /upload ─────────────────────────────────────────────────────────────
 
 describe('POST /upload', () => {
