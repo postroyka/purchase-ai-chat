@@ -43,9 +43,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    # Watched by Watchtower (грабли #7).
+    # Watched by Watchtower (грабли #7). scope pins this to OUR watchtower only,
+    # so a watchtower from another stack on the same host can't update us.
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=procure-ai"
     networks:
       - procure-net
       - proxy-net
@@ -67,6 +69,7 @@ services:
           memory: 512M
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=procure-ai"
     networks:
       - procure-net
     restart: unless-stopped
@@ -99,7 +102,11 @@ services:
     # Pinned, not :latest — it mounts docker.sock (грабли #6, supply-chain).
     image: containrrr/watchtower:1.7.1
     container_name: procure-watchtower
-    command: --interval 300 --cleanup --label-enable --stop-timeout 30s
+    # --scope limits this instance to containers labelled watchtower.scope=procure-ai
+    # (app, mcp) — hard isolation from any other stack/watchtower on the host.
+    command: --interval 300 --cleanup --label-enable --scope procure-ai --stop-timeout 30s
+    labels:
+      - "com.centurylinklabs.watchtower.scope=procure-ai"
     environment:
       # daemon 24+ needs API >=1.44; default 1.25 silently fails (грабли #5).
       DOCKER_API_VERSION: "1.47"

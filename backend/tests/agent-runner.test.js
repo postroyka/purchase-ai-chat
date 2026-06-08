@@ -107,6 +107,9 @@ describe('runAgent', () => {
     await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
     const [_bin, _args, opts] = spawnFn.mock.calls[0];
     expect(opts.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+    // Never spawn through a shell — this is what keeps cmd.exe/sh metacharacters
+    // in the file path / prompt from being interpreted (CVE-2024-27980 class).
+    expect(opts.shell).toBeFalsy();
   });
 
   it('closes stdin immediately after spawn', async () => {
@@ -145,6 +148,32 @@ describe('runAgent', () => {
     ).rejects.toThrow('timed out');
 
     expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('escalates to SIGKILL when SIGTERM is ignored', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.stdin = { end: vi.fn() };
+      // Ignore SIGTERM; only exit once force-killed.
+      proc.kill = vi.fn((signal) => {
+        if (signal === 'SIGKILL') queueMicrotask(() => proc.emit('close', null));
+      });
+      const spawnFn = vi.fn(() => proc);
+
+      const p = runAgent('/f.pdf', null, { ...BASE_CONFIG, timeoutMs: 50, spawnFn });
+      const assertion = expect(p).rejects.toThrow('timed out');
+      await vi.advanceTimersByTimeAsync(50);   // fires the timeout → SIGTERM
+      await vi.advanceTimersByTimeAsync(5000); // grace elapses → SIGKILL
+      await assertion;
+
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(proc.kill).toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('throws when process exits with non-zero code', async () => {

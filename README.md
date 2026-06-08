@@ -173,6 +173,11 @@ cd mcp     && pnpm install && pnpm dev   # :3000 (internal)
 cd ui      && pnpm install && pnpm dev   # :3001 (proxy /upload /job → backend :3000)
 ```
 
+> Backend-агент запускает Claude Code CLI на **Linux, macOS и Windows**: на Windows
+> `claude` — это `.cmd`-шим, поэтому агент находит его JS-точку входа и запускает через
+> `node` (без shell — нет инъекции, нет лимита длины cmd.exe). Путь к бинарю можно
+> переопределить `CLAUDE_CODE_BIN`; на Windows прописывать `.cmd` вручную не нужно.
+
 ## Тесты
 
 ```bash
@@ -203,9 +208,13 @@ cp .env.prod.example .env.prod && nano .env.prod   # заполнить секр
 echo "$GHCR_PAT" | docker login ghcr.io -u <github-user> --password-stdin
 
 make init-network          # создать сеть proxy-net
-make init-nginxproxy       # ТОЛЬКО если nginx-proxy ещё не запущен на сервере
-make prod-up               # запустить app + mcp + redis + watchtower
+make init-nginxproxy       # ТОЛЬКО если nginx-proxy ещё не запущен (стек procure-proxy)
+make prod-up               # запустить app + mcp + redis + watchtower (стек procure-ai)
 ```
+
+> Приложение и прокси — **два изолированных compose-проекта** (`procure-ai` и
+> `procure-proxy`), поэтому `--remove-orphans` в `prod-redeploy` не трогает
+> nginx-proxy. Подробнее (и разовая миграция) — в `docs/SERVER_SETUP.md` §5.
 
 Обновление файлов на сервере — тем же `curl -fsSLO`, без `git pull`.
 Принудительный редеплой без ожидания Watchtower — `make prod-redeploy`.
@@ -218,4 +227,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-08 (PR #39 — fix stdin hang on claude CLI 2.x, filePath prompt-injection guard, output buffer cap, test coverage +3)*
+*Last reviewed: 2026-06-08 (PR #46 — compose project isolation procure-ai/procure-proxy + Watchtower scope; agent-runner Windows hardening & win32 tests)*

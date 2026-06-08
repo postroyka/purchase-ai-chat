@@ -7,6 +7,8 @@
 name: procure-proxy
 
 services:
+  # nginx-proxy and acme-companion are intentionally NOT watched by Watchtower
+  # (no watchtower.enable/scope labels): pinned infra images, updated manually.
   nginx-proxy:
     image: nginxproxy/nginx-proxy:1.6
     container_name: nginx-proxy
