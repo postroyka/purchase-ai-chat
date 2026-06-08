@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { timingSafeEqual } from 'node:crypto';
 import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
+import { runAgent } from './agent-runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,6 +57,8 @@ function cleanupTmpFiles(files) {
  *   redisUrl?: string,
  *   ttlHours?: number,
  *   responsibleUserId?: string,
+ *   agentConfig?: import('./agent-runner.js').AgentConfig,
+ *   jobs?: object,
  * }} [config]
  * @returns {import('express').Express}
  */
@@ -94,6 +97,7 @@ export function createApp(config = {}) {
   });
 
   const jobs = config.jobs ?? createJobsStore({ redisUrl, ttlHours });
+  const agentConfig = config.agentConfig ?? {};
 
   // Track in-flight processJob calls so graceful shutdown can wait for them.
   let activeJobs = 0;
@@ -239,7 +243,7 @@ export function createApp(config = {}) {
       await jobs.set(jobId, job);
 
       activeJobs++;
-      processJob(jobId, jobs).catch((e) =>
+      processJob(jobId, jobs, agentConfig).catch((e) =>
         console.error(`[processJob] unhandled error for job ${jobId}:`, e),
       ).finally(() => { activeJobs--; });
 
@@ -283,7 +287,7 @@ export function createApp(config = {}) {
 // status transitions (pending → processing → done/error) to the jobs store.
 // NOTE: assumes single-process deployment — no distributed locking. Multi-instance
 // deployments would need a queue (e.g. BullMQ) to prevent duplicate processing.
-async function processJob(jobId, jobs) {
+async function processJob(jobId, jobs, agentConfig = {}) {
   const job = await jobs.get(jobId);
   if (!job) return;
 
@@ -294,7 +298,7 @@ async function processJob(jobId, jobs) {
     fileEntry.status = 'processing';
     await jobs.set(jobId, job);
     try {
-      fileEntry.result = await runAgent(fileEntry.path, job.responsibleUserId);
+      fileEntry.result = await runAgent(fileEntry.path, job.responsibleUserId, agentConfig);
       fileEntry.status = 'done';
     } catch (err) {
       console.error(`[processJob] error processing file ${fileEntry.name}:`, err);
@@ -315,11 +319,6 @@ async function processJob(jobId, jobs) {
       console.warn(`[processJob] could not clean up job dir ${job.dir}:`, e.message);
     }
   }
-}
-
-// TODO Week 2: replace with child_process.spawn('claude', ['--mcp-config', ...])
-async function runAgent(_filePath, _responsibleUserId) {
-  return { status: 'stub', message: 'agent not implemented yet' };
 }
 
 // Entry point — only runs when executed directly, not when imported by tests.

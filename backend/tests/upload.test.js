@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import request from 'supertest';
 import path from 'path';
 import fs from 'fs';
@@ -12,10 +13,35 @@ const TOKEN = 'test-upload-token-abc123';
 const UPLOAD_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'procure-upload-test-'));
 const FIXTURES = path.join(__dirname, 'fixtures');
 
-// Suppress expected in-memory store warnings — not a test concern
+// Suppress expected in-memory store warnings/logs — not a test concern
 vi.spyOn(console, 'warn').mockImplementation(() => {});
+vi.spyOn(console, 'log').mockImplementation(() => {});
 
-const app = createApp({ token: TOKEN, uploadDir: UPLOAD_DIR });
+// Mock spawnFn: simulates `claude --output-format json` returning a valid stub result.
+// Prevents tests from requiring the real `claude` binary to be installed.
+function makeMockAgentSpawn() {
+  return vi.fn(() => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = { end: vi.fn() };
+    proc.kill = vi.fn();
+    setImmediate(() => {
+      proc.stdout.emit('data', JSON.stringify({
+        is_error: false,
+        result: JSON.stringify({ status: 'stub', message: 'mock agent response' }),
+      }));
+      proc.emit('close', 0);
+    });
+    return proc;
+  });
+}
+
+const app = createApp({
+  token: TOKEN,
+  uploadDir: UPLOAD_DIR,
+  agentConfig: { spawnFn: makeMockAgentSpawn() },
+});
 const auth = () => `Bearer ${TOKEN}`;
 
 function makeValidPdfBuffer() {

@@ -59,7 +59,9 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `MAX_FILE_SIZE_MB` | app | — | Макс. размер файла (по умолчанию: 20) |
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
 | `ALLOWED_EXTENSIONS` | app | — | Разрешённые расширения (по умолчанию: `pdf,xlsx,docx`) |
-| `CLAUDE_CODE_BIN` | app | — | Бинарь Claude Code (по умолчанию: `claude`) |
+| `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
+| `AGENT_TIMEOUT_MS` | app | — | Таймаут запуска агента в мс (по умолчанию: 300000 = 5 мин) |
+| `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
 | `NODE_ENV` / `PORT` / `UPLOAD_DIR` | app | — | Стандартные настройки рантайма |
 
 ¹ Обязательны при деплое за общим nginx-proxy (прод). Для локального запуска не нужны.
@@ -213,4 +215,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-05 (PR #34 — GitHub Actions Node 24 migration, Dockerfile.mcp overlay fix, docker-validate CI job, dependabot unblock)*
+*Last reviewed: 2026-06-08 (PR #39 — fix stdin hang on claude CLI 2.x, filePath prompt-injection guard, output buffer cap, test coverage +3)*
