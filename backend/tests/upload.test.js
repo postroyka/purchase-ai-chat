@@ -24,6 +24,7 @@ function makeMockAgentSpawn() {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
+    proc.stdin = { end: vi.fn() };
     proc.kill = vi.fn();
     setImmediate(() => {
       proc.stdout.emit('data', JSON.stringify({

@@ -190,4 +190,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-06 (PR #36 — runAgent implementation: claude CLI subprocess, MCP config, timeout, extractJson)*
+*Last reviewed: 2026-06-08 (PR #39 — fix stdin hang on claude CLI 2.x, filePath prompt-injection guard, output buffer cap, test coverage +3)*

@@ -7,6 +7,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SYSTEM_PROMPT_PATH = join(__dirname, '..', 'prompts', 'main.md');
 
+// Cached system prompt — file is immutable at runtime, no need to re-read on every call.
+let _systemPrompt;
+function getSystemPrompt() {
+  return (_systemPrompt ??= readFileSync(SYSTEM_PROMPT_PATH, 'utf8'));
+}
+
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 // Grace period between SIGTERM and SIGKILL on timeout — gives claude a chance
 // to flush output and exit cleanly before we force-kill.
@@ -56,7 +62,14 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const jobId = config.jobId ?? null;
   const spawnFn = config.spawnFn ?? spawn;
 
-  const systemPrompt = readFileSync(SYSTEM_PROMPT_PATH, 'utf8');
+  const systemPrompt = getSystemPrompt();
+
+  // Validate filePath to prevent prompt injection via crafted file names.
+  // Path must not contain newlines, null bytes, or other control characters.
+  if (/[\x00-\x1f]/.test(filePath)) {
+    throw new Error(`Invalid filePath — contains control characters: ${JSON.stringify(filePath)}`);
+  }
+
   const userMessage = [
     `FILE_PATH: ${filePath}`,
     `RESPONSIBLE_USER_ID: ${responsibleUserId ?? ''}`,
@@ -141,18 +154,25 @@ function spawnClaude({
       '--output-format', 'json', // structured JSON wrapper around the result
       '--system-prompt', systemPrompt,
       '--mcp-config', mcpConfigPath,
-      '--dangerously-skip-permissions', // needed to read uploaded files without prompts
+      // Required so the agent can read uploaded files without interactive prompts.
+      // Mitigated by: container runs as non-root, uploads are in a dedicated directory,
+      // and filePath is validated above to prevent prompt injection.
+      '--dangerously-skip-permissions',
     ];
     if (model) args.push('--model', model);
     args.push(userMessage);
 
     const t0 = Date.now();
-    const proc = spawnFn(claudeBin, args, { env: buildAgentEnv() });
+    const proc = spawnFn(claudeBin, args, { env: buildAgentEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    // claude CLI 2.x waits ~3s for stdin when not attached to a TTY, then exits with code 1.
+    // Closing stdin immediately signals EOF so the CLI proceeds without waiting.
+    proc.stdin.end();
 
     let stdout = '';
     let stderr = '';
     let timedOut = false;
     let sigkillHandle = null;
+    const MAX_OUTPUT_BYTES = 10 * 1024 * 1024; // 10 MB guard against runaway output
 
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
@@ -161,8 +181,12 @@ function spawnClaude({
       sigkillHandle = setTimeout(() => proc.kill('SIGKILL'), SIGKILL_GRACE_MS);
     }, timeoutMs);
 
-    proc.stdout?.on('data', (chunk) => { stdout += chunk; });
-    proc.stderr?.on('data', (chunk) => { stderr += chunk; });
+    proc.stdout?.on('data', (chunk) => {
+      if (stdout.length < MAX_OUTPUT_BYTES) stdout += chunk;
+    });
+    proc.stderr?.on('data', (chunk) => {
+      if (stderr.length < MAX_OUTPUT_BYTES) stderr += chunk;
+    });
 
     proc.on('error', (err) => {
       clearTimeout(timeoutHandle);
