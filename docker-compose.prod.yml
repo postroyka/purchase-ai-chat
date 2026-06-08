@@ -1,6 +1,14 @@
 # Production stack. Images are pulled from GHCR and auto-updated by Watchtower.
 # The public-facing `app` joins the external nginx-proxy network (proxy-net);
 # `mcp` and `redis` stay on the internal `procure-net` only.
+#
+# Explicit project name isolates this stack from the nginx-proxy stack
+# (docker-compose.nginxproxy.yml, project `procure-proxy`). Without it both files
+# share the directory-derived project name, and `up --remove-orphans` here would
+# delete nginx-proxy/acme-companion. This value matches the previous directory
+# default so existing containers and volumes are reused (no migration).
+name: procure-ai
+
 services:
   app:
     image: ghcr.io/postroyka/procure-ai-app:latest
@@ -35,9 +43,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    # Watched by Watchtower (грабли #7).
+    # Watched by Watchtower (грабли #7). scope pins this to OUR watchtower only,
+    # so a watchtower from another stack on the same host can't update us.
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=procure-ai"
     networks:
       - procure-net
       - proxy-net
@@ -59,6 +69,7 @@ services:
           memory: 512M
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=procure-ai"
     networks:
       - procure-net
     restart: unless-stopped
@@ -91,7 +102,12 @@ services:
     # Pinned, not :latest — it mounts docker.sock (грабли #6, supply-chain).
     image: containrrr/watchtower:1.7.1
     container_name: procure-watchtower
-    command: --interval 300 --cleanup --label-enable --stop-timeout 30s
+    # --scope limits this instance to containers labelled watchtower.scope=procure-ai
+    # (app, mcp) — hard isolation from any other stack/watchtower on the host.
+    command: --interval 300 --cleanup --label-enable --scope procure-ai --stop-timeout 30s
+    # scope only — no watchtower.enable label: Watchtower must NOT self-update (pinned image).
+    labels:
+      - "com.centurylinklabs.watchtower.scope=procure-ai"
     environment:
       # daemon 24+ needs API >=1.44; default 1.25 silently fails (грабли #5).
       DOCKER_API_VERSION: "1.47"
@@ -117,6 +133,9 @@ networks:
   proxy-net:
     external: true
 
+# Only app-owned volumes here. TLS cert volumes (nginx-certs/acme-data) belong to
+# the proxy stack (docker-compose.nginxproxy.yml, project procure-proxy) — a
+# `down -v` here does NOT touch them.
 volumes:
   uploads:
   redis-data:

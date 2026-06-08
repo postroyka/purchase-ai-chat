@@ -120,7 +120,50 @@ powershell -ExecutionPolicy Bypass -File .\smoke-test.ps1
 
 ---
 
-## 5. Что дальше
+## 5. Два compose-стека и изоляция проектов (важно!)
+
+Приложение и реверс-прокси — это **два отдельных compose-стека** с **разными именами проектов**:
+
+| Стек | Файл | Проект | Команда |
+|---|---|---|---|
+| Приложение (app, mcp, redis, watchtower) | `docker-compose.prod.yml` | `procure-ai` | `make prod-up` / `prod-redeploy` |
+| Реверс-прокси (nginx-proxy, acme-companion) | `docker-compose.nginxproxy.yml` | `procure-proxy` | `make init-nginxproxy` |
+
+> 🩹 **Грабля (исправлена).** Раньше у обоих файлов не было поля `name:`, и Docker
+> присваивал им **одно** имя проекта (по имени каталога). Из-за этого
+> `make prod-redeploy` (внутри — `up --remove-orphans`) удалял `nginx-proxy` и
+> `acme-companion` как «orphans» — на проде падал весь HTTPS. Теперь имена разные
+> (`procure-ai` / `procure-proxy`), и `--remove-orphans` затрагивает только свой стек.
+
+**TLS-сертификат хранится в томах `procure-ai_nginx-certs` и `procure-ai_acme-data`.**
+Проверить и не удалить по ошибке:
+```bash
+docker volume ls | grep -E 'nginx-certs|acme-data'   # ожидаем procure-ai_*
+```
+> ⚠️ Эти тома объявлены в стеке прокси (`procure-proxy`), поэтому опасны именно
+> `docker compose -p procure-proxy down -v` или `docker volume rm procure-ai_nginx-certs
+> procure-ai_acme-data` — они удалят сертификат (будет перевыпущен при следующем
+> `init-nginxproxy`). Обычные `down`/`down -v` стека приложения (`procure-ai`) их **не трогают**.
+
+### Разовая миграция уже работающего сервера на изоляцию проектов
+Если прокси сейчас поднят под старым (общим) проектом, перевести его на `procure-proxy`:
+
+> ⚠️ **Кратковременный downtime.** Между `docker rm -f` и стартом нового прокси порты
+> 80/443 не отвечают (обычно &lt;1 мин). Выполняйте в нерабочее время. Порядок важен:
+> если запустить `init-nginxproxy` до `rm -f`, будет ошибка `container name already in use`.
+
+```bash
+cd ~/procure-ai
+docker rm -f nginx-proxy acme-companion   # снести старые контейнеры (тома с cert остаются)
+make init-nginxproxy                       # поднять заново уже в проекте procure-proxy (те же тома)
+make prod-redeploy                         # теперь безопасно
+bash smoke-test.sh
+```
+> Если `init-nginxproxy` упал с `name already in use` — `docker rm -f` прошёл не до конца, повторите его.
+
+---
+
+## 6. Что дальше
 
 1. Дождаться/подтвердить выпуск TLS-сертификата и зелёный `https://`
    (если долго `503` в challenge — перезапустить `docker restart acme-companion`).

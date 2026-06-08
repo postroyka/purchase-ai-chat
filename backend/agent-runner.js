@@ -56,6 +56,11 @@ const AGENT_ENV_KEYS = [
  */
 export async function runAgent(filePath, responsibleUserId, config = {}) {
   const claudeBin = config.claudeBin ?? process.env.CLAUDE_CODE_BIN ?? 'claude';
+  // Guard the (server-controlled) binary path against traversal — it is later
+  // resolved against PATH / spawned, so reject obviously unsafe values early.
+  if (claudeBin.includes('..')) {
+    throw new Error(`Invalid claudeBin — path traversal not allowed: ${JSON.stringify(claudeBin)}`);
+  }
   const mcpUrl = config.mcpUrl ?? process.env.MCP_SERVER_URL ?? 'http://mcp:3000/mcp';
   const mcpToken = config.mcpToken ?? process.env.NUXT_MCP_AUTH_TOKEN ?? '';
   const model = config.model ?? process.env.CLAUDE_MODEL ?? null;
@@ -176,21 +181,30 @@ export function resolveClaudeSpawn(claudeBin) {
     if (jsEntry && existsSync(jsEntry)) {
       return { command: process.execPath, prefixArgs: [jsEntry] };
     }
+    // Found the .cmd shim but couldn't resolve a usable JS target — fail loudly
+    // (distinguishing "unparseable" from "parsed but missing" aids Windows debugging)
+    // instead of silently passing a .cmd to spawn (opaque error on Node ≥18.20).
+    const reason = jsEntry
+      ? `resolved to "${jsEntry}" but that file does not exist`
+      : 'could not be parsed from the shim';
+    throw new Error(
+      `Found Claude .cmd shim at "${cmdPath}" but its JS entrypoint ${reason}. `
+      + 'Set CLAUDE_CODE_BIN to the cli.js path directly.',
+    );
   }
 
-  // Fallback: let spawn try the bin as-is (works if it's a real .exe).
+  // No .cmd shim found — let spawn try the bin as-is (works if it's a real .exe).
   return { command: claudeBin, prefixArgs: [] };
 }
 
 /** Locate `<bin>.cmd` on Windows: honor an absolute path, else scan PATH. */
 function findWindowsCmdShim(claudeBin) {
-  const withCmd = /\.cmd$/i.test(claudeBin) ? claudeBin : `${claudeBin}.cmd`;
-  if (isAbsolute(withCmd)) return existsSync(withCmd) ? withCmd : null;
+  const cmdName = /\.cmd$/i.test(claudeBin) ? claudeBin : `${claudeBin}.cmd`;
+  if (isAbsolute(cmdName)) return existsSync(cmdName) ? cmdName : null;
 
-  const base = /\.cmd$/i.test(claudeBin) ? claudeBin : `${claudeBin}.cmd`;
   for (const dir of (process.env.PATH ?? '').split(delimiter)) {
     if (!dir) continue;
-    const candidate = join(dir, base);
+    const candidate = join(dir, cmdName);
     if (existsSync(candidate)) return candidate;
   }
   return null;
@@ -207,7 +221,9 @@ function findWindowsCmdShim(claudeBin) {
 function extractCmdShimTarget(cmdPath) {
   let contents;
   try { contents = readFileSync(cmdPath, 'utf8'); } catch { return null; }
-  const match = contents.match(/%[~]?dp0%?\\?([^"'\s]+\.(?:c|m)?js)/i);
+  // Capture only a relative entrypoint (no leading separator) so a tampered shim
+  // can't point the resolver at an absolute path elsewhere on disk.
+  const match = contents.match(/%[~]?dp0%?[\\/]?([^/\\"'\s][^"'\s]*\.(?:c|m)?js)/i);
   if (!match) return null;
   return join(dirname(cmdPath), match[1]);
 }
