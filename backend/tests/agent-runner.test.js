@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { runAgent, buildMcpConfig, extractJson } from '../agent-runner.js';
+import { runAgent, buildMcpConfig, extractJson, resolveClaudeSpawn } from '../agent-runner.js';
+import { platform } from 'node:os';
 
 // Helper: create a mock spawn function that simulates a child process.
 function makeMockSpawn({ stdout = '', stderr = '', exitCode = 0, errorCode = null } = {}) {
@@ -316,5 +317,26 @@ describe('extractJson', () => {
 
   it('returns null for incomplete JSON', () => {
     expect(extractJson('{"incomplete":')).toBeNull();
+  });
+});
+
+describe('resolveClaudeSpawn', () => {
+  it('runs a .js entrypoint via node', () => {
+    const r = resolveClaudeSpawn('/some/path/cli.js');
+    expect(r.command).toBe(process.execPath);
+    expect(r.prefixArgs).toEqual(['/some/path/cli.js']);
+  });
+
+  it('runs a .mjs entrypoint via node', () => {
+    const r = resolveClaudeSpawn('/some/path/cli.mjs');
+    expect(r.command).toBe(process.execPath);
+    expect(r.prefixArgs).toEqual(['/some/path/cli.mjs']);
+  });
+
+  it('on non-Windows, spawns the bin directly', () => {
+    if (platform() === 'win32') return; // covered by the win32-specific path
+    const r = resolveClaudeSpawn('claude');
+    expect(r.command).toBe('claude');
+    expect(r.prefixArgs).toEqual([]);
   });
 });
