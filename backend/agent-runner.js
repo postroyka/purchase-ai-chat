@@ -59,6 +59,11 @@ const AGENT_ENV_KEYS = [
  */
 export async function runAgent(filePath, responsibleUserId, config = {}) {
   const claudeBin = config.claudeBin ?? process.env.CLAUDE_CODE_BIN ?? 'claude';
+  // Guard the (server-controlled) binary path against traversal — it is later
+  // resolved against PATH / spawned, so reject obviously unsafe values early.
+  if (claudeBin.includes('..')) {
+    throw new Error(`Invalid claudeBin — path traversal not allowed: ${JSON.stringify(claudeBin)}`);
+  }
   const mcpUrl = config.mcpUrl ?? process.env.MCP_SERVER_URL ?? 'http://mcp:3000/mcp';
   const mcpToken = config.mcpToken ?? process.env.NUXT_MCP_AUTH_TOKEN ?? '';
   const model = config.model ?? process.env.CLAUDE_MODEL ?? null;
@@ -76,10 +81,26 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
     throw new Error(`Invalid filePath — contains control characters: ${JSON.stringify(filePath)}`);
   }
 
+  // Defense-in-depth: responsibleUserId is also validated at the HTTP layer, but
+  // runAgent may be called directly. Reject anything but a positive integer so it
+  // can't smuggle extra lines/instructions into the agent prompt.
+  if (responsibleUserId != null && String(responsibleUserId) !== ''
+      && !/^\d+$/.test(String(responsibleUserId))) {
+    throw new Error(
+      `Invalid responsibleUserId — must be a positive integer: ${JSON.stringify(responsibleUserId)}`,
+    );
+  }
+
   const userMessage = [
     `FILE_PATH: ${filePath}`,
     `RESPONSIBLE_USER_ID: ${responsibleUserId ?? ''}`,
   ].join('\n');
+
+  // Scope the agent's working directory to the upload's job dir. A prompt-injected
+  // agent then resolves relative paths there, not in /app. (Absolute reads are still
+  // possible — real isolation is the non-root container; this narrows the blast radius
+  // and avoids CLAUDE.md/project discovery outside the job dir.)
+  const cwd = dirname(filePath);
 
   // Write MCP config to a temp file — the token must not appear in process args
   // (visible in `ps aux`), so we write it to a file accessible only to this process.
@@ -106,6 +127,7 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
       systemPrompt,
       userMessage,
       mcpConfigPath,
+      cwd,
       timeoutMs,
       jobId,
     });
@@ -134,9 +156,13 @@ export function buildMcpConfig(mcpUrl, mcpToken) {
   return { mcpServers: { 'procure-ai': server } };
 }
 
-/** @param {string} text @returns {string} */
-function redactToken(text) {
-  return text.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+/**
+ * Redact `Bearer <token>` sequences from a string before logging/persisting.
+ * Exported so the HTTP layer can apply the same redaction to agent errors.
+ * @param {string} text @returns {string}
+ */
+export function redactToken(text) {
+  return String(text).replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
 }
 
 function buildAgentEnv() {
@@ -180,21 +206,30 @@ export function resolveClaudeSpawn(claudeBin) {
     if (jsEntry && existsSync(jsEntry)) {
       return { command: process.execPath, prefixArgs: [jsEntry] };
     }
+    // Found the .cmd shim but couldn't resolve a usable JS target — fail loudly
+    // (distinguishing "unparseable" from "parsed but missing" aids Windows debugging)
+    // instead of silently passing a .cmd to spawn (opaque error on Node ≥18.20).
+    const reason = jsEntry
+      ? `resolved to "${jsEntry}" but that file does not exist`
+      : 'could not be parsed from the shim';
+    throw new Error(
+      `Found Claude .cmd shim at "${cmdPath}" but its JS entrypoint ${reason}. `
+      + 'Set CLAUDE_CODE_BIN to the cli.js path directly.',
+    );
   }
 
-  // Fallback: let spawn try the bin as-is (works if it's a real .exe).
+  // No .cmd shim found — let spawn try the bin as-is (works if it's a real .exe).
   return { command: claudeBin, prefixArgs: [] };
 }
 
 /** Locate `<bin>.cmd` on Windows: honor an absolute path, else scan PATH. */
 function findWindowsCmdShim(claudeBin) {
-  const withCmd = /\.cmd$/i.test(claudeBin) ? claudeBin : `${claudeBin}.cmd`;
-  if (isAbsolute(withCmd)) return existsSync(withCmd) ? withCmd : null;
+  const cmdName = /\.cmd$/i.test(claudeBin) ? claudeBin : `${claudeBin}.cmd`;
+  if (isAbsolute(cmdName)) return existsSync(cmdName) ? cmdName : null;
 
-  const base = /\.cmd$/i.test(claudeBin) ? claudeBin : `${claudeBin}.cmd`;
   for (const dir of (process.env.PATH ?? '').split(delimiter)) {
     if (!dir) continue;
-    const candidate = join(dir, base);
+    const candidate = join(dir, cmdName);
     if (existsSync(candidate)) return candidate;
   }
   return null;
@@ -211,14 +246,16 @@ function findWindowsCmdShim(claudeBin) {
 function extractCmdShimTarget(cmdPath) {
   let contents;
   try { contents = readFileSync(cmdPath, 'utf8'); } catch { return null; }
-  const match = contents.match(/%[~]?dp0%?\\?([^"'\s]+\.(?:c|m)?js)/i);
+  // Capture only a relative entrypoint (no leading separator) so a tampered shim
+  // can't point the resolver at an absolute path elsewhere on disk.
+  const match = contents.match(/%[~]?dp0%?[\\/]?([^/\\"'\s][^"'\s]*\.(?:c|m)?js)/i);
   if (!match) return null;
   return join(dirname(cmdPath), match[1]);
 }
 
 function spawnClaude({
   spawnFn, claudeBin, model, systemPrompt, userMessage,
-  mcpConfigPath, timeoutMs, jobId,
+  mcpConfigPath, cwd, timeoutMs, jobId,
 }) {
   const tag = jobId ? `[agent job=${jobId}]` : '[agent]';
 
@@ -248,7 +285,9 @@ function spawnClaude({
     const { command, prefixArgs } = resolveClaudeSpawn(claudeBin);
 
     const t0 = Date.now();
-    const proc = spawnFn(command, [...prefixArgs, ...args], { env: buildAgentEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const spawnOpts = { env: buildAgentEnv(), stdio: ['pipe', 'pipe', 'pipe'] };
+    if (cwd) spawnOpts.cwd = cwd;
+    const proc = spawnFn(command, [...prefixArgs, ...args], spawnOpts);
     // claude CLI 2.x waits ~3s for stdin when not attached to a TTY, then exits with code 1.
     // Closing stdin immediately signals EOF so the CLI proceeds without waiting.
     proc.stdin.end();

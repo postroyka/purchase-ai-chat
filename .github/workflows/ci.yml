@@ -29,7 +29,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Check syntax
-        run: node --check backend/index.js && node --check backend/agent-runner.js && node --check backend/jobs-store.js
+        run: |
+          node --check backend/index.js
+          node --check backend/agent-runner.js
+          node --check backend/jobs-store.js
 
       - name: Run tests
         working-directory: backend
@@ -112,6 +115,22 @@ jobs:
 
       - name: Build mcp image (builder stage)
         run: docker build --target builder -f Dockerfile.mcp -t procure-mcp-validate .
+
+      # Catch YAML/interpolation errors in the compose files (incl. project isolation).
+      - name: Validate compose files
+        run: |
+          trap 'rm -f .env.prod' EXIT   # always remove the dummy env, even on failure
+          printf '%s\n' \
+            'REDIS_PASSWORD=ci-dummy' \
+            'BACKEND_API_TOKEN=ci-dummy' \
+            'NUXT_MCP_AUTH_TOKEN=ci-dummy' \
+            'NUXT_BITRIX24_WEBHOOK_URL=http://example.invalid' \
+            'PUBLIC_PAGE_BASIC_AUTH_PASS=ci-dummy' \
+            'VIRTUAL_HOST=example.invalid' \
+            'LETSENCRYPT_HOST=example.invalid' \
+            'LETSENCRYPT_EMAIL=ci@example.invalid' > .env.prod
+          docker compose -p procure-ai -f docker-compose.prod.yml --env-file .env.prod config --quiet
+          docker compose -p procure-proxy -f docker-compose.nginxproxy.yml --env-file .env.prod config --quiet
 
   ui:
     name: UI lint & build

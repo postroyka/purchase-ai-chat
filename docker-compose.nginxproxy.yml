@@ -1,7 +1,14 @@
 # Shared reverse-proxy — bring up ONLY if nginx-proxy is not already running
 # on the server (грабли: don't bind 80/443 twice, the whole server would break).
 # Run via: make init-nginxproxy
+#
+# Own project name so the app stack's `up --remove-orphans` (project `procure-ai`)
+# cannot delete nginx-proxy/acme-companion. See docker-compose.prod.yml header.
+name: procure-proxy
+
 services:
+  # nginx-proxy and acme-companion are intentionally NOT watched by Watchtower
+  # (no watchtower.enable/scope labels): pinned infra images, updated manually.
   nginx-proxy:
     image: nginxproxy/nginx-proxy:1.6
     container_name: nginx-proxy
@@ -40,8 +47,15 @@ networks:
   proxy-net:
     external: true
 
+# Pin to the volume names created under the old shared project (`procure-ai_*`)
+# so the already-issued Let's Encrypt certificate is preserved after the rename
+# (no re-issue). If they don't exist yet they are created empty and acme issues a cert.
 volumes:
   nginx-certs:
+    name: procure-ai_nginx-certs
   nginx-vhost:
+    name: procure-ai_nginx-vhost
   nginx-html:
+    name: procure-ai_nginx-html
   acme-data:
+    name: procure-ai_acme-data

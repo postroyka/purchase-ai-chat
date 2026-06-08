@@ -4,8 +4,10 @@
 
 # Shared reverse-proxy network name on the server (грабли #1).
 PROXY_NET ?= proxy-net
-COMPOSE   := docker compose -f docker-compose.prod.yml --env-file .env.prod
-NGINX     := docker compose -f docker-compose.nginxproxy.yml --env-file .env.prod
+# Explicit -p locks each stack to its own project (defence-in-depth alongside the
+# `name:` field in each compose file) so `up --remove-orphans` can't cross stacks.
+COMPOSE   := docker compose -p procure-ai -f docker-compose.prod.yml --env-file .env.prod
+NGINX     := docker compose -p procure-proxy -f docker-compose.nginxproxy.yml --env-file .env.prod
 
 # ---- local development ----
 dev:

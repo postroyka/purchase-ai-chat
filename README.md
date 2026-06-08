@@ -60,6 +60,8 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
 | `MAX_CONCURRENT_JOBS` | app | — | Лимит одновременных заданий; сверх — `429` (по умолчанию: `4`) |
 | `ALLOWED_EXTENSIONS` | app | — | Разрешённые расширения (по умолчанию: `pdf,xlsx,docx`) |
+| `RATE_LIMIT_MAX` | app | — | Лимит запросов `/upload` на токен в окне (по умолчанию: `20`, `0` = выкл.) |
+| `RATE_LIMIT_WINDOW_MS` | app | — | Окно rate-limit в мс (по умолчанию: `60000`) |
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
 | `AGENT_TIMEOUT_MS` | app | — | Таймаут запуска агента в мс (по умолчанию: 300000 = 5 мин) |
 | `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
@@ -181,6 +183,11 @@ cd ui      && pnpm install && pnpm dev               # :3001 (проксируе
 > Backend ходит в MCP по `MCP_SERVER_URL` (см. `backend/.env.example` → `http://localhost:3002/mcp`).
 > Для большинства задач MCP локально не нужен (инструменты — заглушки), его можно не запускать.
 
+> Backend-агент запускает Claude Code CLI на **Linux, macOS и Windows**: на Windows
+> `claude` — это `.cmd`-шим, поэтому агент находит его JS-точку входа и запускает через
+> `node` (без shell — нет инъекции, нет лимита длины cmd.exe). Путь к бинарю можно
+> переопределить `CLAUDE_CODE_BIN`; на Windows прописывать `.cmd` вручную не нужно.
+
 ## Тесты
 
 ```bash
@@ -211,9 +218,13 @@ cp .env.prod.example .env.prod && nano .env.prod   # заполнить секр
 echo "$GHCR_PAT" | docker login ghcr.io -u <github-user> --password-stdin
 
 make init-network          # создать сеть proxy-net
-make init-nginxproxy       # ТОЛЬКО если nginx-proxy ещё не запущен на сервере
-make prod-up               # запустить app + mcp + redis + watchtower
+make init-nginxproxy       # ТОЛЬКО если nginx-proxy ещё не запущен (стек procure-proxy)
+make prod-up               # запустить app + mcp + redis + watchtower (стек procure-ai)
 ```
+
+> Приложение и прокси — **два изолированных compose-проекта** (`procure-ai` и
+> `procure-proxy`), поэтому `--remove-orphans` в `prod-redeploy` не трогает
+> nginx-proxy. Подробнее (и разовая миграция) — в `docs/SERVER_SETUP.md` §5.
 
 Обновление файлов на сервере — тем же `curl -fsSLO`, без `git pull`.
 Принудительный редеплой без ожидания Watchtower — `make prod-redeploy`.
@@ -317,4 +328,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-08 (PR #39 — fix stdin hang on claude CLI 2.x, filePath prompt-injection guard, output buffer cap, test coverage +3)*
+*Last reviewed: 2026-06-08 (PR #49 — security: rate-limit /upload, agent cwd scoping, redactToken applied to job errors)*

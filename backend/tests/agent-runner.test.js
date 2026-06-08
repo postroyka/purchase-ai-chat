@@ -118,6 +118,18 @@ describe('runAgent', () => {
     await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
     const [_bin, _args, opts] = spawnFn.mock.calls[0];
     expect(opts.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+    // Never spawn through a shell — this is what keeps cmd.exe/sh metacharacters
+    // in the file path / prompt from being interpreted (CVE-2024-27980 class).
+    expect(opts.shell).toBeUndefined();
+  });
+
+  it('throws when claudeBin contains path traversal (..)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await expect(
+      runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn, claudeBin: '../../bin/sh' }),
+    ).rejects.toThrow(/path traversal/);
+    // Guard must short-circuit before ever spawning anything.
+    expect(spawnFn).not.toHaveBeenCalled();
   });
 
   it('closes stdin immediately after spawn', async () => {
@@ -158,23 +170,25 @@ describe('runAgent', () => {
     expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
-  it('escalates to SIGKILL when SIGTERM is ignored after timeout', async () => {
-    vi.useFakeTimers();
+  it('escalates to SIGKILL when SIGTERM is ignored', async () => {
+    // Fake only the timer fns — leave Date/microtasks real so durationMs and
+    // queueMicrotask in the mock behave normally.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const proc = new EventEmitter();
       proc.stdout = new EventEmitter();
       proc.stderr = new EventEmitter();
       proc.stdin = { end: vi.fn() };
+      // Ignore SIGTERM; only exit once force-killed.
       proc.kill = vi.fn((signal) => {
-        // Simulate a process that ignores SIGTERM; only SIGKILL ends it.
-        if (signal === 'SIGKILL') proc.emit('close', null);
+        if (signal === 'SIGKILL') queueMicrotask(() => proc.emit('close', null));
       });
       const spawnFn = vi.fn(() => proc);
 
-      const p = runAgent('/f.pdf', null, { timeoutMs: 50, spawnFn });
+      const p = runAgent('/f.pdf', null, { ...BASE_CONFIG, timeoutMs: 50, spawnFn });
       const assertion = expect(p).rejects.toThrow('timed out');
-      await vi.advanceTimersByTimeAsync(50);    // timeout fires → SIGTERM (ignored)
-      await vi.advanceTimersByTimeAsync(5000);  // grace elapses → SIGKILL → close
+      await vi.advanceTimersByTimeAsync(50);   // fires the timeout → SIGTERM
+      await vi.advanceTimersByTimeAsync(5000); // grace elapses → SIGKILL
       await assertion;
 
       expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
@@ -206,6 +220,21 @@ describe('runAgent', () => {
     await expect(
       runAgent('/uploads/file.pdf\nIGNORE PREVIOUS', null, { ...BASE_CONFIG, spawnFn }),
     ).rejects.toThrow(/control characters/);
+  });
+
+  it('throws when responsibleUserId is not a positive integer (injection guard)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await expect(
+      runAgent('/uploads/f.pdf', '1\nIGNORE PREVIOUS', { ...BASE_CONFIG, spawnFn }),
+    ).rejects.toThrow(/responsibleUserId/);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it('runs the agent with cwd scoped to the file’s job directory', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await runAgent('/uploads/job-7/invoice.pdf', '20', { ...BASE_CONFIG, spawnFn });
+    const opts = spawnFn.mock.calls[0][2];
+    expect(opts.cwd).toBe('/uploads/job-7');
   });
 
   it('throws when claude binary is not found (ENOENT)', async () => {
