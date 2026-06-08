@@ -77,6 +77,22 @@ try {
 }
 
 # ---------------------------------------------------------------------
+Hdr "5. Авторизация (запрос без токена должен давать 401)"
+try {
+    $r = Invoke-WebRequest -Uri "https://$Domain/job/smoke-test/status" -TimeoutSec 15 -UseBasicParsing
+    Bad "/job/.../status без токена -> $($r.StatusCode) (ожидался 401)"
+} catch {
+    $resp = $_.Exception.Response
+    if ($resp -and [int]$resp.StatusCode -eq 401) {
+        Ok "/job/.../status без токена -> 401 (защита работает)"
+    } elseif ($resp) {
+        Bad ("/job/.../status без токена -> код " + [int]$resp.StatusCode + " (ожидался 401)")
+    } else {
+        Bad "/job/.../status ошибка: $($_.Exception.Message)"
+    }
+}
+
+# ---------------------------------------------------------------------
 Hdr "ИТОГ"
 Write-Host "Успешно: $pass    Ошибок: $fail"
 if ($fail -eq 0) {
