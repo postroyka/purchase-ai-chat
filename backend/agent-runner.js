@@ -77,10 +77,26 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
     throw new Error(`Invalid filePath — contains control characters: ${JSON.stringify(filePath)}`);
   }
 
+  // Defense-in-depth: responsibleUserId is also validated at the HTTP layer, but
+  // runAgent may be called directly. Reject anything but a positive integer so it
+  // can't smuggle extra lines/instructions into the agent prompt.
+  if (responsibleUserId != null && String(responsibleUserId) !== ''
+      && !/^\d+$/.test(String(responsibleUserId))) {
+    throw new Error(
+      `Invalid responsibleUserId — must be a positive integer: ${JSON.stringify(responsibleUserId)}`,
+    );
+  }
+
   const userMessage = [
     `FILE_PATH: ${filePath}`,
     `RESPONSIBLE_USER_ID: ${responsibleUserId ?? ''}`,
   ].join('\n');
+
+  // Scope the agent's working directory to the upload's job dir. A prompt-injected
+  // agent then resolves relative paths there, not in /app. (Absolute reads are still
+  // possible — real isolation is the non-root container; this narrows the blast radius
+  // and avoids CLAUDE.md/project discovery outside the job dir.)
+  const cwd = dirname(filePath);
 
   // Write MCP config to a temp file — the token must not appear in process args
   // (visible in `ps aux`), so we write it to a file accessible only to this process.
@@ -107,6 +123,7 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
       systemPrompt,
       userMessage,
       mcpConfigPath,
+      cwd,
       timeoutMs,
       jobId,
     });
@@ -135,9 +152,13 @@ export function buildMcpConfig(mcpUrl, mcpToken) {
   return { mcpServers: { 'procure-ai': server } };
 }
 
-/** @param {string} text @returns {string} */
-function redactToken(text) {
-  return text.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+/**
+ * Redact `Bearer <token>` sequences from a string before logging/persisting.
+ * Exported so the HTTP layer can apply the same redaction to agent errors.
+ * @param {string} text @returns {string}
+ */
+export function redactToken(text) {
+  return String(text).replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
 }
 
 function buildAgentEnv() {
@@ -230,7 +251,7 @@ function extractCmdShimTarget(cmdPath) {
 
 function spawnClaude({
   spawnFn, claudeBin, model, systemPrompt, userMessage,
-  mcpConfigPath, timeoutMs, jobId,
+  mcpConfigPath, cwd, timeoutMs, jobId,
 }) {
   const tag = jobId ? `[agent job=${jobId}]` : '[agent]';
 
@@ -254,7 +275,9 @@ function spawnClaude({
     const { command, prefixArgs } = resolveClaudeSpawn(claudeBin);
 
     const t0 = Date.now();
-    const proc = spawnFn(command, [...prefixArgs, ...args], { env: buildAgentEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const spawnOpts = { env: buildAgentEnv(), stdio: ['pipe', 'pipe', 'pipe'] };
+    if (cwd) spawnOpts.cwd = cwd;
+    const proc = spawnFn(command, [...prefixArgs, ...args], spawnOpts);
     // claude CLI 2.x waits ~3s for stdin when not attached to a TTY, then exits with code 1.
     // Closing stdin immediately signals EOF so the CLI proceeds without waiting.
     proc.stdin.end();

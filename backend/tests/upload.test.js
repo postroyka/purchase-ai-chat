@@ -96,6 +96,7 @@ const app = createApp({
   token: TOKEN,
   uploadDir: UPLOAD_DIR,
   agentConfig: { spawnFn: makeMockAgentSpawn() },
+  rateLimitMax: 0, // disable rate limiting for the shared app — exercised separately below
 });
 const auth = () => `Bearer ${TOKEN}`;
 
@@ -468,5 +469,46 @@ describe('processJob error handling', () => {
     const body = await pollJob(seqApp, res.body.jobId);
     expect(body.status).toBe('done');
     expect(body.files.map((f) => f.status).sort()).toEqual(['done', 'error']);
+  });
+});
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+describe('rate limiting on /upload', () => {
+  const pdf = () => path.join(FIXTURES, 'valid.pdf');
+
+  it('returns 429 once the per-window limit is exceeded', async () => {
+    const limitedApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: makeMockAgentSpawn() },
+      rateLimitMax: 2,
+      rateLimitWindowMs: 60_000,
+    });
+    const r1 = await request(limitedApp).post('/upload').set('Authorization', auth())
+      .attach('files[]', pdf(), { contentType: 'application/pdf' });
+    const r2 = await request(limitedApp).post('/upload').set('Authorization', auth())
+      .attach('files[]', pdf(), { contentType: 'application/pdf' });
+    const r3 = await request(limitedApp).post('/upload').set('Authorization', auth())
+      .attach('files[]', pdf(), { contentType: 'application/pdf' });
+    expect(r1.status).toBe(201);
+    expect(r2.status).toBe(201);
+    expect(r3.status).toBe(429);
+    expect(r3.body.error).toMatch(/too many/i);
+    expect(r3.headers['retry-after']).toBeDefined();
+  });
+
+  it('does not limit requests when rateLimitMax is 0 (disabled)', async () => {
+    const openApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: makeMockAgentSpawn() },
+      rateLimitMax: 0,
+    });
+    for (let i = 0; i < 5; i++) {
+      const r = await request(openApp).post('/upload').set('Authorization', auth())
+        .attach('files[]', pdf(), { contentType: 'application/pdf' });
+      expect(r.status).toBe(201);
+    }
   });
 });

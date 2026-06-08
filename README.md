@@ -59,6 +59,8 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `MAX_FILE_SIZE_MB` | app | — | Макс. размер файла (по умолчанию: 20) |
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
 | `ALLOWED_EXTENSIONS` | app | — | Разрешённые расширения (по умолчанию: `pdf,xlsx,docx`) |
+| `RATE_LIMIT_MAX` | app | — | Лимит запросов `/upload` на токен в окне (по умолчанию: `20`, `0` = выкл.) |
+| `RATE_LIMIT_WINDOW_MS` | app | — | Окно rate-limit в мс (по умолчанию: `60000`) |
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
 | `AGENT_TIMEOUT_MS` | app | — | Таймаут запуска агента в мс (по умолчанию: 300000 = 5 мин) |
 | `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
@@ -227,4 +229,4 @@ make prod-up               # запустить app + mcp + redis + watchtower (
 
 ---
 
-*Last reviewed: 2026-06-08 (PR #46 — compose project isolation procure-ai/procure-proxy + Watchtower scope; agent-runner Windows hardening & win32 tests)*
+*Last reviewed: 2026-06-08 (PR #49 — security: rate-limit /upload, agent cwd scoping, redactToken applied to job errors)*
