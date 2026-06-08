@@ -9,6 +9,8 @@ fixtures/
 .DS_Store
 mcp/.nuxt/
 mcp/.claude/
+# Claude Code local session settings — must not be committed (machine-specific perms)
+.claude/settings.local.json
 ui/.nuxt/
 backend/uploads-test/
 backend/tests/fixtures/

@@ -19,7 +19,7 @@ UI (Nuxt SPA) ──upload/poll──▶ backend (Express, :3000) ──Claude C
 ```
 
 - **Dev**: Nuxt dev-server на `:3001`, backend на `:3000`. devProxy в nuxt.config.ts перенаправляет `/upload`, `/job`, `/health` на backend.
-- **Prod**: Nuxt собирается в статику (`ui/.output/public/`), Express раздаёт её через `express.static` — один процесс, один порт `:3000`.
+- **Prod**: Nuxt собирается в статику (`ui/.output/public/`); в образе она копируется в `ui/public/`, откуда Express раздаёт её через `express.static` — один процесс, один порт `:3000`.
 - MCP не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3000/mcp`).
 
 ## Быстрый старт
@@ -41,6 +41,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | Переменная | Контейнер | Обязательно | Описание |
 |---|---|---|---|
 | `BACKEND_API_TOKEN` | app | ✅ | Bearer-токен для `/upload` и `/job/:id/status` |
+| `NUXT_PUBLIC_BACKEND_TOKEN` | app | ✅ | Токен, которым UI зовёт бэкенд из браузера — **должен совпадать с `BACKEND_API_TOKEN`** |
 | `REDIS_PASSWORD` | app/redis | ✅ | Пароль Redis (тот же подставляется в `REDIS_URL` в compose) |
 | `NUXT_MCP_AUTH_TOKEN` | mcp | ✅ | Bearer-токен для `/mcp` endpoint |
 | `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Webhook Bitrix24 с правами CRM |
@@ -64,12 +65,12 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
 | `AGENT_TIMEOUT_MS` | app | — | Таймаут запуска агента в мс (по умолчанию: 300000 = 5 мин) |
 | `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
-| `ANTHROPIC_API_KEY` | app | ✅² | Ключ Claude API для агента (можно задать и через `~/.anthropic`) |
+| `ANTHROPIC_API_KEY` | app | ✅² | Ключ Claude API для агента. **В Docker обязателен** — подписка claude в контейнере не работает |
 | `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX` + `AWS_*` / `GOOGLE_*` | app | — | Альтернативные провайдеры Claude (Bedrock/Vertex) — пробрасываются агенту |
 | `NODE_ENV` / `PORT` / `UPLOAD_DIR` | app | — | Стандартные настройки рантайма |
 
 ¹ Обязательны при деплое за общим nginx-proxy (прод). Для локального запуска не нужны.
-² Обязателен для реальной работы агента; в `.env.prod.example` вынесен в комментарий (передаётся через `~/.anthropic` или env).
+² Обязателен для реальной работы агента. В Docker подписочная сессия `claude login` не работает, поэтому ключ задаётся явно в `.env.prod`. Локально (вне Docker) можно вместо него залогиниться интерактивно (`claude login`).
 
 > **AI-провайдер.** Текущая реализация агента использует **Claude Code** (`CLAUDE_CODE_BIN`,
 > `ANTHROPIC_API_KEY`). Переменные `DEEPSEEK_*` из ТЗ/брифа в коде пока не задействованы.
@@ -229,4 +230,4 @@ make prod-up               # запустить app + mcp + redis + watchtower (
 
 ---
 
-*Last reviewed: 2026-06-08 (PR #49 — security: rate-limit /upload, agent cwd scoping, redactToken applied to job errors)*
+*Last reviewed: 2026-06-08 (PR #47 — server e2e test script, docs accuracy fixes; PR #49 — security: rate-limit /upload, agent cwd scoping, redactToken)*
