@@ -49,6 +49,10 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `JOB_TTL_HOURS` | app | — | Время хранения задач в Redis (по умолчанию: 24) |
 | `MAX_FILE_SIZE_MB` | app | — | Макс. размер файла (по умолчанию: 20) |
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
+| `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
+| `AGENT_TIMEOUT_MS` | app | — | Таймаут запуска агента в мс (по умолчанию: 300000 = 5 мин) |
+| `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
+| `MCP_SERVER_URL` | app | — | URL MCP-сервера (по умолчанию: `http://mcp:3000/mcp`) |
 
 ## Мониторинг задач (API)
 
@@ -186,4 +190,4 @@ make prod-up               # запустить app + mcp + redis + watchtower
 
 ---
 
-*Last reviewed: 2026-06-05 (PR #34 — GitHub Actions Node 24 migration, Dockerfile.mcp overlay fix, docker-validate CI job, dependabot unblock)*
+*Last reviewed: 2026-06-06 (PR #36 — runAgent implementation: claude CLI subprocess, MCP config, timeout, extractJson)*
