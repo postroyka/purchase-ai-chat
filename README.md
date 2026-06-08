@@ -62,9 +62,12 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
 | `AGENT_TIMEOUT_MS` | app | — | Таймаут запуска агента в мс (по умолчанию: 300000 = 5 мин) |
 | `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
+| `ANTHROPIC_API_KEY` | app | ✅² | Ключ Claude API для агента (можно задать и через `~/.anthropic`) |
+| `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX` + `AWS_*` / `GOOGLE_*` | app | — | Альтернативные провайдеры Claude (Bedrock/Vertex) — пробрасываются агенту |
 | `NODE_ENV` / `PORT` / `UPLOAD_DIR` | app | — | Стандартные настройки рантайма |
 
 ¹ Обязательны при деплое за общим nginx-proxy (прод). Для локального запуска не нужны.
+² Обязателен для реальной работы агента; в `.env.prod.example` вынесен в комментарий (передаётся через `~/.anthropic` или env).
 
 > **AI-провайдер.** Текущая реализация агента использует **Claude Code** (`CLAUDE_CODE_BIN`,
 > `ANTHROPIC_API_KEY`). Переменные `DEEPSEEK_*` из ТЗ/брифа в коде пока не задействованы.
@@ -129,7 +132,7 @@ curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
 > (`make prod-up`/`prod-redeploy`) и `docs/SERVER_SETUP.md`. Кастомные инструменты
 > добавляются в `mcp-overlay/`, а не в `mcp/server/...` (иначе потеряются при subtree pull).
 
-⚠️ **Статус Week 1:** все 4 PST-инструмента (`b24_pst_crm_*`) — заглушки. Сквозной флоу не работает до реализации Week 2 (b24-controller + тела инструментов).
+⚠️ **Статус:** backend и агент (`backend/agent-runner.js`, спавн Claude Code CLI) реализованы — сквозной прогон работает **до MCP-слоя**. Заглушками остались только 4 PST-инструмента (`b24_pst_crm_*`): они бросают «not implemented (Week 2)», поэтому сделки в Б24 пока не создаются (нужны тела инструментов + внешний b24-controller).
 
 PST-специфичные инструменты живут в `mcp-overlay/` и копируются поверх
 upstream при сборке образа (`Dockerfile.mcp`). Имена используют префикс

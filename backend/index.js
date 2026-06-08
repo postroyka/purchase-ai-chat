@@ -25,6 +25,11 @@ const ALLOWED_MIME_TYPES = new Set([
 // file-type needs ≥4096 bytes to reliably detect OOXML (xlsx/docx) formats
 const MIME_SNIFF_BYTES = 4100;
 
+// Caps for agent-derived fields persisted to Redis and returned via the API,
+// so a malformed/oversized agent response can't bloat the store or the response.
+const MAX_RESULT_BYTES = 100_000;
+const MAX_ERROR_CHARS = 300;
+
 // Constant-time string comparison. Length mismatch short-circuits before timingSafeEqual
 // to avoid the "buffers must have the same length" throw; the length leak is acceptable
 // for fixed-length bearer tokens.
@@ -298,12 +303,22 @@ async function processJob(jobId, jobs, agentConfig = {}) {
     fileEntry.status = 'processing';
     await jobs.set(jobId, job);
     try {
-      fileEntry.result = await runAgent(fileEntry.path, job.responsibleUserId, agentConfig);
+      // Pass jobId into the agent config so agent-runner log lines are traceable
+      // when multiple jobs run concurrently.
+      const result = await runAgent(fileEntry.path, job.responsibleUserId, { ...agentConfig, jobId });
+      // Guard against an abnormally large agent result bloating Redis / the API response.
+      let tooLarge = false;
+      try { tooLarge = JSON.stringify(result).length > MAX_RESULT_BYTES; } catch { /* non-serialisable */ }
+      fileEntry.result = tooLarge
+        ? { truncated: true, message: 'agent result too large — omitted' }
+        : result;
       fileEntry.status = 'done';
     } catch (err) {
-      console.error(`[processJob] error processing file ${fileEntry.name}:`, err);
+      console.error(`[processJob] error processing file ${fileEntry.name} (job ${jobId}):`, err);
       fileEntry.status = 'error';
-      fileEntry.error = err.message;
+      // Truncate the message before it is persisted/returned. Deeper secret redaction
+      // is tracked in the security hardening issue.
+      fileEntry.error = String(err?.message ?? 'agent error').slice(0, MAX_ERROR_CHARS);
     }
     await jobs.set(jobId, job);
   }

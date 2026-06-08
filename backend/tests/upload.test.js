@@ -37,6 +37,61 @@ function makeMockAgentSpawn() {
   });
 }
 
+// Spawn mock that always fails (non-zero exit) — runAgent rejects → file status 'error'.
+function makeFailingAgentSpawn() {
+  return vi.fn(() => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = { end: vi.fn() };
+    proc.kill = vi.fn();
+    setImmediate(() => {
+      proc.stderr.emit('data', 'agent boom');
+      proc.emit('close', 1);
+    });
+    return proc;
+  });
+}
+
+// Spawn mock driven by a per-call success/failure sequence (e.g. [true, false]).
+function makeSequencedAgentSpawn(outcomes) {
+  let i = 0;
+  return vi.fn(() => {
+    const ok = outcomes[i++] ?? true;
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = { end: vi.fn() };
+    proc.kill = vi.fn();
+    setImmediate(() => {
+      if (ok) {
+        proc.stdout.emit('data', JSON.stringify({
+          is_error: false,
+          result: JSON.stringify({ status: 'stub' }),
+        }));
+        proc.emit('close', 0);
+      } else {
+        proc.stderr.emit('data', 'agent boom');
+        proc.emit('close', 1);
+      }
+    });
+    return proc;
+  });
+}
+
+// Poll a specific app instance's job until terminal state.
+async function pollJob(appInstance, jobId, maxMs = 5000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const r = await request(appInstance)
+      .get(`/job/${jobId}/status`)
+      .set('Authorization', auth());
+    if (r.body.status === 'done' || r.body.status === 'error') return r.body;
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  throw new Error(`Job ${jobId} did not reach terminal state in ${maxMs}ms`);
+}
+
 const app = createApp({
   token: TOKEN,
   uploadDir: UPLOAD_DIR,
@@ -370,6 +425,48 @@ describe('Security headers', () => {
     const res = await request(app).get('/health');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+    expect(res.headers['referrer-policy']).toBe('no-referrer');
     expect(res.headers['x-powered-by']).toBeUndefined();
+  });
+});
+
+// ── processJob error handling ─────────────────────────────────────────────────
+
+describe('processJob error handling', () => {
+  it('marks job as error when all files fail', async () => {
+    const failApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: makeFailingAgentSpawn() },
+    });
+    const res = await request(failApp)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+
+    const body = await pollJob(failApp, res.body.jobId);
+    expect(body.status).toBe('error');
+    expect(body.files[0].status).toBe('error');
+    expect(typeof body.files[0].error).toBe('string');
+  });
+
+  it('keeps job "done" on partial failure but marks the failed file', async () => {
+    const seqApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      // First file succeeds, second fails.
+      agentConfig: { spawnFn: makeSequencedAgentSpawn([true, false]) },
+    });
+    const res = await request(seqApp)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' })
+      .attach('files[]', path.join(FIXTURES, 'valid.xlsx'), { contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    expect(res.status).toBe(201);
+
+    const body = await pollJob(seqApp, res.body.jobId);
+    expect(body.status).toBe('done');
+    expect(body.files.map((f) => f.status).sort()).toEqual(['done', 'error']);
   });
 });
