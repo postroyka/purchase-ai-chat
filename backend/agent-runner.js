@@ -147,7 +147,8 @@ function spawnClaude({
     args.push(userMessage);
 
     const t0 = Date.now();
-    const proc = spawnFn(claudeBin, args, { env: buildAgentEnv() });
+    const proc = spawnFn(claudeBin, args, { env: buildAgentEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    proc.stdin?.end();
 
     let stdout = '';
     let stderr = '';
