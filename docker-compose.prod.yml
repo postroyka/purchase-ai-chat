@@ -1,6 +1,14 @@
 # Production stack. Images are pulled from GHCR and auto-updated by Watchtower.
 # The public-facing `app` joins the external nginx-proxy network (proxy-net);
 # `mcp` and `redis` stay on the internal `procure-net` only.
+#
+# Explicit project name isolates this stack from the nginx-proxy stack
+# (docker-compose.nginxproxy.yml, project `procure-proxy`). Without it both files
+# share the directory-derived project name, and `up --remove-orphans` here would
+# delete nginx-proxy/acme-companion. This value matches the previous directory
+# default so existing containers and volumes are reused (no migration).
+name: procure-ai
+
 services:
   app:
     image: ghcr.io/postroyka/procure-ai-app:latest
