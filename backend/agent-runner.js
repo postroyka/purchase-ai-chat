@@ -21,7 +21,9 @@ const SIGKILL_GRACE_MS = 5_000;
 // Env vars that claude CLI needs — subset of process.env (principle of least privilege).
 const AGENT_ENV_KEYS = [
   'PATH', 'HOME', 'USER', 'TMPDIR', 'TEMP', 'TMP',
-  'ANTHROPIC_API_KEY',        // required for API access
+  // Windows profile dirs — claude stores its auth session under %APPDATA%\Claude\
+  'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH',
+  'ANTHROPIC_API_KEY',        // required for API access (alternative to session auth)
   'CLAUDE_CODE_USE_BEDROCK',  // optional Bedrock provider
   'CLAUDE_CODE_USE_VERTEX',   // optional Vertex provider
   'AWS_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
