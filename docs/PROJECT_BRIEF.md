@@ -70,7 +70,8 @@ procure-ai/
 │   └── main.md                     # промпт извлечения (входит в app-образ)
 ├── backend/                        # Node.js: /upload, оркестрация, журнал заданий, cron cleanup
 ├── mcp/                            # MCP-сервер: find_supplier / find_contract / find_product / create_deal
-├── b24-controller/                 # кастомный REST-контроллер (БУС): компании, товары, договоры, сделки
+│                                   # (b24-controller — ВНЕШНИЙ сервис заказчика, в этом репо его нет;
+│                                   #  адрес задаётся через B24_CONTRACTS_API_URL)
 ├── ui/                             # templates-dashboard + UI Kit: загрузка + пофайловый отчёт
 ├── docs/
 │   ├── PROJECT_BRIEF.md            # этот файл
@@ -87,11 +88,11 @@ procure-ai/
 | Переменная | Значение / комментарий |
 |---|---|
 | `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | `purchase.postroyka.by` |
-| `B24_WEBHOOK_URL` | клиент даёт при старте |
-| `B24_CONTRACTS_API_URL` | кастомный REST-контроллер |
+| `NUXT_BITRIX24_WEBHOOK_URL` | вебхук Б24 (имя в коде/`.env.prod`; ранее в брифе — `B24_WEBHOOK_URL`) |
+| `B24_CONTRACTS_API_URL` | внешний REST-контроллер договоров (сервис заказчика, не в этом репо) |
 | `B24_DEAL_CATEGORY_ID` | `1` |
 | `B24_DEAL_DEFAULT_STAGE_ID` | `C1:NEW` |
-| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` | AI-провайдер |
+| `DEEPSEEK_*` | из ТЗ; **в текущей реализации не используется** — агент работает на Claude Code |
 | `PUBLIC_PAGE_ENABLED` | `true` (демо) |
 | `PUBLIC_PAGE_BASIC_AUTH_USER` | `someDeal` |
 | `PUBLIC_PAGE_BASIC_AUTH_PASS` | только на сервере |

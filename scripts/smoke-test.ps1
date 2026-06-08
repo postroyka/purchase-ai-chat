@@ -13,7 +13,10 @@
 #  Скрипт ничего не меняет. Скопируйте весь вывод и пришлите его.
 # =====================================================================
 param(
-    [string]$Domain = "purchase.postroyka.by"
+    [string]$Domain = "purchase.postroyka.by",
+    # Необязательно: Bearer-токен backend для позитивной проверки авторизации.
+    # Пример: ... -File .\smoke-test.ps1 -Token "ваш_BACKEND_API_TOKEN"
+    [string]$Token = ""
 )
 
 $pass = 0; $fail = 0
@@ -90,6 +93,25 @@ try {
     } else {
         Bad "/job/.../status ошибка: $($_.Exception.Message)"
     }
+}
+
+# Позитивная проверка: с верным токеном запрос должен пройти авторизацию (ожидаем 404).
+if ($Token -ne "") {
+    try {
+        $r = Invoke-WebRequest -Uri "https://$Domain/job/smoke-test/status" -TimeoutSec 15 -UseBasicParsing -Headers @{ Authorization = "Bearer $Token" }
+        Bad "/job/.../status с токеном -> $($r.StatusCode) (ожидался 404)"
+    } catch {
+        $resp = $_.Exception.Response
+        if ($resp -and [int]$resp.StatusCode -eq 404) {
+            Ok "/job/.../status с токеном -> 404 (авторизация проходит)"
+        } elseif ($resp) {
+            Bad ("/job/.../status с токеном -> код " + [int]$resp.StatusCode + " (ожидался 404)")
+        } else {
+            Bad "/job/.../status с токеном ошибка: $($_.Exception.Message)"
+        }
+    }
+} else {
+    Write-Host "[--] позитивная проверка авторизации пропущена (передайте -Token)"
 }
 
 # ---------------------------------------------------------------------

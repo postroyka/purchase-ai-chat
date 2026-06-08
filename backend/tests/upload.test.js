@@ -312,3 +312,38 @@ describe('File cleanup', () => {
     expect(fs.existsSync(jobDir)).toBe(false);
   });
 });
+
+// ── responsibleUserId validation ──────────────────────────────────────────────
+
+describe('responsibleUserId validation', () => {
+  it('rejects a non-numeric responsibleUserId with 400', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .field('responsibleUserId', 'abc; rm -rf /')
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/responsibleUserId/);
+  });
+
+  it('accepts a numeric responsibleUserId', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .field('responsibleUserId', '20')
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    expect(res.status).toBe(201);
+    await waitForJob(res.body.jobId);
+  });
+});
+
+// ── Security headers ──────────────────────────────────────────────────────────
+
+describe('Security headers', () => {
+  it('sets baseline headers and hides X-Powered-By', async () => {
+    const res = await request(app).get('/health');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+    expect(res.headers['x-powered-by']).toBeUndefined();
+  });
+});

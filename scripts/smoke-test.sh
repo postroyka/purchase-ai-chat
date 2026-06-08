@@ -112,6 +112,23 @@ if [ "$code" = "401" ]; then
 else
   bad "GET /job/.../status без токена → $code (ожидался 401)"
 fi
+# Позитивная проверка: с ВЕРНЫМ токеном запрос должен пройти авторизацию
+# (ожидаем 404 — задания smoke-test нет, но 401 уже не будет). Токен берём из
+# окружения или из .env.prod рядом со скриптом; секрет в вывод не печатается.
+TOKEN="${BACKEND_API_TOKEN:-}"
+if [ -z "$TOKEN" ] && [ -f .env.prod ]; then
+  TOKEN=$(grep -E '^BACKEND_API_TOKEN=' .env.prod | head -1 | cut -d= -f2- | tr -d "\"'" | sed 's/[[:space:]].*$//')
+fi
+if [ -n "$TOKEN" ] && [ "$TOKEN" != "replace-with-secure-token" ]; then
+  code=$("${CURL[@]}" -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "https://$DOMAIN/job/smoke-test/status" 2>/dev/null)
+  if [ "$code" = "404" ]; then
+    ok "GET /job/.../status с токеном → 404 (авторизация проходит)"
+  else
+    bad "GET /job/.../status с токеном → $code (ожидался 404)"
+  fi
+else
+  echo "[--] позитивная проверка авторизации пропущена (нет BACKEND_API_TOKEN в окружении/.env.prod)"
+fi
 # MCP не публикуется наружу — проверяем изнутри, что /mcp требует токен.
 mcpcode=$(docker exec procure-mcp wget -S -qO- http://localhost:3000/mcp 2>&1 | grep -oE 'HTTP/[0-9.]+ [0-9]+' | grep -oE '[0-9]+$' | head -1)
 if [ "${mcpcode:-}" = "401" ]; then

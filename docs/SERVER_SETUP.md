@@ -71,6 +71,22 @@
 Скрипты ничего не меняют — только читают состояние и печатают отчёт.
 Цель: не набирать команды руками, а запустить одну строку и прислать результат.
 
+> **Сначала доставьте скрипт на сервер.** Репозиторий на сервер не клонируется —
+> в `~/procure-ai/` лежат только compose-файлы и `Makefile`. Поэтому скопируйте
+> туда `scripts/smoke-test.sh` одним из способов:
+>
+> ```bash
+> # Вариант 1 — с локальной машины (где есть доступ к репозиторию) через scp:
+> scp scripts/smoke-test.sh ubuntu@СЕРВЕР:~/procure-ai/
+>
+> # Вариант 2 — прямо на сервере, из приватного репо через GitHub API (нужен PAT с Contents:Read):
+> cd ~/procure-ai
+> export GH_PAT="ghp_ваш_токен"
+> curl -fsSL -H "Authorization: Bearer $GH_PAT" -H "Accept: application/vnd.github.raw" \
+>   -o smoke-test.sh \
+>   "https://api.github.com/repos/postroyka/purchase-ai-chat/contents/scripts/smoke-test.sh?ref=main"
+> ```
+
 ### На сервере (Linux/Ubuntu)
 
 ```bash
@@ -79,7 +95,8 @@ bash smoke-test.sh
 ```
 
 Файл: `scripts/smoke-test.sh`. Проверяет контейнеры, внутренние health-проверки,
-сертификат, HTTPS и авторизацию. В конце — строка ИТОГ (сколько OK / FAIL).
+сертификат, HTTPS и авторизацию (включая позитивную проверку токена — берётся из
+`.env.prod` рядом со скриптом). В конце — строка ИТОГ (сколько OK / FAIL).
 
 > **Важно про NAT.** Сервер за NAT не может достучаться до себя по публичному
 > домену. Поэтому скрипт по умолчанию проверяет HTTPS/сертификат через локальный

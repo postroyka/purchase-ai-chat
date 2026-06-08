@@ -34,6 +34,14 @@ function safeCompare(a, b) {
   return timingSafeEqual(bufA, bufB);
 }
 
+// Best-effort removal of multer's temp files. Used on every early-return error
+// path in /upload so a rejected upload never leaves orphans in uploads/_tmp.
+function cleanupTmpFiles(files) {
+  for (const file of files ?? []) {
+    try { fs.unlinkSync(file.path); } catch {}
+  }
+}
+
 /**
  * Create and configure the Express application.
  * All config is taken from the `config` argument (used by tests) with fallback
@@ -72,6 +80,19 @@ export function createApp(config = {}) {
   const ttlHours = config.ttlHours ?? parseInt(process.env.JOB_TTL_HOURS ?? '24', 10);
 
   const app = express();
+
+  // Baseline security headers (helmet-equivalent subset). Kept dependency-free so the
+  // prod image still builds with `pnpm install --frozen-lockfile --prod`; can be swapped
+  // for the `helmet` package in the dedicated security PR.
+  app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-DNS-Prefetch-Control', 'off');
+    next();
+  });
+
   const jobs = config.jobs ?? createJobsStore({ redisUrl, ttlHours });
 
   // Track in-flight processJob calls so graceful shutdown can wait for them.
@@ -130,7 +151,7 @@ export function createApp(config = {}) {
       for (const f of req.files) {
         const ext = path.extname(f.originalname).slice(1).toLowerCase();
         if (!allowedExtensions.includes(ext)) {
-          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          cleanupTmpFiles(req.files);
           return res.status(400).json({
             error: `File type .${ext} is not allowed. Allowed: ${allowedExtensions.join(', ')}`,
           });
@@ -148,25 +169,34 @@ export function createApp(config = {}) {
           fs.closeSync(fd);
           buf = buf.subarray(0, bytesRead);
         } catch {
-          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          cleanupTmpFiles(req.files);
           return res.status(500).json({ error: 'Failed to read uploaded file' });
         }
 
         const ext = path.extname(f.originalname).slice(1).toLowerCase();
         const detected = await fileTypeFromBuffer(buf);
         if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
-          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          cleanupTmpFiles(req.files);
           return res.status(400).json({
             error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected?.mime ?? 'unknown'}).`,
           });
         }
         // application/zip is a structural fallback for xlsx/docx — reject if ext doesn't match
         if (detected.mime === 'application/zip' && !['xlsx', 'docx'].includes(ext)) {
-          for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+          cleanupTmpFiles(req.files);
           return res.status(400).json({
             error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected.mime}).`,
           });
         }
+      }
+
+      // Validate optional responsibleUserId from the request body (the public page
+      // sends it). Must be a positive integer — it is later passed to the agent / Б24.
+      const rawResponsible = req.body?.responsibleUserId;
+      const hasResponsible = rawResponsible != null && String(rawResponsible) !== '';
+      if (hasResponsible && !/^\d+$/.test(String(rawResponsible))) {
+        cleanupTmpFiles(req.files);
+        return res.status(400).json({ error: 'responsibleUserId must be a positive integer' });
       }
 
       const jobId = uuidv4();
@@ -189,14 +219,14 @@ export function createApp(config = {}) {
         });
       } catch (err) {
         fs.rmSync(jobDir, { recursive: true, force: true });
-        for (const file of req.files) { try { fs.unlinkSync(file.path); } catch {} }
+        cleanupTmpFiles(req.files);
         if (err.code === 'UNSAFE_FILENAME') {
           return res.status(400).json({ error: err.message });
         }
         return res.status(500).json({ error: 'Failed to store uploaded files' });
       }
 
-      const responsibleUserId = req.body?.responsibleUserId ?? responsibleUserIdDefault;
+      const responsibleUserId = hasResponsible ? String(rawResponsible) : responsibleUserIdDefault;
 
       const job = {
         jobId,
