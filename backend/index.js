@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { timingSafeEqual } from 'node:crypto';
 import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
-import { runAgent } from './agent-runner.js';
+import { runAgent, redactToken } from './agent-runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +48,26 @@ function cleanupTmpFiles(files) {
   }
 }
 
+// Dependency-free in-memory rate limiter. Keyed by Authorization header (per client),
+// so a single token flooding /upload can't exhaust the agent subprocess pool. State is
+// per-process — matches the single-process deployment (see processJob note below).
+function createRateLimiter({ windowMs, max }) {
+  const hits = new Map();
+  return function rateLimit(req, res, next) {
+    if (!max || max <= 0) return next(); // max<=0 disables the limiter
+    const key = req.headers['authorization'] || req.ip || 'anon';
+    const now = Date.now();
+    const recent = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
+    if (recent.length >= max) {
+      res.setHeader('Retry-After', String(Math.ceil(windowMs / 1000)));
+      return res.status(429).json({ error: 'Too many requests — slow down.' });
+    }
+    recent.push(now);
+    hits.set(key, recent);
+    return next();
+  };
+}
+
 /**
  * Create and configure the Express application.
  * All config is taken from the `config` argument (used by tests) with fallback
@@ -86,6 +106,10 @@ export function createApp(config = {}) {
     config.responsibleUserId ?? process.env.PUBLIC_PAGE_RESPONSIBLE_USER_ID ?? null;
   const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? '';
   const ttlHours = config.ttlHours ?? parseInt(process.env.JOB_TTL_HOURS ?? '24', 10);
+  const rateLimitMax = config.rateLimitMax
+    ?? parseInt(process.env.RATE_LIMIT_MAX ?? '20', 10);
+  const rateLimitWindowMs = config.rateLimitWindowMs
+    ?? parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? '60000', 10);
 
   const app = express();
 
@@ -103,6 +127,7 @@ export function createApp(config = {}) {
 
   const jobs = config.jobs ?? createJobsStore({ redisUrl, ttlHours });
   const agentConfig = config.agentConfig ?? {};
+  const uploadRateLimit = createRateLimiter({ windowMs: rateLimitWindowMs, max: rateLimitMax });
 
   // Track in-flight processJob calls so graceful shutdown can wait for them.
   let activeJobs = 0;
@@ -140,7 +165,7 @@ export function createApp(config = {}) {
   });
 
   // POST /upload
-  app.post('/upload', requireAuth, (req, res) => {
+  app.post('/upload', requireAuth, uploadRateLimit, (req, res) => {
     upload.array('files[]')(req, res, async (err) => {
       if (err) {
         if (err.code === 'LIMIT_FILE_SIZE') {
@@ -314,11 +339,11 @@ async function processJob(jobId, jobs, agentConfig = {}) {
         : result;
       fileEntry.status = 'done';
     } catch (err) {
-      console.error(`[processJob] error processing file ${fileEntry.name} (job ${jobId}):`, err);
+      // Redact any Bearer token before the message is logged, persisted, or returned.
+      const safeMsg = redactToken(String(err?.message ?? 'agent error'));
+      console.error(`[processJob] error processing file ${fileEntry.name} (job ${jobId}): ${safeMsg}`);
       fileEntry.status = 'error';
-      // Truncate the message before it is persisted/returned. Deeper secret redaction
-      // is tracked in the security hardening issue.
-      fileEntry.error = String(err?.message ?? 'agent error').slice(0, MAX_ERROR_CHARS);
+      fileEntry.error = safeMsg.slice(0, MAX_ERROR_CHARS);
     }
     await jobs.set(jobId, job);
   }
