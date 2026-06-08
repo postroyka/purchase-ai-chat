@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { readFileSync, writeFileSync, rmSync, mkdtempSync, existsSync } from 'node:fs';
+import { tmpdir, platform } from 'node:os';
+import { join, dirname, delimiter, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -21,7 +21,9 @@ const SIGKILL_GRACE_MS = 5_000;
 // Env vars that claude CLI needs — subset of process.env (principle of least privilege).
 const AGENT_ENV_KEYS = [
   'PATH', 'HOME', 'USER', 'TMPDIR', 'TEMP', 'TMP',
-  'ANTHROPIC_API_KEY',        // required for API access
+  // Windows profile dirs — claude stores its auth session under %APPDATA%\Claude\
+  'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH',
+  'ANTHROPIC_API_KEY',        // required for API access (alternative to session auth)
   'CLAUDE_CODE_USE_BEDROCK',  // optional Bedrock provider
   'CLAUDE_CODE_USE_VERTEX',   // optional Vertex provider
   'AWS_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
@@ -141,6 +143,75 @@ function buildAgentEnv() {
   return env;
 }
 
+/**
+ * Resolve how to spawn the claude CLI, accounting for Windows.
+ *
+ * On Linux/macOS `claude` is a plain executable — spawn it directly.
+ *
+ * On Windows `claude` is installed by npm as a `claude.cmd` batch shim.
+ * Node ≥18.20/20.12 refuses to spawn `.cmd`/`.bat` without `shell: true`
+ * (CVE-2024-27980), and using a shell would (a) re-interpret cmd.exe
+ * metacharacters (`| > % &`) present in the markdown system prompt and
+ * (b) hit the 8191-char cmd.exe line limit. So instead we resolve the
+ * real JS entrypoint the shim points to and run it via `node` directly —
+ * no shell, no quoting hazards, no line-length cap.
+ *
+ * @param {string} claudeBin - configured binary name/path
+ * @returns {{ command: string, prefixArgs: string[] }}
+ */
+export function resolveClaudeSpawn(claudeBin) {
+  // Explicit JS entrypoint (e.g. CLAUDE_CODE_BIN=.../cli.js) → run with node.
+  if (/\.(c|m)?js$/i.test(claudeBin)) {
+    return { command: process.execPath, prefixArgs: [claudeBin] };
+  }
+
+  if (platform() !== 'win32') {
+    return { command: claudeBin, prefixArgs: [] };
+  }
+
+  // On Windows, resolve the .cmd shim and extract the JS entrypoint it runs.
+  const cmdPath = findWindowsCmdShim(claudeBin);
+  if (cmdPath) {
+    const jsEntry = extractCmdShimTarget(cmdPath);
+    if (jsEntry && existsSync(jsEntry)) {
+      return { command: process.execPath, prefixArgs: [jsEntry] };
+    }
+  }
+
+  // Fallback: let spawn try the bin as-is (works if it's a real .exe).
+  return { command: claudeBin, prefixArgs: [] };
+}
+
+/** Locate `<bin>.cmd` on Windows: honor an absolute path, else scan PATH. */
+function findWindowsCmdShim(claudeBin) {
+  const withCmd = /\.cmd$/i.test(claudeBin) ? claudeBin : `${claudeBin}.cmd`;
+  if (isAbsolute(withCmd)) return existsSync(withCmd) ? withCmd : null;
+
+  const base = /\.cmd$/i.test(claudeBin) ? claudeBin : `${claudeBin}.cmd`;
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, base);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Parse an npm `.cmd` shim to find the JS file it launches.
+ * npm shims reference the target relative to the shim dir via `%~dp0` / `%dp0%`,
+ * e.g. `"%~dp0\node_modules\@anthropic-ai\claude-code\cli.js"`.
+ *
+ * @param {string} cmdPath
+ * @returns {string|null} absolute path to the JS entrypoint, or null
+ */
+function extractCmdShimTarget(cmdPath) {
+  let contents;
+  try { contents = readFileSync(cmdPath, 'utf8'); } catch { return null; }
+  const match = contents.match(/%[~]?dp0%?\\?([^"'\s]+\.(?:c|m)?js)/i);
+  if (!match) return null;
+  return join(dirname(cmdPath), match[1]);
+}
+
 function spawnClaude({
   spawnFn, claudeBin, model, systemPrompt, userMessage,
   mcpConfigPath, timeoutMs, jobId,
@@ -162,8 +233,12 @@ function spawnClaude({
     if (model) args.push('--model', model);
     args.push(userMessage);
 
+    // On Windows, claude is a .cmd shim that node can't spawn directly — resolve
+    // the real JS entrypoint and run it via node. No-op on Linux/macOS.
+    const { command, prefixArgs } = resolveClaudeSpawn(claudeBin);
+
     const t0 = Date.now();
-    const proc = spawnFn(claudeBin, args, { env: buildAgentEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawnFn(command, [...prefixArgs, ...args], { env: buildAgentEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
     // claude CLI 2.x waits ~3s for stdin when not attached to a TTY, then exits with code 1.
     // Closing stdin immediately signals EOF so the CLI proceeds without waiting.
     proc.stdin.end();
