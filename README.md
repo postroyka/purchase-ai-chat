@@ -229,4 +229,4 @@ make prod-up               # запустить app + mcp + redis + watchtower (
 
 ---
 
-*Last reviewed: 2026-06-08 (PR #46 — compose project isolation procure-ai/procure-proxy + Watchtower scope; agent-runner Windows hardening & win32 tests)*
+*Last reviewed: 2026-06-08 (PR #49 — security: rate-limit /upload, agent cwd scoping, redactToken applied to job errors)*
