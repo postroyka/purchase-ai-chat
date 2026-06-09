@@ -1,8 +1,8 @@
 # Procure AI
 
-Автоматическое создание сделок в Bitrix24 из прайс-листов поставщиков (PDF, XLSX, DOCX).
+Автоматическое создание сделок в Bitrix24 из прайс-листов поставщиков (PDF, XLSX/XLS, DOCX, фото/скан).
 
-Пользователь загружает файл → агент на базе Claude Code извлекает данные → создаёт сделку в воронке «Закупки» (BYN, НДС 20%).
+Пользователь загружает файл → backend извлекает текст (PDF/изображения — OCR, office — python-хелпер) → агент на базе Claude Code извлекает данные из текста → создаёт сделку в воронке «Закупки» (BYN, НДС 20%).
 
 ## Архитектура
 
@@ -59,7 +59,9 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `JOB_TTL_HOURS` | app | — | Время хранения задач в Redis (по умолчанию: 24) |
 | `MAX_FILE_SIZE_MB` | app | — | Макс. размер файла (по умолчанию: 20) |
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
-| `ALLOWED_EXTENSIONS` | app | — | Разрешённые расширения (по умолчанию: `pdf,xlsx,docx`) |
+| `MAX_CONCURRENT_JOBS` | app | — | Лимит одновременных заданий; сверх — `429` (по умолчанию: `2` — с OCR не выше из-за RAM) |
+| `ALLOWED_EXTENSIONS` | app | — | Разрешённые расширения (по умолчанию: `pdf,xlsx,docx,xls,jpg,jpeg,png`) |
+| `OCR_LANGS` | app | — | Языки OCR (tesseract) для сканов/фото (по умолчанию: `rus+eng+bel`) |
 | `RATE_LIMIT_MAX` | app | — | Лимит запросов `/upload` на токен в окне (по умолчанию: `20`, `0` = выкл.) |
 | `RATE_LIMIT_WINDOW_MS` | app | — | Окно rate-limit в мс (по умолчанию: `60000`) |
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
@@ -72,8 +74,13 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 ¹ Обязательны при деплое за общим nginx-proxy (прод). Для локального запуска не нужны.
 ² Обязателен для реальной работы агента. В Docker подписочная сессия `claude login` не работает, поэтому ключ задаётся явно в `.env.prod`. Локально (вне Docker) можно вместо него залогиниться интерактивно (`claude login`).
 
-> **AI-провайдер.** Текущая реализация агента использует **Claude Code** (`CLAUDE_CODE_BIN`,
-> `ANTHROPIC_API_KEY`). Переменные `DEEPSEEK_*` из ТЗ/брифа в коде пока не задействованы.
+> **AI-провайдер.** Агент работает на **Claude Code** CLI (`CLAUDE_CODE_BIN`). Провайдер модели
+> задаётся переменными окружения: Anthropic (`ANTHROPIC_API_KEY`) либо **DeepSeek**
+> (`ANTHROPIC_BASE_URL` → `api.deepseek.com/anthropic`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`).
+> В контейнере они задаются через `.env.prod` (проброшены allowlist `AGENT_ENV_KEYS`); для ручного
+> CLI на хосте — через `~/.claude/settings.json` (см.
+> [Установка Claude Code CLI на сервере](#установка-claude-code-cli-на-сервере-провайдер-deepseek)).
+> Отдельные `DEEPSEEK_*` переменные из ТЗ/брифа в коде по-прежнему не задействованы.
 >
 > **`B24_CONTRACTS_API_URL` (поиск договоров)** указывает на **внешний** REST-контроллер
 > на стороне Bitrix24 BUS — это не каталог в этом репозитории, а отдельный сервис заказчика.
@@ -154,12 +161,12 @@ git subtree pull --prefix=mcp https://github.com/bitrix24/templates-mcp main --s
 
 **Откат образа на предыдущую версию:**
 ```bash
-# На сервере — найти нужный sha-тег в GHCR и подставить в compose
-# Пример: откат app на конкретный коммит
-docker pull ghcr.io/postroyka/procure-ai-app:sha-<commit-sha>
-# Отредактировать .env.prod: добавить IMAGE_TAG=sha-<commit-sha>
-# Или напрямую в docker-compose.prod.yml заменить :latest на нужный тег
+# compose читает тег из ${APP_IMAGE_TAG:-latest} / ${MCP_IMAGE_TAG:-latest}.
+# Закрепить нужный sha-тег из GHCR через .env.prod:
+echo "APP_IMAGE_TAG=sha-<commit-sha>" >> .env.prod   # при необходимости и MCP_IMAGE_TAG
 make prod-redeploy
+# Watchtower будет держать закреплённый sha (он не двигается). Вернуть авто-обновление —
+# убрать строку APP_IMAGE_TAG из .env.prod и снова `make prod-redeploy`.
 ```
 
 ## Разработка
@@ -171,10 +178,12 @@ corepack enable  # один раз
 ```
 
 ```bash
-cd backend && pnpm install && pnpm dev   # :3000
-cd mcp     && pnpm install && pnpm dev   # :3000 (internal)
-cd ui      && pnpm install && pnpm dev   # :3001 (proxy /upload /job → backend :3000)
+cd backend && pnpm install && pnpm dev              # :3000
+cd mcp     && pnpm install && PORT=3002 pnpm dev     # :3002 (отдельно от backend :3000 и UI :3001)
+cd ui      && pnpm install && pnpm dev               # :3001 (проксирует /upload /job → backend :3000)
 ```
+> Backend ходит в MCP по `MCP_SERVER_URL` (см. `backend/.env.example` → `http://localhost:3002/mcp`).
+> Для большинства задач MCP локально не нужен (инструменты — заглушки), его можно не запускать.
 
 > Backend-агент запускает Claude Code CLI на **Linux, macOS и Windows**: на Windows
 > `claude` — это `.cmd`-шим, поэтому агент находит его JS-точку входа и запускает через
@@ -222,6 +231,97 @@ make prod-up               # запустить app + mcp + redis + watchtower (
 Обновление файлов на сервере — тем же `curl -fsSLO`, без `git pull`.
 Принудительный редеплой без ожидания Watchtower — `make prod-redeploy`.
 
+### Установка Claude Code CLI на сервере (провайдер DeepSeek)
+
+Агент (`backend/agent-runner.js`) запускает **Claude Code CLI** (`CLAUDE_CODE_BIN`, по умолчанию
+`claude` из `PATH`). На сервере CLI ставится нативным бинарником и переключается на провайдера
+**DeepSeek** через `~/.claude/settings.json` (Anthropic-совместимый endpoint).
+
+**1. Установка бинарника** (Ubuntu, `linux-x64`):
+
+```bash
+BUCKET="https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
+VER=$(curl -fsSL "$BUCKET/latest")
+mkdir -p ~/.local/bin
+curl -fsSL -o ~/.local/bin/claude "$BUCKET/$VER/linux-x64/claude"
+chmod +x ~/.local/bin/claude
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+claude --version   # → 2.1.168 (Claude Code)
+```
+
+> Для ARM-сервера замените `linux-x64` на `linux-arm64`. Папку `~/.local/bin` установщик
+> мог создать сам — `mkdir -p` оставлен на всякий случай.
+>
+> Альтернатива с проверкой целостности: `npm install -g @anthropic-ai/claude-code@2.1.168`
+> (npm проверяет integrity по lockfile) — этот же способ используется в `Dockerfile.app`.
+> При прямом скачивании бинарника сверьте контрольную сумму, если для релиза публикуется манифест.
+
+**2. Конфиг `~/.claude/settings.json`** (папку `~/.claude` мог создать установщик — `mkdir -p` подстрахует):
+
+```bash
+mkdir -p ~/.claude
+cat > ~/.claude/settings.json << 'EOF'
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "ВСТАВЬ_СЮДА_СВОЙ_DEEPSEEK_КЛЮЧ",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+  }
+}
+EOF
+```
+
+> ⚠️ Кавычки вокруг `'EOF'` (одинарные) обязательны — иначе шелл попытается раскрыть
+> `$`-символы и скобки внутри. После создания вставьте реальный ключ вместо
+> `ВСТАВЬ_СЮДА_СВОЙ_DEEPSEEK_КЛЮЧ` (например, `nano ~/.claude/settings.json`); ключ берётся
+> на platform.deepseek.com. **Реальный ключ не коммитить** — он живёт только на сервере.
+
+> 🔒 Ограничьте доступ к файлу с ключом и не дайте ему попасть в git:
+> ```bash
+> chmod 600 ~/.claude/settings.json
+> ```
+> Если на сервере есть git-репозиторий, добавьте `.claude/` в `~/.gitignore_global`.
+
+Проверка валидности JSON (распечаталось без ошибки → формат ок):
+
+```bash
+cat ~/.claude/settings.json | python3 -m json.tool
+```
+
+**3. Проверка связки.** Быстрый headless-тест — сразу видно, доходит ли запрос до DeepSeek:
+
+```bash
+claude -p "ответь одним словом: работает"
+```
+
+Пришёл текст — связка живая. `401/403` — неверный ключ; таймаут — сервер не достаёт
+`api.deepseek.com`. Дальше интерактивно:
+
+```bash
+claude
+```
+
+Внутри сессии выполнить `/status` и проверить два поля: `base URL` = `api.deepseek.com/anthropic`,
+модель = `deepseek-v4-pro[1m]`. Если осталось что-то Anthropic'овское — `settings.json` не
+подхватился (проверьте путь и валидность JSON).
+
+> При первом запуске `claude` может предложить логин/онбординг через браузер. Поскольку
+> `ANTHROPIC_AUTH_TOKEN` задан, OAuth не нужен — пропускайте (Esc / «уже есть ключ»), CLI
+> работает по токену из конфига.
+
+> ⚠️ **Хост vs контейнер.** Шаги выше настраивают `claude` CLI на самом сервере (хосте) — для
+> операторских задач и ручной проверки. Прод-агент работает в контейнере `procure-app` со своим
+> бинарником Claude Code и читает провайдера из переменных окружения, а не из хостового
+> `~/.claude/settings.json`. Чтобы контейнер ходил в DeepSeek, задайте в `.env.prod`
+> `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL` — они проброшены в агент через
+> allowlist `AGENT_ENV_KEYS` (`backend/agent-runner.js`); см. блок «AI — Claude Code Agent» в `.env.prod.example`.
+
 ## Документация
 
 - [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) — требования и бизнес-правила  
@@ -230,4 +330,4 @@ make prod-up               # запустить app + mcp + redis + watchtower (
 
 ---
 
-*Last reviewed: 2026-06-08 (PR #47 — server e2e test script, docs accuracy fixes; PR #49 — security: rate-limit /upload, agent cwd scoping, redactToken)*
+*Last reviewed: 2026-06-09 (PR #53 — серверное извлечение текста: OCR + office (XLS/JPG/PNG), DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek-провайдер; PR #47/#49)*

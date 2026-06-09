@@ -95,7 +95,7 @@ async function pollJob(appInstance, jobId, maxMs = 5000) {
 const app = createApp({
   token: TOKEN,
   uploadDir: UPLOAD_DIR,
-  agentConfig: { spawnFn: makeMockAgentSpawn() },
+  agentConfig: { spawnFn: makeMockAgentSpawn(), extractFn: async () => null },
   rateLimitMax: 0, // disable rate limiting for the shared app — exercised separately below
 });
 const auth = () => `Bearer ${TOKEN}`;
@@ -120,6 +120,14 @@ function makeMinimalZipBuffer() {
     0x00, 0x00, 0x00, 0x00, // central dir offset
     0x00, 0x00,             // comment length
   ]);
+}
+
+// Minimal OLE2 / Compound File Binary header — file-type detects this as
+// application/x-cfb, the signature used for legacy .xls.
+function makeMinimalCfbBuffer() {
+  const b = Buffer.alloc(512, 0);
+  Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(b, 0);
+  return b;
 }
 
 // Poll job status until terminal state or timeout.
@@ -229,6 +237,203 @@ describe('Auth middleware', () => {
       .get('/job/some-id/status')
       .set('Authorization', 'Bearer wrong-token');
     expect(res.status).toBe(401);
+  });
+});
+
+// ── Basic auth (public page) ──────────────────────────────────────────────────
+
+describe('Basic auth (public page)', () => {
+  const BASIC_PASS = 'super-secret-page-pass';
+  const basicHeader = (user, pass) =>
+    `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+
+  // App with BOTH a Bearer token and Basic page credentials configured.
+  const dualAuthApp = createApp({
+    token: TOKEN,
+    uploadDir: UPLOAD_DIR,
+    basicAuthUser: 'procure',
+    basicAuthPass: BASIC_PASS,
+  });
+
+  it('accepts a valid Basic credential on /job/:id/status (dual auth)', async () => {
+    const res = await request(dualAuthApp)
+      .get('/job/nope/status')
+      .set('Authorization', basicHeader('procure', BASIC_PASS));
+    expect(res.status).toBe(404); // auth passed → job simply not found
+  });
+
+  it('still accepts the Bearer token when Basic is also configured', async () => {
+    const res = await request(dualAuthApp)
+      .get('/job/nope/status')
+      .set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects a wrong Basic password with 401', async () => {
+    const res = await request(dualAuthApp)
+      .get('/job/nope/status')
+      .set('Authorization', basicHeader('procure', 'wrong'));
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a wrong Basic user with 401', async () => {
+    const res = await request(dualAuthApp)
+      .get('/job/nope/status')
+      .set('Authorization', basicHeader('intruder', BASIC_PASS));
+    expect(res.status).toBe(401);
+  });
+
+  it('guards the served UI with Basic auth (401 + WWW-Authenticate, then 200)', async () => {
+    const uiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-public-'));
+    fs.writeFileSync(path.join(uiDir, 'index.html'), '<html>ok</html>');
+    try {
+      const pageApp = createApp({
+        token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: BASIC_PASS, uiPublicDir: uiDir,
+      });
+      const noauth = await request(pageApp).get('/');
+      expect(noauth.status).toBe(401);
+      expect(noauth.headers['www-authenticate']).toMatch(/Basic/);
+
+      const ok = await request(pageApp)
+        .get('/')
+        .set('Authorization', basicHeader('procure', BASIC_PASS));
+      expect(ok.status).toBe(200);
+      expect(ok.text).toContain('ok');
+    } finally {
+      fs.rmSync(uiDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 503 for the UI when the public page is enabled but the password is unset', async () => {
+    const uiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-public-'));
+    fs.writeFileSync(path.join(uiDir, 'index.html'), '<html>ok</html>');
+    try {
+      const pageApp = createApp({
+        token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: '', uiPublicDir: uiDir,
+      });
+      const res = await request(pageApp).get('/');
+      expect(res.status).toBe(503);
+    } finally {
+      fs.rmSync(uiDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── Concurrency cap & store errors ───────────────────────────────────────────
+
+describe('Concurrency cap & store errors', () => {
+  it('returns 429 when the concurrency cap is reached', async () => {
+    const busy = createApp({ token: TOKEN, uploadDir: UPLOAD_DIR, maxConcurrentJobs: 0 });
+    const res = await request(busy).post('/upload').set('Authorization', auth());
+    expect(res.status).toBe(429);
+  });
+
+  it('returns 503 on /job/:id/status when the store throws', async () => {
+    const brokenJobs = {
+      get: async () => { throw new Error('ECONNREFUSED'); },
+      set: async () => {},
+      ping: async () => 'PONG',
+    };
+    const a = createApp({ token: TOKEN, uploadDir: UPLOAD_DIR, jobs: brokenJobs });
+    const res = await request(a).get('/job/x/status').set('Authorization', auth());
+    expect(res.status).toBe(503);
+  });
+
+  it('returns 503 on /upload when persisting the job fails', async () => {
+    const brokenJobs = {
+      get: async () => null,
+      set: async () => { throw new Error('ECONNREFUSED'); },
+      ping: async () => 'PONG',
+    };
+    const a = createApp({
+      token: TOKEN, uploadDir: UPLOAD_DIR, jobs: brokenJobs,
+      agentConfig: { spawnFn: makeMockAgentSpawn() },
+    });
+    const res = await request(a)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeValidPdfBuffer(), { filename: 'invoice.pdf' });
+    expect(res.status).toBe(503);
+  });
+
+  it('stores files under a generated name, exposing only the basename to the UI', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeValidPdfBuffer(), { filename: '../../evil name.pdf' });
+    expect(res.status).toBe(201);
+    expect(res.body.files[0].name).toBe('evil name.pdf'); // basename only, no traversal
+  });
+});
+
+// ── File type validation (regression) ────────────────────────────────────────
+
+describe('File type validation (regression)', () => {
+  it('accepts a real legacy .xls (OLE2/CFB) — now a supported format', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeMinimalCfbBuffer(), { filename: 'prices.xls' });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects a non-OLE2 file disguised as .xls (content ≠ extension)', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', Buffer.from('not really excel'), { filename: 'fake.xls' });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts a JPEG image (OCR path)', async () => {
+    // Minimal JPEG: SOI + APP0/JFIF header → file-type detects image/jpeg.
+    const jpeg = Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+      0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xd9,
+    ]);
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', jpeg, { filename: 'scan.jpg' });
+    expect(res.status).toBe(201);
+  });
+
+  it('decodes Cyrillic filenames (no mojibake in status) — issue #54', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeValidPdfBuffer(), { filename: 'Счёт-тест.pdf' });
+    expect(res.status).toBe(201);
+    expect(res.body.files[0].name).toBe('Счёт-тест.pdf');
+  });
+
+  it('rejects an OLE2/CFB file with a non-.xls extension (content ≠ extension)', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeMinimalCfbBuffer(), { filename: 'evil.pdf' });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts a PNG image (OCR path)', async () => {
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
+    ]);
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', png, { filename: 'scan.png' });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects a ZIP payload disguised as .pdf (MIME ≠ extension)', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeMinimalZipBuffer(), { filename: 'evil.pdf' });
+    expect(res.status).toBe(400);
   });
 });
 

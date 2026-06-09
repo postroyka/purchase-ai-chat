@@ -6,7 +6,7 @@
 
 ## Роль
 
-Инженер реализует проект автоматизации обработки предложений поставщиков для ООО «Строительный Берег» (`postroyka.by`). Стек — Bitrix24 + Node.js + Claude Code (headless) + DeepSeek *(DeepSeek в текущей реализации не задействован — агент работает на Claude Code)*. Работаем строго по ТЗ. Инкрементальные коммиты, прод не трогаем без явного подтверждения.
+Инженер реализует проект автоматизации обработки предложений поставщиков для ООО «Строительный Берег» (`postroyka.by`). Стек — Bitrix24 + Node.js + Claude Code (headless) + DeepSeek *(DeepSeek подключён как модель-провайдер для Claude Code CLI на сервере — `~/.claude/settings.json`, см. «Статус инфраструктуры»; отдельные `DEEPSEEK_*` переменные из ТЗ в коде не используются)*. Работаем строго по ТЗ. Инкрементальные коммиты, прод не трогаем без явного подтверждения.
 
 ---
 
@@ -18,7 +18,7 @@
 |---|---|---|
 | UI | app | `bitrix24/templates-dashboard` поверх Bitrix24 UI Kit |
 | Backend | app | Node.js REST API, оркестрация `claude code`, журнал заданий, cron-cleanup |
-| AI | app | `claude code` headless, промпт из `prompts/main.md` (DeepSeek из ТЗ пока не используется) |
+| AI | app | `claude code` headless, промпт из `prompts/main.md` (движок — Claude Code CLI; провайдер модели — Anthropic или DeepSeek через env `ANTHROPIC_*` в контейнере, см. README; `DEEPSEEK_*` из ТЗ в коде не используются) |
 | MCP | mcp | Собственный MCP-сервер на базе `bitrix24/templates-mcp` |
 
 ### Docker — два контейнера
@@ -44,7 +44,7 @@
   - В Б24: налог **20%**, флаг **«НДС включён в цену» = Y**, цена за 1 из документа, количество.
   - Это намеренно, не баг — не менять.
 - **Валюта: только BYN.** Не-BYN → сделка не создаётся, причина в отчёте. Backend проверяет только формат/размер.
-- **Допустимые форматы: PDF, XLSX, DOCX.** Legacy XLS не поддерживаем.
+- **Допустимые форматы: PDF, XLSX, DOCX, XLS, JPG/PNG.** _(Обновлено 2026-06-09: к ТЗ добавлены `.xls` и фото/скан. Текст извлекается на сервере — PDF/изображения через OCR (tesseract), office через python-хелпер; структуру из текста по-прежнему достаёт агент-LLM.)_
 - **Матчинг товара:** только активный, только родительский. Несколько найдено → активный с минимальным ID. Два артикула поставщика на один товар (R-12) → один хранится; второй не находим → предупреждение, позиция не привязывается, ручная обработка.
 - **Поиск поставщика** — по УНП. Российских (ИНН+КПП без УНП) не ищем.
 - **Поиск договора** — через контроллер; точные критерии уточняются при реализации.
@@ -69,7 +69,9 @@ procure-ai/
 ├── prompts/
 │   └── main.md                     # промпт извлечения (входит в app-образ)
 ├── backend/                        # Node.js: /upload, оркестрация, журнал заданий, cron cleanup
-│   └── agent-runner.js             #   spawn Claude Code CLI, MCP-конфиг, таймаут, парсинг ответа
+│   ├── agent-runner.js             #   spawn Claude Code CLI, MCP-конфиг, таймаут, парсинг ответа
+│   ├── extract-text.js             #   файл→текст: pdftotext/OCR (poppler+tesseract); office→doc_to_text.py
+│   └── doc_to_text.py              #   xlsx/xls/docx → текст (openpyxl/xlrd/python-docx)
 ├── mcp/                            # MCP-сервер: find_supplier / find_contract / find_product / create_deal
 │                                   # (b24-controller — ВНЕШНИЙ сервис заказчика, в этом репо его нет;
 │                                   #  адрес задаётся через B24_CONTRACTS_API_URL)
@@ -93,11 +95,23 @@ procure-ai/
 | `B24_CONTRACTS_API_URL` | внешний REST-контроллер договоров (сервис заказчика, не в этом репо) |
 | `B24_DEAL_CATEGORY_ID` | `1` |
 | `B24_DEAL_DEFAULT_STAGE_ID` | `C1:NEW` |
-| `DEEPSEEK_*` | из ТЗ; **в текущей реализации не используется** — агент работает на Claude Code |
+| `DEEPSEEK_*` | из ТЗ; в коде не используются. DeepSeek подключён как провайдер модели через Claude Code (`~/.claude/settings.json`, `ANTHROPIC_BASE_URL`), а не через эти переменные |
 | `PUBLIC_PAGE_ENABLED` | `true` (демо) |
 | `PUBLIC_PAGE_BASIC_AUTH_USER` | `procure` |
 | `PUBLIC_PAGE_BASIC_AUTH_PASS` | только на сервере |
 | `PUBLIC_PAGE_RESPONSIBLE_USER_ID` | `20` |
+
+---
+
+## Статус инфраструктуры
+
+- ✅ **2026-06-08 — Claude Code CLI + DeepSeek.** На сервере установлен Claude Code CLI
+  (нативный бинарник, v2.1.168) и переключён на провайдера **DeepSeek** через
+  `~/.claude/settings.json` (`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`,
+  модель `deepseek-v4-pro[1m]`). Пошаговая инструкция — в `README.md`, раздел
+  «Установка Claude Code CLI на сервере (провайдер DeepSeek)». На хосте провайдер задаётся через
+  `~/.claude/settings.json`; прод-агент в контейнере — через `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/
+  `ANTHROPIC_MODEL` в `.env.prod` (проброшены allowlist `AGENT_ENV_KEYS` в `backend/agent-runner.js`).
 
 ---
 

@@ -12,7 +12,6 @@ export const useB24 = () => {
   type B24HelperData = ReturnType<typeof getB24Helper>
 
   function buildLogger(loggerTitle?: string): LoggerInterface {
-    // @todo fix this
     const devMode = typeof import.meta !== 'undefined' && import.meta.env?.DEV
     return LoggerFactory.createForBrowser(loggerTitle ?? 'dashBoard', devMode)
   }
@@ -90,7 +89,9 @@ export const useB24 = () => {
       $b24Helper = getB24Helper()
       return set(b24)
     } catch {
-      // set(undefined)
+      // Намеренно проглатываем: вне фрейма Bitrix24 (например, публичная страница
+      // загрузки) initializeB24Frame бросает SdkError — это ожидаемый сценарий, не сбой.
+      // Глушим, чтобы standalone-режим работал без B24; состояние остаётся 'undefined'.
     }
 
     return new Result()

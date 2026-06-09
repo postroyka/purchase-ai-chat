@@ -1,4 +1,4 @@
-# purchase-ai-chat
+# procure-ai
 
 ## Workflow Rules
 
