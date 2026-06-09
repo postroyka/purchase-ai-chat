@@ -25,6 +25,16 @@ FROM node:22.16.0-alpine3.22
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code@2.1.168
 
+# Document text extraction deps (used by backend/extract-text.js + doc_to_text.py):
+#  - poppler-utils: pdftotext/pdftoppm for PDF
+#  - tesseract-ocr + rus/eng/bel: OCR for scans and JPG/PNG
+#  - python3 + openpyxl/xlrd/python-docx: xlsx/xls/docx (safe maintained libs)
+RUN apk add --no-cache \
+      poppler-utils \
+      tesseract-ocr tesseract-ocr-data-rus tesseract-ocr-data-eng tesseract-ocr-data-bel \
+      python3 py3-pip \
+ && pip install --no-cache-dir --break-system-packages openpyxl xlrd python-docx
+
 WORKDIR /app
 
 # Backend

@@ -1,19 +1,28 @@
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, extname } from 'node:path';
+import { join, extname, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-// Below this many non-whitespace chars we treat the PDF as having no real text
-// layer (i.e. a scan) and fall back to OCR.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// Python helper that reads office formats with maintained libs (openpyxl/xlrd/python-docx),
+// avoiding the unpatched-in-npm SheetJS CVEs on untrusted uploads.
+const DOC_PY = join(__dirname, 'doc_to_text.py');
+
+// Below this many non-whitespace chars we treat a PDF as having no real text
+// layer (a scan) and fall back to OCR.
 const MIN_TEXT_CHARS = 24;
-// Don't OCR unbounded scans — cap pages and total characters fed to the agent.
+// Bound scans: cap pages OCR'd and total characters fed to the agent.
 const MAX_OCR_PAGES = 15;
 const MAX_TEXT_CHARS = 100_000;
 // tesseract language packs that must be installed in the image (Dockerfile.app).
-const OCR_LANGS = process.env.OCR_LANGS || 'rus+eng';
-// Hard cap per external process so a stuck pdftotext/tesseract can't wedge a job.
+const OCR_LANGS = process.env.OCR_LANGS || 'rus+eng+bel';
+// Hard cap per external process so a stuck pdftotext/tesseract/python can't wedge a job.
 const CMD_TIMEOUT_MS = 120_000;
 const MAX_BUFFER = 16 * 1024 * 1024;
+
+const OFFICE_EXTS = new Set(['.xlsx', '.xls', '.docx']);
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg']);
 
 /** @param {string} s @returns {number} length ignoring whitespace */
 function meaningfulLen(s) {
@@ -21,9 +30,9 @@ function meaningfulLen(s) {
 }
 
 /**
- * Spawn a process and collect stdout. Async (does NOT block the event loop —
- * the backend keeps serving /health and status polls while OCR runs).
- * Rejects on non-zero exit, spawn error (e.g. binary missing), or timeout.
+ * Spawn a process and collect stdout. Async — does NOT block the event loop, so the
+ * backend keeps serving /health and status polls while extraction/OCR runs.
+ * Rejects on non-zero exit, spawn error (binary missing), or timeout.
  *
  * @param {string} cmd @param {string[]} args
  * @returns {Promise<Buffer>}
@@ -50,20 +59,41 @@ function run(cmd, args) {
 }
 
 /**
- * Extract document text server-side so the agent works on plain text, regardless
- * of whether the model can read PDFs/images. Currently handles PDF:
- *   1) text layer via `pdftotext`;
- *   2) if absent (scanned image) → OCR via `pdftoppm` + `tesseract`.
- *
- * Returns null for formats not handled here (the agent reads them via FILE_PATH).
+ * Extract document text server-side so the agent works on plain text regardless of
+ * the model's PDF/vision support. Dispatch by extension:
+ *   .pdf            → pdftotext, then OCR fallback for scans;
+ *   .png/.jpg/.jpeg → tesseract OCR;
+ *   .xlsx/.xls/.docx→ Python helper (openpyxl/xlrd/python-docx).
+ * Returns null for anything else (the agent reads it via FILE_PATH) or on failure.
  *
  * @param {string} filePath
- * @returns {Promise<{ text: string, method: 'pdftotext'|'ocr' }|null>}
+ * @returns {Promise<{ text: string, method: 'pdftotext'|'ocr'|'office' }|null>}
  */
 export async function extractDocumentText(filePath) {
-  if (extname(filePath).toLowerCase() !== '.pdf') return null;
+  const ext = extname(filePath).toLowerCase();
 
-  // 1) Embedded text layer.
+  if (ext === '.pdf') return extractPdf(filePath);
+
+  if (IMAGE_EXTS.has(ext)) {
+    const text = await ocrImage(filePath);
+    return text ? { text: text.slice(0, MAX_TEXT_CHARS), method: 'ocr' } : null;
+  }
+
+  if (OFFICE_EXTS.has(ext)) {
+    try {
+      const out = await run('python3', [DOC_PY, filePath]);
+      const text = out.toString('utf8');
+      return meaningfulLen(text) > 0 ? { text: text.slice(0, MAX_TEXT_CHARS), method: 'office' } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/** PDF: embedded text layer, else OCR. @returns {Promise<{text,method}|null>} */
+async function extractPdf(filePath) {
   try {
     const out = await run('pdftotext', ['-layout', '-q', filePath, '-']);
     const text = out.toString('utf8');
@@ -73,17 +103,22 @@ export async function extractDocumentText(filePath) {
   } catch {
     // pdftotext missing or failed → try OCR.
   }
-
-  // 2) OCR fallback for scanned PDFs.
   const text = await ocrPdf(filePath);
   return text ? { text: text.slice(0, MAX_TEXT_CHARS), method: 'ocr' } : null;
 }
 
-/**
- * Rasterise up to MAX_OCR_PAGES pages to PNG and OCR each with tesseract.
- * @param {string} filePath
- * @returns {Promise<string|null>}
- */
+/** OCR a single image with tesseract. @returns {Promise<string|null>} */
+async function ocrImage(filePath) {
+  try {
+    const out = await run('tesseract', [filePath, 'stdout', '-l', OCR_LANGS]);
+    const text = out.toString('utf8');
+    return meaningfulLen(text) > 0 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Rasterise up to MAX_OCR_PAGES pages to PNG and OCR each. @returns {Promise<string|null>} */
 async function ocrPdf(filePath) {
   let dir;
   try {

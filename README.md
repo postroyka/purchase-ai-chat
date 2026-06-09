@@ -1,6 +1,6 @@
 # Procure AI
 
-Автоматическое создание сделок в Bitrix24 из прайс-листов поставщиков (PDF, XLSX, DOCX).
+Автоматическое создание сделок в Bitrix24 из прайс-листов поставщиков (PDF, XLSX/XLS, DOCX, фото/скан).
 
 Пользователь загружает файл → агент на базе Claude Code извлекает данные → создаёт сделку в воронке «Закупки» (BYN, НДС 20%).
 
@@ -60,7 +60,8 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `MAX_FILE_SIZE_MB` | app | — | Макс. размер файла (по умолчанию: 20) |
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
 | `MAX_CONCURRENT_JOBS` | app | — | Лимит одновременных заданий; сверх — `429` (по умолчанию: `4`) |
-| `ALLOWED_EXTENSIONS` | app | — | Разрешённые расширения (по умолчанию: `pdf,xlsx,docx`) |
+| `ALLOWED_EXTENSIONS` | app | — | Разрешённые расширения (по умолчанию: `pdf,xlsx,docx,xls,jpg,jpeg,png`) |
+| `OCR_LANGS` | app | — | Языки OCR (tesseract) для сканов/фото (по умолчанию: `rus+eng+bel`) |
 | `RATE_LIMIT_MAX` | app | — | Лимит запросов `/upload` на токен в окне (по умолчанию: `20`, `0` = выкл.) |
 | `RATE_LIMIT_WINDOW_MS` | app | — | Окно rate-limit в мс (по умолчанию: `60000`) |
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |

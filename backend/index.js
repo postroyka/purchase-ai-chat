@@ -19,8 +19,12 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
-  // application/zip is a valid fallback for xlsx/docx — only allowed when ext matches
+  'image/jpeg', // jpg/jpeg
+  'image/png',  // png
+  // Ambiguous containers below also match other formats — gated by the extension check
+  // after detection: application/zip → xlsx/docx, application/x-cfb (OLE2) → xls
   'application/zip',
+  'application/x-cfb',
 ]);
 
 // file-type needs ≥4096 bytes to reliably detect OOXML (xlsx/docx) formats
@@ -105,7 +109,7 @@ export function createApp(config = {}) {
     ?? parseInt(process.env.MAX_CONCURRENT_JOBS ?? '4', 10);
   const allowedExtensions = (
     config.allowedExtensions
-    ?? (process.env.ALLOWED_EXTENSIONS ?? 'pdf,xlsx,docx')
+    ?? (process.env.ALLOWED_EXTENSIONS ?? 'pdf,xlsx,docx,xls,jpg,jpeg,png')
   )
     .split(',')
     .map((e) => e.trim().toLowerCase());
@@ -272,6 +276,13 @@ export function createApp(config = {}) {
         }
         // application/zip is a structural fallback for xlsx/docx — reject if ext doesn't match
         if (detected.mime === 'application/zip' && !['xlsx', 'docx'].includes(ext)) {
+          cleanupTmpFiles(req.files);
+          return res.status(400).json({
+            error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected.mime}).`,
+          });
+        }
+        // application/x-cfb (OLE2 compound file) is the signature of legacy .xls — reject for other exts
+        if (detected.mime === 'application/x-cfb' && ext !== 'xls') {
           cleanupTmpFiles(req.files);
           return res.status(400).json({
             error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected.mime}).`,
