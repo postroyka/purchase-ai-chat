@@ -24,6 +24,14 @@ const AGENT_ENV_KEYS = [
   // Windows profile dirs — claude stores its auth session under %APPDATA%\Claude\
   'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH',
   'ANTHROPIC_API_KEY',        // required for API access (alternative to session auth)
+  // Provider override — lets the containerised agent target an Anthropic-compatible
+  // endpoint (e.g. DeepSeek) via .env.prod instead of a host-only ~/.claude/settings.json.
+  // The tier maps (*_DEFAULT_*) and subagent model MUST be whitelisted too: without them,
+  // Claude Code's background/subagent calls fall back to Anthropic model ids the provider
+  // doesn't serve — i.e. uncontrolled cost / hard failures.
+  'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_EFFORT_LEVEL',
   'CLAUDE_CODE_USE_BEDROCK',  // optional Bedrock provider
   'CLAUDE_CODE_USE_VERTEX',   // optional Vertex provider
   'AWS_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
@@ -72,8 +80,9 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const systemPrompt = getSystemPrompt();
 
   // Validate filePath to prevent prompt injection via crafted file names.
-  // Path must not contain newlines, null bytes, or other control characters.
-  if (/[\x00-\x1f]/.test(filePath)) {
+  // Reject ASCII control chars (incl. newline/null) plus the Unicode line separators
+  // U+2028/U+2029, which some models treat as line breaks inside the prompt.
+  if (/[\x00-\x1f\u2028\u2029]/.test(filePath)) {
     throw new Error(`Invalid filePath — contains control characters: ${JSON.stringify(filePath)}`);
   }
 
@@ -262,9 +271,15 @@ function spawnClaude({
       '--output-format', 'json', // structured JSON wrapper around the result
       '--system-prompt', systemPrompt,
       '--mcp-config', mcpConfigPath,
+      // Defense-in-depth against prompt injection from untrusted file content: deny the
+      // tools the agent never needs (it only requires Read + the b24_pst_crm_* MCP tools),
+      // so an injected instruction can't shell out, tamper with files, or exfiltrate.
+      // Deny rules are honoured even under --dangerously-skip-permissions. Placed before a
+      // boolean flag so the variadic list never swallows the trailing user message.
+      '--disallowedTools', 'Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch',
       // Required so the agent can read uploaded files without interactive prompts.
       // Mitigated by: container runs as non-root, uploads are in a dedicated directory,
-      // and filePath is validated above to prevent prompt injection.
+      // filePath is validated above, and the prompt marks file content as untrusted input.
       '--dangerously-skip-permissions',
     ];
     if (model) args.push('--model', model);
@@ -388,27 +403,33 @@ export function extractJson(text) {
     try { return JSON.parse(fenceMatch[1]); } catch {}
   }
 
-  // 3. Find the rightmost } or ] and walk backwards to its matching opener.
-  //    Depth counters for { } and [ ] are independent so mixed nesting is handled
-  //    correctly (e.g. {"a":[1,2]} — closing ] must not count toward { depth).
-  for (let i = text.length - 1; i >= 0; i--) {
-    const ch = text[i];
-    if (ch !== '}' && ch !== ']') continue;
-    const isObj = ch === '}';
-    let objDepth = 0;
-    let arrDepth = 0;
-    for (let j = i; j >= 0; j--) {
-      if (text[j] === '}') objDepth++;
-      else if (text[j] === '{') objDepth--;
-      else if (text[j] === ']') arrDepth++;
-      else if (text[j] === '[') arrDepth--;
-      // We've reached the opener when the targeted counter hits zero.
-      if ((isObj && objDepth === 0) || (!isObj && arrDepth === 0)) {
-        try { return JSON.parse(text.slice(j, i + 1)); } catch {}
+  // 3. Scan forward for balanced {…} / […] blocks, skipping any braces/brackets that
+  //    appear inside JSON string literals (with backslash-escape handling). Returns the
+  //    LAST block that parses — matches the agent's habit of emitting prose then JSON.
+  let result = null;
+  for (let i = 0; i < text.length; i++) {
+    const open = text[i];
+    if (open !== '{' && open !== '[') continue;
+    const close = open === '{' ? '}' : ']';
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === open) depth++;
+      else if (ch === close && --depth === 0) {
+        // Keep the last parseable block; advance i past it to continue scanning.
+        try { result = JSON.parse(text.slice(i, j + 1)); i = j; } catch { /* not JSON — keep scanning */ }
         break;
       }
     }
   }
-
-  return null;
+  return result;
 }

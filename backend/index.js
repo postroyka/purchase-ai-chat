@@ -13,6 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const AUTH_PLACEHOLDER = 'replace-with-secure-token';
+const BASIC_AUTH_PLACEHOLDER = 'replace-with-secure-password';
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -78,10 +79,15 @@ function createRateLimiter({ windowMs, max }) {
  *   uploadDir?: string,
  *   maxFileSizeMb?: number,
  *   maxFilesPerRequest?: number,
+ *   maxConcurrentJobs?: number,
  *   allowedExtensions?: string,
  *   redisUrl?: string,
  *   ttlHours?: number,
  *   responsibleUserId?: string,
+ *   basicAuthUser?: string,
+ *   basicAuthPass?: string,
+ *   publicPageEnabled?: boolean,
+ *   uiPublicDir?: string,
  *   agentConfig?: import('./agent-runner.js').AgentConfig,
  *   jobs?: object,
  * }} [config]
@@ -95,6 +101,8 @@ export function createApp(config = {}) {
     ?? parseInt(process.env.MAX_FILE_SIZE_MB ?? '20', 10);
   const maxFilesPerRequest = config.maxFilesPerRequest
     ?? parseInt(process.env.MAX_FILES_PER_REQUEST ?? '10', 10);
+  const maxConcurrentJobs = config.maxConcurrentJobs
+    ?? parseInt(process.env.MAX_CONCURRENT_JOBS ?? '4', 10);
   const allowedExtensions = (
     config.allowedExtensions
     ?? (process.env.ALLOWED_EXTENSIONS ?? 'pdf,xlsx,docx')
@@ -106,6 +114,11 @@ export function createApp(config = {}) {
     config.responsibleUserId ?? process.env.PUBLIC_PAGE_RESPONSIBLE_USER_ID ?? null;
   const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? '';
   const ttlHours = config.ttlHours ?? parseInt(process.env.JOB_TTL_HOURS ?? '24', 10);
+  const basicAuthUser = config.basicAuthUser ?? process.env.PUBLIC_PAGE_BASIC_AUTH_USER ?? 'procure';
+  const basicAuthPass = config.basicAuthPass ?? process.env.PUBLIC_PAGE_BASIC_AUTH_PASS ?? '';
+  const publicPageEnabled = config.publicPageEnabled
+    ?? ((process.env.PUBLIC_PAGE_ENABLED ?? 'true') !== 'false');
+  const uiPublicDir = config.uiPublicDir ?? path.join(__dirname, '..', 'ui', 'public');
   const rateLimitMax = config.rateLimitMax
     ?? parseInt(process.env.RATE_LIMIT_MAX ?? '20', 10);
   const rateLimitWindowMs = config.rateLimitWindowMs
@@ -133,13 +146,51 @@ export function createApp(config = {}) {
   let activeJobs = 0;
   app.getActiveJobCount = () => activeJobs;
 
-  function requireAuth(req, res, next) {
-    if (!token || token === AUTH_PLACEHOLDER) {
-      return res.status(503).json({ error: 'Service not configured: BACKEND_API_TOKEN is not set' });
-    }
+  const bearerConfigured = () => Boolean(token) && token !== AUTH_PLACEHOLDER;
+  const basicAuthConfigured = () =>
+    publicPageEnabled && Boolean(basicAuthPass) && basicAuthPass !== BASIC_AUTH_PLACEHOLDER;
+
+  // Validate an HTTP Basic credential against the configured public-page user/pass.
+  // Both fields are compared in constant time; a missing/garbled header returns false.
+  function checkBasicAuth(req) {
     const auth = req.headers['authorization'] ?? '';
-    if (safeCompare(auth, `Bearer ${token}`)) return next();
+    if (!auth.startsWith('Basic ')) return false;
+    let decoded;
+    try { decoded = Buffer.from(auth.slice(6), 'base64').toString('utf8'); } catch { return false; }
+    const sep = decoded.indexOf(':');
+    if (sep < 0) return false;
+    // Evaluate both comparisons (no short-circuit) so timing doesn't reveal which half matched.
+    const userOk = safeCompare(decoded.slice(0, sep), basicAuthUser);
+    const passOk = safeCompare(decoded.slice(sep + 1), basicAuthPass);
+    return userOk && passOk;
+  }
+
+  // API auth for /upload and /job/:id/status. Accepts EITHER the Bearer API token
+  // (programmatic / smoke-test clients) OR — when the public page is enabled — a valid
+  // Basic credential. A browser that authenticated for the page resends Basic automatically
+  // on same-origin requests, so the UI needs no API token baked into its bundle.
+  function requireAuth(req, res, next) {
+    if (bearerConfigured() && safeCompare(req.headers['authorization'] ?? '', `Bearer ${token}`)) {
+      return next();
+    }
+    if (basicAuthConfigured() && checkBasicAuth(req)) return next();
+    if (!bearerConfigured() && !basicAuthConfigured()) {
+      return res.status(503).json({
+        error: 'Service not configured: set BACKEND_API_TOKEN or PUBLIC_PAGE_BASIC_AUTH_USER/PASS',
+      });
+    }
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Page-level Basic auth guarding the served UI. Fails closed: if the public page is
+  // enabled but the password is unset/placeholder, returns 503 rather than serving openly.
+  function requirePageAuth(req, res, next) {
+    if (!basicAuthConfigured()) {
+      return res.status(503).send('Service not configured: PUBLIC_PAGE_BASIC_AUTH_PASS is not set');
+    }
+    if (checkBasicAuth(req)) return next();
+    res.setHeader('WWW-Authenticate', 'Basic realm="procure-ai", charset="UTF-8"');
+    return res.status(401).send('Authentication required');
   }
 
   const storage = multer.diskStorage({
@@ -164,8 +215,12 @@ export function createApp(config = {}) {
     },
   });
 
-  // POST /upload
+  // POST /upload — two DoS guards: per-token rate limit (uploadRateLimit) bounds request
+  // frequency, and the concurrency cap below bounds how many agent subprocesses run at once.
   app.post('/upload', requireAuth, uploadRateLimit, (req, res) => {
+    if (activeJobs >= maxConcurrentJobs) {
+      return res.status(429).json({ error: 'Server busy — too many jobs in progress. Please retry shortly.' });
+    }
     upload.array('files[]')(req, res, async (err) => {
       if (err) {
         if (err.code === 'LIMIT_FILE_SIZE') {
@@ -240,23 +295,19 @@ export function createApp(config = {}) {
       let fileEntries;
       try {
         fileEntries = req.files.map((f) => {
-          const safeFilename = path.basename(f.originalname);
-          const resolvedJobDir = path.resolve(jobDir);
-          const destPath = path.join(resolvedJobDir, safeFilename);
-          if (!destPath.startsWith(resolvedJobDir + path.sep)) {
-            throw Object.assign(new Error(`Unsafe filename rejected: ${f.originalname}`), {
-              code: 'UNSAFE_FILENAME',
-            });
-          }
+          // Store under a generated UUID name (keeping only the already-validated
+          // extension) so an attacker-controlled original filename never reaches the
+          // on-disk path or the agent's FILE_PATH. Path traversal is impossible by
+          // construction. The display name keeps the original basename for the UI.
+          const displayName = path.basename(f.originalname);
+          const ext = path.extname(displayName).toLowerCase();
+          const destPath = path.join(jobDir, `${uuidv4()}${ext}`);
           fs.renameSync(f.path, destPath);
-          return { name: safeFilename, path: destPath, status: 'pending', result: null, error: null };
+          return { name: displayName, path: destPath, status: 'pending', result: null, error: null };
         });
       } catch (err) {
         fs.rmSync(jobDir, { recursive: true, force: true });
         cleanupTmpFiles(req.files);
-        if (err.code === 'UNSAFE_FILENAME') {
-          return res.status(400).json({ error: err.message });
-        }
         return res.status(500).json({ error: 'Failed to store uploaded files' });
       }
 
@@ -270,7 +321,13 @@ export function createApp(config = {}) {
         dir: jobDir,
         createdAt: Date.now(),
       };
-      await jobs.set(jobId, job);
+      try {
+        await jobs.set(jobId, job);
+      } catch (e) {
+        console.error(`[upload] failed to persist job ${jobId}:`, e.message);
+        fs.rmSync(jobDir, { recursive: true, force: true });
+        return res.status(503).json({ error: 'Job store unavailable — please retry' });
+      }
 
       activeJobs++;
       processJob(jobId, jobs, agentConfig).catch((e) =>
@@ -286,7 +343,13 @@ export function createApp(config = {}) {
 
   // GET /job/:id/status
   app.get('/job/:id/status', requireAuth, async (req, res) => {
-    const job = await jobs.get(req.params.id);
+    let job;
+    try {
+      job = await jobs.get(req.params.id);
+    } catch (e) {
+      console.error(`[job status] store error for ${req.params.id}:`, e.message);
+      return res.status(503).json({ error: 'Job store unavailable — please retry' });
+    }
     if (!job) return res.status(404).json({ error: 'Job not found' });
     return res.json({
       jobId: job.jobId,
@@ -306,9 +369,12 @@ export function createApp(config = {}) {
     }
   });
 
-  // Serve built UI (only present in Docker image).
-  const UI_PUBLIC_DIR = path.join(__dirname, '..', 'ui', 'public');
-  app.use(express.static(UI_PUBLIC_DIR));
+  // Serve built UI (only present in Docker image), guarded by Basic auth when the public
+  // page is enabled. Mounted only if the build output exists, so dev runs (UI served
+  // separately on :3001) and tests are unaffected.
+  if (publicPageEnabled && fs.existsSync(uiPublicDir)) {
+    app.use(requirePageAuth, express.static(uiPublicDir));
+  }
 
   return app;
 }

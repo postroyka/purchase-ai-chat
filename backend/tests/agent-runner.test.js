@@ -46,7 +46,7 @@ const VALID_DEAL_RESULT = {
   supplier: { unp: '123456789', name: 'ООО Поставщик', supplierId: 's-1' },
   contract: { contractId: 'c-42' },
   currency: 'BYN',
-  items: [{ vendorCode: 'ART-1', name: 'Товар', price: 10.00, quantity: 5, unit: 'шт', productId: 'p-99' }],
+  items: [{ vendorCode: 'ART-1', name: 'Товар', priceExclVat: 10.00, quantity: 5, unit: 'шт', productId: 'p-99' }],
   deal: { dealId: 'd-7', url: 'https://b24.example.com/crm/deal/7/' },
   sourceFile: '/uploads/job1/invoice.pdf',
 };
@@ -80,6 +80,17 @@ describe('runAgent', () => {
     expect(args).toContain('--dangerously-skip-permissions');
   });
 
+  it('denies dangerous tools via --disallowedTools and keeps the prompt last', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
+    const [_bin, args] = spawnFn.mock.calls[0];
+    const idx = args.indexOf('--disallowedTools');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toContain('Bash');             // single comma-separated value
+    expect(args[idx + 2]).toMatch(/^--/);                // followed by a flag, not the prompt
+    expect(args[args.length - 1]).toContain('FILE_PATH:'); // prompt stays the final positional arg
+  });
+
   it('passes --model when model is configured', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn, model: 'claude-opus-4-5' });
@@ -110,6 +121,32 @@ describe('runAgent', () => {
     // Never spawn through a shell — this is what keeps cmd.exe/sh metacharacters
     // in the file path / prompt from being interpreted (CVE-2024-27980 class).
     expect(opts.shell).toBeUndefined();
+  });
+
+  it('whitelists DeepSeek provider + tier/subagent models in the spawn env', async () => {
+    // Guards against the "uncontrolled subagent model" footgun: every provider/tier var
+    // must reach the spawned claude, otherwise background/subagent calls fall back to a
+    // default Anthropic model id the provider doesn't serve.
+    const vars = {
+      ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
+      ANTHROPIC_AUTH_TOKEN: 'sk-deepseek-test',
+      ANTHROPIC_MODEL: 'deepseek-v4-pro[1m]',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-v4-flash',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    };
+    const saved = {};
+    for (const [k, v] of Object.entries(vars)) { saved[k] = process.env[k]; process.env[k] = v; }
+    try {
+      const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+      await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
+      const [, , opts] = spawnFn.mock.calls[0];
+      for (const [k, v] of Object.entries(vars)) expect(opts.env[k]).toBe(v);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
   });
 
   it('throws when claudeBin contains path traversal (..)', async () => {
@@ -360,6 +397,16 @@ describe('extractJson', () => {
   it('extracts array from prose', () => {
     const text = 'Items: [1,2,3] processed.';
     expect(extractJson(text)).toEqual([1, 2, 3]);
+  });
+
+  it('ignores unbalanced braces inside string values (string-aware scan)', () => {
+    const text = 'Result: {"msg":"unbalanced } brace","ok":true} done.';
+    expect(extractJson(text)).toEqual({ msg: 'unbalanced } brace', ok: true });
+  });
+
+  it('ignores brackets and escaped quotes inside string values', () => {
+    const text = 'note {"label":"[draft] \\"q\\"","n":2} end';
+    expect(extractJson(text)).toEqual({ label: '[draft] "q"', n: 2 });
   });
 
   it('returns null for plain text with no JSON', () => {

@@ -85,6 +85,7 @@
 > curl -fsSL -H "Authorization: Bearer $GH_PAT" -H "Accept: application/vnd.github.raw" \
 >   -o smoke-test.sh \
 >   "https://api.github.com/repos/postroyka/purchase-ai-chat/contents/scripts/smoke-test.sh?ref=main"
+> unset GH_PAT   # убрать токен из окружения сразу после использования
 > ```
 
 ### На сервере (Linux/Ubuntu)
@@ -97,6 +98,18 @@ bash smoke-test.sh
 Файл: `scripts/smoke-test.sh`. Проверяет контейнеры, внутренние health-проверки,
 сертификат, HTTPS и авторизацию (включая позитивную проверку токена — берётся из
 `.env.prod` рядом со скриптом). В конце — строка ИТОГ (сколько OK / FAIL).
+
+**Сквозная проверка (создаёт задание).** `scripts/e2e-upload.sh` загружает тестовый
+PDF и опрашивает статус до завершения — прогоняет весь путь nginx → backend → агент → MCP
+(доставляется на сервер так же, как `smoke-test.sh`):
+
+```bash
+cd ~/procure-ai && bash e2e-upload.sh
+```
+
+На текущем этапе ожидается `status=error` (MCP-инструменты — заглушки) — это нормально;
+важно, что файл принят и задание прошло пайплайн. Windows-вариант: `e2e-upload.ps1`
+(PowerShell 7+, запускать с `-Token "<BACKEND_API_TOKEN>"`).
 
 > **Важно про NAT.** Сервер за NAT не может достучаться до себя по публичному
 > домену. Поэтому скрипт по умолчанию проверяет HTTPS/сертификат через локальный

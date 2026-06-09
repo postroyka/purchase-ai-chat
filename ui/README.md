@@ -17,6 +17,9 @@ pnpm lint
 pnpm build        # статика собирается в .output/public
 ```
 
+> `DEEPSEEK_API_KEY` (см. `.env.example`) нужен только dev-утилите перевода i18n
+> (`tools/translate.ui.ts`) и в рантайме/проде не используется.
+
 В продакшене статика из `.output/public` копируется в образ `app`
 (см. корневой `Dockerfile.app`) и раздаётся Express-бэкендом.
 
