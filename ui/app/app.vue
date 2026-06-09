@@ -36,13 +36,20 @@ useHead({
 const title = 'Procure AI'
 const description = 'Procure AI — upload supplier price lists and create processing jobs.'
 
+// OG/Twitter crawlers require an absolute image URL. Build it from the public
+// site URL when configured; otherwise fall back to a root-relative path.
+const baseURL = (config.app.baseURL || '/').replace(/\/+$/, '')
+const siteUrl = (config.public.siteUrl || '').replace(/\/+$/, '')
+const ogImage = `${siteUrl}${baseURL}/og-image.png`
+
 useSeoMeta({
   title,
   description,
   ogTitle: title,
   ogDescription: description,
-  ogImage: 'https://bitrix24.github.io/b24ui/assets/templates/nuxt/dashboard-light.png',
-  twitterCard: 'summary_large_image'
+  ogImage,
+  twitterCard: 'summary_large_image',
+  twitterImage: ogImage
 })
 
 provide('isLoading', readonly(isLoading))
