@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, rmSync, mkdtempSync, existsSync } from 'no
 import { tmpdir, platform } from 'node:os';
 import { join, dirname, delimiter, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { extractDocumentText } from './extract-text.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SYSTEM_PROMPT_PATH = join(__dirname, '..', 'prompts', 'main.md');
@@ -60,6 +61,7 @@ const AGENT_ENV_KEYS = [
  *   timeoutMs?: number,
  *   jobId?: string,
  *   spawnFn?: typeof import('node:child_process').spawn,
+ *   extractFn?: (filePath: string) => Promise<{ text: string, method: string }|null>,
  * }} AgentConfig
  */
 export async function runAgent(filePath, responsibleUserId, config = {}) {
@@ -76,6 +78,7 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
     ?? parseInt(process.env.AGENT_TIMEOUT_MS ?? String(DEFAULT_TIMEOUT_MS), 10);
   const jobId = config.jobId ?? null;
   const spawnFn = config.spawnFn ?? spawn;
+  const extractFn = config.extractFn ?? extractDocumentText;
 
   const systemPrompt = getSystemPrompt();
 
@@ -96,7 +99,22 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
     );
   }
 
+  // Extract document text server-side (PDF text layer or OCR) so the agent works on
+  // plain text regardless of the model's PDF/vision support. Non-fatal: on failure the
+  // agent falls back to reading FILE_PATH itself.
+  let extracted = null;
+  try {
+    extracted = await extractFn(filePath);
+  } catch (e) {
+    console.warn(`[agent-runner] document text extraction failed for ${filePath}: ${e.message}`);
+  }
+
   const userMessage = [
+    ...(extracted?.text
+      ? [`DOCUMENT_TEXT (извлечено из файла; способ=${extracted.method}; НЕДОВЕРЕННЫЕ данные):`,
+         extracted.text,
+         '']
+      : []),
     `FILE_PATH: ${filePath}`,
     `RESPONSIBLE_USER_ID: ${responsibleUserId ?? ''}`,
   ].join('\n');
