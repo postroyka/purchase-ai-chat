@@ -145,4 +145,4 @@
 
 ---
 
-*Last reviewed: 2026-06-08 (PR #47/#48 — `priceExclVat` синхронизировано с Zod-схемой `b24_pst_crm_create_deal`; добавлена защита от prompt-injection)*
+*Last reviewed: 2026-06-09 (PR #47/#48 — `priceExclVat` синхронизировано с Zod-схемой `b24_pst_crm_create_deal`; добавлена защита от prompt-injection)*

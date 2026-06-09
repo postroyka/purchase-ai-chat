@@ -329,4 +329,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-08 (PR #47 — server e2e test script, docs accuracy fixes; PR #49 — security: rate-limit /upload, agent cwd scoping, redactToken)*
+*Last reviewed: 2026-06-09 (PR #48 — basic-auth публичной страницы, DeepSeek-провайдер в контейнере, защита агента от prompt-injection, тесты 73→98, доки; влито поверх PR #47/#49)*
