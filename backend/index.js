@@ -117,7 +117,7 @@ export function createApp(config = {}) {
   const maxFilesPerRequest = config.maxFilesPerRequest
     ?? parseInt(process.env.MAX_FILES_PER_REQUEST ?? '10', 10);
   const maxConcurrentJobs = config.maxConcurrentJobs
-    ?? parseInt(process.env.MAX_CONCURRENT_JOBS ?? '4', 10);
+    ?? parseInt(process.env.MAX_CONCURRENT_JOBS ?? '2', 10);
   const allowedExtensions = (
     config.allowedExtensions
     ?? (process.env.ALLOWED_EXTENSIONS ?? 'pdf,xlsx,docx,xls,jpg,jpeg,png')

@@ -59,7 +59,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `JOB_TTL_HOURS` | app | — | Время хранения задач в Redis (по умолчанию: 24) |
 | `MAX_FILE_SIZE_MB` | app | — | Макс. размер файла (по умолчанию: 20) |
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
-| `MAX_CONCURRENT_JOBS` | app | — | Лимит одновременных заданий; сверх — `429` (по умолчанию: `4`) |
+| `MAX_CONCURRENT_JOBS` | app | — | Лимит одновременных заданий; сверх — `429` (по умолчанию: `2` — с OCR не выше из-за RAM) |
 | `ALLOWED_EXTENSIONS` | app | — | Разрешённые расширения (по умолчанию: `pdf,xlsx,docx,xls,jpg,jpeg,png`) |
 | `OCR_LANGS` | app | — | Языки OCR (tesseract) для сканов/фото (по умолчанию: `rus+eng+bel`) |
 | `RATE_LIMIT_MAX` | app | — | Лимит запросов `/upload` на токен в окне (по умолчанию: `20`, `0` = выкл.) |
