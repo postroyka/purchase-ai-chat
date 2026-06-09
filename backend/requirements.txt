@@ -1,0 +1,5 @@
+# Python-зависимости для backend/doc_to_text.py (вызывается из backend/extract-text.js).
+# Пины — ради детерминированных сборок образа (Dockerfile.app).
+openpyxl==3.1.5
+xlrd==2.0.1
+python-docx==1.1.2

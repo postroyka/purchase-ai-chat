@@ -19,8 +19,12 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
-  // application/zip is a valid fallback for xlsx/docx — only allowed when ext matches
+  'image/jpeg', // jpg/jpeg
+  'image/png',  // png
+  // Ambiguous containers below also match other formats — gated by the extension check
+  // after detection: application/zip → xlsx/docx, application/x-cfb (OLE2) → xls
   'application/zip',
+  'application/x-cfb',
 ]);
 
 // file-type needs ≥4096 bytes to reliably detect OOXML (xlsx/docx) formats
@@ -47,6 +51,17 @@ function cleanupTmpFiles(files) {
   for (const file of files ?? []) {
     try { fs.unlinkSync(file.path); } catch {}
   }
+}
+
+// multer/busboy decode the multipart filename header as latin1, so UTF-8 names
+// (e.g. Cyrillic) arrive as mojibake. Re-decode as UTF-8. If the string already holds
+// real Unicode (chars > 0xFF — e.g. via RFC5987 filename*), it's correct → leave it.
+function decodeOriginalName(name) {
+  if (typeof name !== 'string' || /[^\x00-\xff]/.test(name)) return name;
+  const decoded = Buffer.from(name, 'latin1').toString('utf8');
+  // Don't corrupt a genuine latin-1 name: if re-decoding yielded replacement chars
+  // (U+FFFD), the bytes weren't UTF-8 → keep the original.
+  return decoded.includes('�') ? name : decoded;
 }
 
 // Dependency-free in-memory rate limiter. Keyed by Authorization header (per client),
@@ -102,10 +117,10 @@ export function createApp(config = {}) {
   const maxFilesPerRequest = config.maxFilesPerRequest
     ?? parseInt(process.env.MAX_FILES_PER_REQUEST ?? '10', 10);
   const maxConcurrentJobs = config.maxConcurrentJobs
-    ?? parseInt(process.env.MAX_CONCURRENT_JOBS ?? '4', 10);
+    ?? parseInt(process.env.MAX_CONCURRENT_JOBS ?? '2', 10);
   const allowedExtensions = (
     config.allowedExtensions
-    ?? (process.env.ALLOWED_EXTENSIONS ?? 'pdf,xlsx,docx')
+    ?? (process.env.ALLOWED_EXTENSIONS ?? 'pdf,xlsx,docx,xls,jpg,jpeg,png')
   )
     .split(',')
     .map((e) => e.trim().toLowerCase());
@@ -267,14 +282,21 @@ export function createApp(config = {}) {
         if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
           cleanupTmpFiles(req.files);
           return res.status(400).json({
-            error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected?.mime ?? 'unknown'}).`,
+            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${detected?.mime ?? 'unknown'}).`,
           });
         }
         // application/zip is a structural fallback for xlsx/docx — reject if ext doesn't match
         if (detected.mime === 'application/zip' && !['xlsx', 'docx'].includes(ext)) {
           cleanupTmpFiles(req.files);
           return res.status(400).json({
-            error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected.mime}).`,
+            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${detected.mime}).`,
+          });
+        }
+        // application/x-cfb (OLE2 compound file) is the signature of legacy .xls — reject for other exts
+        if (detected.mime === 'application/x-cfb' && ext !== 'xls') {
+          cleanupTmpFiles(req.files);
+          return res.status(400).json({
+            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${detected.mime}).`,
           });
         }
       }
@@ -299,7 +321,7 @@ export function createApp(config = {}) {
           // extension) so an attacker-controlled original filename never reaches the
           // on-disk path or the agent's FILE_PATH. Path traversal is impossible by
           // construction. The display name keeps the original basename for the UI.
-          const displayName = path.basename(f.originalname);
+          const displayName = path.basename(decodeOriginalName(f.originalname));
           const ext = path.extname(displayName).toLowerCase();
           const destPath = path.join(jobDir, `${uuidv4()}${ext}`);
           fs.renameSync(f.path, destPath);

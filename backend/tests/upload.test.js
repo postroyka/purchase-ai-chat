@@ -95,7 +95,7 @@ async function pollJob(appInstance, jobId, maxMs = 5000) {
 const app = createApp({
   token: TOKEN,
   uploadDir: UPLOAD_DIR,
-  agentConfig: { spawnFn: makeMockAgentSpawn() },
+  agentConfig: { spawnFn: makeMockAgentSpawn(), extractFn: async () => null },
   rateLimitMax: 0, // disable rate limiting for the shared app — exercised separately below
 });
 const auth = () => `Bearer ${TOKEN}`;
@@ -120,6 +120,14 @@ function makeMinimalZipBuffer() {
     0x00, 0x00, 0x00, 0x00, // central dir offset
     0x00, 0x00,             // comment length
   ]);
+}
+
+// Minimal OLE2 / Compound File Binary header — file-type detects this as
+// application/x-cfb, the signature used for legacy .xls.
+function makeMinimalCfbBuffer() {
+  const b = Buffer.alloc(512, 0);
+  Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]).copy(b, 0);
+  return b;
 }
 
 // Poll job status until terminal state or timeout.
@@ -361,13 +369,63 @@ describe('Concurrency cap & store errors', () => {
 // ── File type validation (regression) ────────────────────────────────────────
 
 describe('File type validation (regression)', () => {
-  it('rejects legacy .xls files (not in allowed extensions)', async () => {
+  it('accepts a real legacy .xls (OLE2/CFB) — now a supported format', async () => {
     const res = await request(app)
       .post('/upload')
       .set('Authorization', auth())
-      .attach('files[]', Buffer.from('legacy excel'), { filename: 'prices.xls' });
+      .attach('files[]', makeMinimalCfbBuffer(), { filename: 'prices.xls' });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects a non-OLE2 file disguised as .xls (content ≠ extension)', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', Buffer.from('not really excel'), { filename: 'fake.xls' });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/\.xls/);
+  });
+
+  it('accepts a JPEG image (OCR path)', async () => {
+    // Minimal JPEG: SOI + APP0/JFIF header → file-type detects image/jpeg.
+    const jpeg = Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+      0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xd9,
+    ]);
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', jpeg, { filename: 'scan.jpg' });
+    expect(res.status).toBe(201);
+  });
+
+  it('decodes Cyrillic filenames (no mojibake in status) — issue #54', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeValidPdfBuffer(), { filename: 'Счёт-тест.pdf' });
+    expect(res.status).toBe(201);
+    expect(res.body.files[0].name).toBe('Счёт-тест.pdf');
+  });
+
+  it('rejects an OLE2/CFB file with a non-.xls extension (content ≠ extension)', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeMinimalCfbBuffer(), { filename: 'evil.pdf' });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts a PNG image (OCR path)', async () => {
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
+    ]);
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', png, { filename: 'scan.png' });
+    expect(res.status).toBe(201);
   });
 
   it('rejects a ZIP payload disguised as .pdf (MIME ≠ extension)', async () => {

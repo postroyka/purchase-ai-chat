@@ -51,7 +51,8 @@ const VALID_DEAL_RESULT = {
   sourceFile: '/uploads/job1/invoice.pdf',
 };
 
-const BASE_CONFIG = { timeoutMs: 1000 };
+// Default: no server-side text extraction in unit tests (hermetic — no pdftotext/OCR spawn).
+const BASE_CONFIG = { timeoutMs: 1000, extractFn: async () => null };
 
 describe('runAgent', () => {
   it('resolves with parsed deal result on successful run', async () => {
@@ -67,6 +68,35 @@ describe('runAgent', () => {
     const promptArg = args[args.length - 1];
     expect(promptArg).toContain('FILE_PATH: /uploads/invoice.pdf');
     expect(promptArg).toContain('RESPONSIBLE_USER_ID: 42');
+  });
+
+  it('injects DOCUMENT_TEXT when server-side extraction returns text', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    const extractFn = async () => ({ text: 'СЧЁТ № 5\nПоставщик: ООО Ромашка, УНП 123456789', method: 'ocr' });
+    await runAgent('/uploads/scan.pdf', '42', { ...BASE_CONFIG, spawnFn, extractFn });
+    const prompt = spawnFn.mock.calls[0][1].at(-1);
+    expect(prompt).toContain('DOCUMENT_TEXT');
+    expect(prompt).toContain('ООО Ромашка');
+    expect(prompt).toContain('FILE_PATH: /uploads/scan.pdf'); // FILE_PATH остаётся для вложения в сделку
+    // End-marker must precede the system fields so untrusted text can't inject FILE_PATH/RESPONSIBLE_USER_ID.
+    expect(prompt).toContain('--- END DOCUMENT_TEXT ---');
+    expect(prompt.indexOf('--- END DOCUMENT_TEXT ---')).toBeLessThan(prompt.indexOf('FILE_PATH:'));
+  });
+
+  it('omits DOCUMENT_TEXT when extraction returns null (agent reads FILE_PATH)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await runAgent('/uploads/x.pdf', '42', { ...BASE_CONFIG, spawnFn }); // BASE_CONFIG.extractFn → null
+    const prompt = spawnFn.mock.calls[0][1].at(-1);
+    expect(prompt).not.toContain('DOCUMENT_TEXT');
+    expect(prompt).toContain('FILE_PATH: /uploads/x.pdf');
+  });
+
+  it('survives extraction errors (falls back to FILE_PATH, no throw)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    const extractFn = async () => { throw new Error('pdftotext boom'); };
+    const result = await runAgent('/uploads/x.pdf', '42', { ...BASE_CONFIG, spawnFn, extractFn });
+    expect(result).toMatchObject({ deal: { dealId: 'd-7' } });
+    expect(spawnFn.mock.calls[0][1].at(-1)).toContain('FILE_PATH: /uploads/x.pdf');
   });
 
   it('includes --bare, --print, --output-format json, --dangerously-skip-permissions flags', async () => {
