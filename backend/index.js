@@ -58,7 +58,10 @@ function cleanupTmpFiles(files) {
 // real Unicode (chars > 0xFF — e.g. via RFC5987 filename*), it's correct → leave it.
 function decodeOriginalName(name) {
   if (typeof name !== 'string' || /[^\x00-\xff]/.test(name)) return name;
-  return Buffer.from(name, 'latin1').toString('utf8');
+  const decoded = Buffer.from(name, 'latin1').toString('utf8');
+  // Don't corrupt a genuine latin-1 name: if re-decoding yielded replacement chars
+  // (U+FFFD), the bytes weren't UTF-8 → keep the original.
+  return decoded.includes('�') ? name : decoded;
 }
 
 // Dependency-free in-memory rate limiter. Keyed by Authorization header (per client),

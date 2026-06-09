@@ -9,43 +9,84 @@
 import os
 import sys
 
+# Жёсткий лимит адресного пространства процесса (анти-zip-bomb для xlsx/docx — это ZIP):
+# при разбухании получим MemoryError внутри этого процесса, а не OOM-kill всего контейнера.
+try:
+    import resource
+    _cap = int(os.environ.get("DOC_MEM_LIMIT_BYTES", str(512 * 1024 * 1024)))
+    resource.setrlimit(resource.RLIMIT_AS, (_cap, _cap))
+except Exception:  # noqa: BLE001 — на платформах без RLIMIT просто пропускаем
+    pass
+
+
+def _fmt(value):
+    """Аккуратное строковое представление: целые float'ы без «.0» (цена 1000, не 1000.0)."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
 
 def xlsx_text(path):
-    """Читаем .xlsx через openpyxl (data_only — значения, а не формулы)."""
+    """Читаем .xlsx через openpyxl (data_only — значения, а не формулы; read_only — потоково)."""
     from openpyxl import load_workbook
     wb = load_workbook(path, data_only=True, read_only=True)
     out = []
     for ws in wb.worksheets:
         out.append("# Лист: {}".format(ws.title))
         for row in ws.iter_rows(values_only=True):
-            cells = [str(c) for c in row if c is not None and str(c).strip() != ""]
+            cells = [_fmt(c) for c in row if c is not None and str(c).strip() != ""]
             if cells:
                 out.append("\t".join(cells))
     return "\n".join(out)
 
 
 def xls_text(path):
-    """Читаем старый .xls через xlrd."""
+    """Читаем старый .xls через xlrd; даты → ISO, целые числа → без «.0»."""
     import xlrd
     wb = xlrd.open_workbook(path)
     out = []
     for sh in wb.sheets():
         out.append("# Лист: {}".format(sh.name))
         for r in range(sh.nrows):
-            cells = [str(c.value) for c in sh.row(r) if str(c.value).strip() != ""]
+            cells = []
+            for c in sh.row(r):
+                if c.ctype == xlrd.XL_CELL_EMPTY:
+                    continue
+                if c.ctype == xlrd.XL_CELL_DATE:
+                    try:
+                        v = str(xlrd.xldate_as_datetime(c.value, wb.datemode).date())
+                    except Exception:  # noqa: BLE001 — битая дата → как есть
+                        v = _fmt(c.value)
+                elif c.ctype == xlrd.XL_CELL_NUMBER:
+                    v = _fmt(c.value)
+                else:
+                    v = str(c.value)
+                if v.strip():
+                    cells.append(v)
             if cells:
                 out.append("\t".join(cells))
     return "\n".join(out)
 
 
 def docx_text(path):
-    """Читаем .docx через python-docx: абзацы + ячейки таблиц."""
+    """Читаем .docx через python-docx: абзацы + ячейки таблиц (включая вложенные)."""
     import docx
+
+    def cell_text(cell):
+        parts = [p.text for p in cell.paragraphs if p.text.strip()]
+        for nested in cell.tables:  # вложенные таблицы
+            for row in nested.rows:
+                rc = [c.text.strip() for c in row.cells if c.text.strip()]
+                if rc:
+                    parts.append("\t".join(rc))
+        return "\n".join(parts)
+
     d = docx.Document(path)
     parts = [p.text for p in d.paragraphs if p.text.strip()]
     for table in d.tables:
         for row in table.rows:
-            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            cells = [cell_text(c).strip() for c in row.cells]
+            cells = [c for c in cells if c]
             if cells:
                 parts.append("\t".join(cells))
     return "\n".join(parts)

@@ -407,6 +407,27 @@ describe('File type validation (regression)', () => {
     expect(res.body.files[0].name).toBe('Счёт-тест.pdf');
   });
 
+  it('rejects an OLE2/CFB file with a non-.xls extension (content ≠ extension)', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeMinimalCfbBuffer(), { filename: 'evil.pdf' });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts a PNG image (OCR path)', async () => {
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
+    ]);
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', png, { filename: 'scan.png' });
+    expect(res.status).toBe(201);
+  });
+
   it('rejects a ZIP payload disguised as .pdf (MIME ≠ extension)', async () => {
     const res = await request(app)
       .post('/upload')

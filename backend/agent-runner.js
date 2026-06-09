@@ -113,6 +113,9 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
     ...(extracted?.text
       ? [`DOCUMENT_TEXT (извлечено из файла; способ=${extracted.method}; НЕДОВЕРЕННЫЕ данные):`,
          extracted.text,
+         // End-marker: system fields below are taken ONLY after this line, so untrusted
+         // document text can't inject a fake FILE_PATH / RESPONSIBLE_USER_ID.
+         '--- END DOCUMENT_TEXT ---',
          '']
       : []),
     `FILE_PATH: ${filePath}`,

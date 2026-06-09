@@ -12,9 +12,13 @@ const DOC_PY = join(__dirname, 'doc_to_text.py');
 // Below this many non-whitespace chars we treat a PDF as having no real text
 // layer (a scan) and fall back to OCR.
 const MIN_TEXT_CHARS = 24;
-// Bound scans: cap pages OCR'd and total characters fed to the agent.
-const MAX_OCR_PAGES = 15;
+// Bound scans: cap pages OCR'd and total characters fed to the agent. Conservative
+// defaults keep CPU/RAM sane in the 1-CPU/768M app container (pdftoppm RAM grows with
+// DPI × pages). Tunable via env if more capacity is available.
+const MAX_OCR_PAGES = parseInt(process.env.MAX_OCR_PAGES || '8', 10);
 const MAX_TEXT_CHARS = 100_000;
+// OCR raster DPI — 150 is enough for invoice text and ~4× lighter on RAM than 300.
+const OCR_DPI = process.env.OCR_DPI || '150';
 // tesseract language packs that must be installed in the image (Dockerfile.app).
 const OCR_LANGS = process.env.OCR_LANGS || 'rus+eng+bel';
 // Hard cap per external process so a stuck pdftotext/tesseract/python can't wedge a job.
@@ -43,7 +47,8 @@ function run(cmd, args) {
     const chunks = [];
     let size = 0;
     let stderr = '';
-    const timer = setTimeout(() => proc.kill('SIGKILL'), CMD_TIMEOUT_MS);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; proc.kill('SIGKILL'); }, CMD_TIMEOUT_MS);
     proc.stdout.on('data', (c) => {
       size += c.length;
       if (size <= MAX_BUFFER) chunks.push(c);
@@ -52,8 +57,10 @@ function run(cmd, args) {
     proc.on('error', (e) => { clearTimeout(timer); reject(e); });
     proc.on('close', (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve(Buffer.concat(chunks));
-      else reject(new Error(`${cmd} exited ${code}: ${stderr.slice(0, 300)}`));
+      if (timedOut) return reject(new Error(`${cmd} timed out after ${CMD_TIMEOUT_MS}ms`));
+      if (code !== 0) return reject(new Error(`${cmd} exited ${code}: ${stderr.slice(0, 300)}`));
+      if (size > MAX_BUFFER) console.warn(`[extract-text] ${cmd} stdout truncated: ${size} > ${MAX_BUFFER} bytes`);
+      return resolve(Buffer.concat(chunks));
     });
   });
 }
@@ -127,7 +134,7 @@ async function ocrPdf(filePath) {
     return null;
   }
   try {
-    await run('pdftoppm', ['-png', '-r', '300', '-l', String(MAX_OCR_PAGES), filePath, join(dir, 'page')]);
+    await run('pdftoppm', ['-png', '-r', OCR_DPI, '-l', String(MAX_OCR_PAGES), filePath, join(dir, 'page')]);
     const pages = readdirSync(dir).filter((f) => f.endsWith('.png')).sort();
     let text = '';
     for (const png of pages) {

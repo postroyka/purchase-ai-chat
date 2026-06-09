@@ -78,6 +78,9 @@ describe('runAgent', () => {
     expect(prompt).toContain('DOCUMENT_TEXT');
     expect(prompt).toContain('ООО Ромашка');
     expect(prompt).toContain('FILE_PATH: /uploads/scan.pdf'); // FILE_PATH остаётся для вложения в сделку
+    // End-marker must precede the system fields so untrusted text can't inject FILE_PATH/RESPONSIBLE_USER_ID.
+    expect(prompt).toContain('--- END DOCUMENT_TEXT ---');
+    expect(prompt.indexOf('--- END DOCUMENT_TEXT ---')).toBeLessThan(prompt.indexOf('FILE_PATH:'));
   });
 
   it('omits DOCUMENT_TEXT when extraction returns null (agent reads FILE_PATH)', async () => {

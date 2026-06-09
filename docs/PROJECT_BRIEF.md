@@ -69,7 +69,9 @@ procure-ai/
 ├── prompts/
 │   └── main.md                     # промпт извлечения (входит в app-образ)
 ├── backend/                        # Node.js: /upload, оркестрация, журнал заданий, cron cleanup
-│   └── agent-runner.js             #   spawn Claude Code CLI, MCP-конфиг, таймаут, парсинг ответа
+│   ├── agent-runner.js             #   spawn Claude Code CLI, MCP-конфиг, таймаут, парсинг ответа
+│   ├── extract-text.js             #   файл→текст: pdftotext/OCR (poppler+tesseract); office→doc_to_text.py
+│   └── doc_to_text.py              #   xlsx/xls/docx → текст (openpyxl/xlrd/python-docx)
 ├── mcp/                            # MCP-сервер: find_supplier / find_contract / find_product / create_deal
 │                                   # (b24-controller — ВНЕШНИЙ сервис заказчика, в этом репо его нет;
 │                                   #  адрес задаётся через B24_CONTRACTS_API_URL)
