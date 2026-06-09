@@ -26,7 +26,12 @@ const AGENT_ENV_KEYS = [
   'ANTHROPIC_API_KEY',        // required for API access (alternative to session auth)
   // Provider override — lets the containerised agent target an Anthropic-compatible
   // endpoint (e.g. DeepSeek) via .env.prod instead of a host-only ~/.claude/settings.json.
+  // The tier maps (*_DEFAULT_*) and subagent model MUST be whitelisted too: without them,
+  // Claude Code's background/subagent calls fall back to Anthropic model ids the provider
+  // doesn't serve — i.e. uncontrolled cost / hard failures.
   'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'CLAUDE_CODE_EFFORT_LEVEL',
   'CLAUDE_CODE_USE_BEDROCK',  // optional Bedrock provider
   'CLAUDE_CODE_USE_VERTEX',   // optional Vertex provider
   'AWS_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',

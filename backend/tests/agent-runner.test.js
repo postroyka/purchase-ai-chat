@@ -123,6 +123,32 @@ describe('runAgent', () => {
     expect(opts.shell).toBeUndefined();
   });
 
+  it('whitelists DeepSeek provider + tier/subagent models in the spawn env', async () => {
+    // Guards against the "uncontrolled subagent model" footgun: every provider/tier var
+    // must reach the spawned claude, otherwise background/subagent calls fall back to a
+    // default Anthropic model id the provider doesn't serve.
+    const vars = {
+      ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
+      ANTHROPIC_AUTH_TOKEN: 'sk-deepseek-test',
+      ANTHROPIC_MODEL: 'deepseek-v4-pro[1m]',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-v4-flash',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    };
+    const saved = {};
+    for (const [k, v] of Object.entries(vars)) { saved[k] = process.env[k]; process.env[k] = v; }
+    try {
+      const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+      await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
+      const [, , opts] = spawnFn.mock.calls[0];
+      for (const [k, v] of Object.entries(vars)) expect(opts.env[k]).toBe(v);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+  });
+
   it('throws when claudeBin contains path traversal (..)', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await expect(
