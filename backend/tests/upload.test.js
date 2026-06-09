@@ -398,6 +398,15 @@ describe('File type validation (regression)', () => {
     expect(res.status).toBe(201);
   });
 
+  it('decodes Cyrillic filenames (no mojibake in status) — issue #54', async () => {
+    const res = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeValidPdfBuffer(), { filename: 'Счёт-тест.pdf' });
+    expect(res.status).toBe(201);
+    expect(res.body.files[0].name).toBe('Счёт-тест.pdf');
+  });
+
   it('rejects a ZIP payload disguised as .pdf (MIME ≠ extension)', async () => {
     const res = await request(app)
       .post('/upload')

@@ -53,6 +53,14 @@ function cleanupTmpFiles(files) {
   }
 }
 
+// multer/busboy decode the multipart filename header as latin1, so UTF-8 names
+// (e.g. Cyrillic) arrive as mojibake. Re-decode as UTF-8. If the string already holds
+// real Unicode (chars > 0xFF — e.g. via RFC5987 filename*), it's correct → leave it.
+function decodeOriginalName(name) {
+  if (typeof name !== 'string' || /[^\x00-\xff]/.test(name)) return name;
+  return Buffer.from(name, 'latin1').toString('utf8');
+}
+
 // Dependency-free in-memory rate limiter. Keyed by Authorization header (per client),
 // so a single token flooding /upload can't exhaust the agent subprocess pool. State is
 // per-process — matches the single-process deployment (see processJob note below).
@@ -271,21 +279,21 @@ export function createApp(config = {}) {
         if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
           cleanupTmpFiles(req.files);
           return res.status(400).json({
-            error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected?.mime ?? 'unknown'}).`,
+            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${detected?.mime ?? 'unknown'}).`,
           });
         }
         // application/zip is a structural fallback for xlsx/docx — reject if ext doesn't match
         if (detected.mime === 'application/zip' && !['xlsx', 'docx'].includes(ext)) {
           cleanupTmpFiles(req.files);
           return res.status(400).json({
-            error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected.mime}).`,
+            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${detected.mime}).`,
           });
         }
         // application/x-cfb (OLE2 compound file) is the signature of legacy .xls — reject for other exts
         if (detected.mime === 'application/x-cfb' && ext !== 'xls') {
           cleanupTmpFiles(req.files);
           return res.status(400).json({
-            error: `File "${path.basename(f.originalname)}" has invalid content type (detected: ${detected.mime}).`,
+            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${detected.mime}).`,
           });
         }
       }
@@ -310,7 +318,7 @@ export function createApp(config = {}) {
           // extension) so an attacker-controlled original filename never reaches the
           // on-disk path or the agent's FILE_PATH. Path traversal is impossible by
           // construction. The display name keeps the original basename for the UI.
-          const displayName = path.basename(f.originalname);
+          const displayName = path.basename(decodeOriginalName(f.originalname));
           const ext = path.extname(displayName).toLowerCase();
           const destPath = path.join(jobDir, `${uuidv4()}${ext}`);
           fs.renameSync(f.path, destPath);
