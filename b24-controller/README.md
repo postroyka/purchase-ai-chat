@@ -23,12 +23,15 @@ REST-контроллеры для procure-ai, размещаемые внутр
 
 ## Контроллеры
 
-| REST-метод | Класс / файл | Статус |
-|---|---|---|
-| `shef.purchase.api.procuresupplier.findByUnp` | `ProcureSupplier` | ✅ реализован (B1) |
-| `shef.purchase.api.procureproduct.findByVendorCode` | `ProcureProduct` | ✅ реализован (B4–B5, точное совпадение) |
-| `shef.purchase.api.procurecontract.find` | `ProcureContract` | ✅ реализован (B3a–B3e) |
-| `shef.purchase.api.procuredeal.create` | `ProcureDeal` | ✅ реализован (B6–B8) |
+> Bitrix24 REST приводит имена методов к нижнему регистру. В запросах и в коде
+> используется lowercase; camelCase-имена экшенов в PHP — это только имена методов класса.
+
+| REST-метод (lowercase) | PHP-экшен | Файл | Статус |
+|---|---|---|---|
+| `shef.purchase.api.procuresupplier.findbyunp` | `findByUnpAction` | `procuresupplier.php` | ✅ реализован (B1) |
+| `shef.purchase.api.procureproduct.findbyvendorcode` | `findByVendorCodeAction` | `procureproduct.php` | ✅ реализован (B4–B5) |
+| `shef.purchase.api.procurecontract.find` | `findAction` | `procurecontract.php` | ✅ реализован (B3a–B3e) |
+| `shef.purchase.api.procuredeal.create` | `createAction` | `procuredeal.php` | ✅ реализован (B6–B8) |
 
 Подробности структур Б24 — в [`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md).
 
@@ -49,8 +52,14 @@ b24-controller/
 ## Вебхук
 
 MCP-сервер вызывает методы через стандартный входящий вебхук Bitrix24
-(`NUXT_BITRIX24_WEBHOOK_URL`). Вебхуку нужен скоуп, под которым модуль
-`shef.purchase` публикует REST (подтвердить имя скоупа при создании вебхука).
+(`NUXT_BITRIX24_WEBHOOK_URL`).
+
+При создании вебхука в Б24 → **Настройки → REST → Входящие вебхуки** нужно включить скоуп:
+- **`shef.purchase`** — под этим именем модуль публикует REST через `restIntegration`
+- **`crm`** — для стандартных CRM-методов (создание сделки, компании)
+
+> Имя скоупа совпадает с именем модуля. Если метод возвращает `QUERY_AUTH_ERROR` —
+> проверьте, что оба скоупа включены в настройках вебхука.
 
 ## Деплой — полуручной
 
@@ -69,6 +78,19 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
 - по умолчанию делает dry-run; реальная выкладка — `make deploy-b24 APPLY=1`.
 
 Папка исключена из Docker-образов (`.dockerignore`).
+
+### Предусловия первого деплоя
+
+Перед первым `make deploy-b24 APPLY=1` убедитесь:
+
+1. **SSH-ключ** добавлен для пользователя `B24_SSH_USER` на сервере Б24.
+2. **Целевая директория существует** на сервере:
+   ```
+   ssh user@host "ls /home/bitrix/www/bitrix/modules/shef.purchase/lib/controllers/"
+   ```
+   rsync не создаёт вложенные директории — если путь не существует, выполните `mkdir -p` вручную.
+3. **Права на запись** у `B24_SSH_USER` в целевой директории.
+4. **`scripts/.env.deploy`** заполнен по примеру `scripts/.env.deploy.example`.
 
 ## Опции модуля (настройки)
 

@@ -38,7 +38,7 @@ class ProcureDeal
 		return ['crm', 'rest'];
 	}
 
-	public function configureActions()
+	public function configureActions(): array
 	{
 		return [
 			'create' => [
@@ -92,13 +92,23 @@ class ProcureDeal
 			return null;
 		}
 
+		// Лимит на размер base64-содержимого файла: защита от прямых REST-вызовов в
+		// обход MCP-слоя, который тоже ограничивает размер (NUXT_MAX_ATTACH_MB=25).
+		// ~34 МБ base64 ≈ ~25 МБ бинарных данных.
+		if($fileContent !== '' && strlen($fileContent) > 34 * 1024 * 1024)
+		{
+			$this->addError(new Error('fileContent too large', 'deal:022'));
+			return null;
+		}
+
 		$categoryId  = (int)Option::get('shef.purchase', 'B24_DEAL_CATEGORY_ID', 1);
 		$stageId     = Option::get('shef.purchase', 'B24_DEAL_DEFAULT_STAGE_ID', 'C1:NEW');
 		$measureCode = (int)Option::get('shef.purchase', 'B24_UNIT_OKEI_SHT', static::UNIT_OKEI_SHT);
 
 		// --- 1) Создать сделку ---
+		$titleBase = $fileName !== '' ? pathinfo($fileName, PATHINFO_FILENAME) : 'поставщик #'.$supplierId;
 		$dealFields = [
-			'TITLE'          => 'Закупка от поставщика #'.$supplierId,
+			'TITLE'          => 'Закупка: '.$titleBase,
 			'COMPANY_ID'     => $supplierId,
 			'ASSIGNED_BY_ID' => $responsibleUserId,
 			'CATEGORY_ID'    => $categoryId,

@@ -27,7 +27,7 @@ class ProcureProduct
 		];
 	}
 
-	public function configureActions()
+	public function configureActions(): array
 	{
 		return [
 			'findByVendorCode' => [
@@ -57,6 +57,12 @@ class ProcureProduct
 		if($vendorCode === '')
 		{
 			$this->addError(new Error('Пустой артикул', 'prd:010'));
+			return null;
+		}
+
+		if(mb_strlen($vendorCode) > 64)
+		{
+			$this->addError(new Error('Слишком длинный артикул', 'prd:011'));
 			return null;
 		}
 

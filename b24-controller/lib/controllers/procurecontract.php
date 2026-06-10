@@ -29,7 +29,7 @@ class ProcureContract
 		];
 	}
 
-	public function configureActions()
+	public function configureActions(): array
 	{
 		return [
 			'find' => [

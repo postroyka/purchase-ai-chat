@@ -21,7 +21,7 @@ class ProcureSupplier
 		];
 	}
 
-	public function configureActions()
+	public function configureActions(): array
 	{
 		return [
 			'findByUnp' => [
@@ -86,7 +86,7 @@ class ProcureSupplier
 			$filter,
 			false,
 			['nTopCount' => 1],
-			['ID', 'TITLE', 'COMPANY_TYPE', 'INDUSTRY', 'LOGO']
+			['ID', 'TITLE']
 		);
 
 		if(is_object($dbResult) && ($fields = $dbResult->Fetch()))

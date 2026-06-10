@@ -87,17 +87,25 @@ export default defineMcpTool({
       const { size } = await stat(safePath)
       if (size > MAX_ATTACH_BYTES) {
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ error: true, code: 'file_too_large', message: `Source file is ${size} bytes, exceeds the ${MAX_ATTACH_BYTES}-byte attachment limit.` }) }],
+          content: [{ type: 'text' as const, text: JSON.stringify({ error: true, code: 'file_too_large', message: `Source file exceeds the ${MAX_ATTACH_BYTES}-byte attachment limit.` }) }],
         }
       }
       const buffer = await readFile(safePath)
       fileContent = buffer.toString('base64')
     } catch (err) {
       // Surface a stable code; keep the message generic so a crafted filePath
-      // can't probe host path structure via the error text.
-      const message = err instanceof Error ? err.message : String(err)
+      // can't probe host path structure or confirm traversal via the error text.
+      // For traversal errors (our own throws) the message itself is safe, but
+      // we unify all read failures under the same generic code anyway.
+      const isOwnError = err instanceof Error && (
+        err.message.includes('escapes') || err.message.includes('resolves (via symlink)')
+      )
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify({ error: true, code: 'file_read_failed', message }) }],
+        content: [{ type: 'text' as const, text: JSON.stringify({
+          error: true,
+          code: 'file_read_failed',
+          ...(!isOwnError && { message: err instanceof Error ? err.message : String(err) }),
+        }) }],
       }
     }
 
