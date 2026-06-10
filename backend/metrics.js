@@ -51,16 +51,24 @@ function warn(ctx, e) {
 }
 
 /**
- * @param {{ redisUrl?: string }} [config]
+ * @param {{ redisUrl?: string, hourlyRateByn?: number, minutesPerPosition?: number, usdBynRate?: number }} [config]
  * @returns {Metrics}
  */
 export function createMetrics(config = {}) {
   const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? '';
   const backend = redisUrl ? redisBackend(redisUrl) : memoryBackend();
-  return makeApi(backend);
+  // Economic model (issue #75). hourlyRateByn = cost of an employee-hour to the company
+  // (salary + payroll taxes). 0 disables the savings estimate. Defaults are placeholders
+  // to confirm with the client; all tunable via env.
+  const econ = {
+    hourlyRateByn: num(config.hourlyRateByn ?? process.env.HOURLY_RATE_BYN, 18),
+    minutesPerPosition: num(config.minutesPerPosition ?? process.env.MINUTES_PER_POSITION, 2),
+    usdByn: num(config.usdBynRate ?? process.env.USD_BYN_RATE, 3.3),
+  };
+  return makeApi(backend, econ);
 }
 
-function makeApi(b) {
+function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.3 }) {
   async function recordUpload({ fileCount = 0 } = {}) {
     try {
       await b.batch([
@@ -70,7 +78,7 @@ function makeApi(b) {
     } catch (e) { warn('recordUpload', e); }
   }
 
-  async function recordFile({ format, status, outcome, durationMs = 0, agent = null } = {}) {
+  async function recordFile({ format, status, outcome, durationMs = 0, agent = null, positions = 0, positionsNoArticle = 0 } = {}) {
     try {
       const ops = [
         ['hincrby', K.totals, status === 'done' ? 'files_done' : 'files_error', 1],
@@ -80,6 +88,13 @@ function makeApi(b) {
         ['hincrby', K.daily, today(), 1],
       ];
       if (outcome === 'ok') ops.push(['hincrby', K.totals, 'ok', 1]);
+      // Line-item counts drive the savings estimate (#75): positions recognised, and how
+      // many lacked a supplier article (vendorCode) → not auto-matchable, manual fallback.
+      const pos = Math.max(0, Math.trunc(Number(positions) || 0));
+      if (pos > 0) {
+        ops.push(['hincrby', K.totals, 'positions', pos]);
+        ops.push(['hincrby', K.totals, 'positions_no_article', Math.min(pos, Math.max(0, Math.trunc(Number(positionsNoArticle) || 0)))]);
+      }
       if (agent) {
         ops.push(['hincrby', K.totals, 'agent_runs', 1]);
         ops.push(['hincrby', K.totals, 'agent_ms', Math.max(0, Math.round(Number(agent.agentDurationMs) || 0))]);
@@ -105,8 +120,29 @@ function makeApi(b) {
     const ok = t.ok || 0;
     const costRuns = t.cost_runs || 0;
     const agentRuns = t.agent_runs || 0;
+
+    // Savings estimate (#75): manual time avoided × hourly rate, minus model cost.
+    const positions = t.positions || 0;
+    const positionsNoArticle = t.positions_no_article || 0;
+    const savedByn = round2(((positions * econ.minutesPerPosition) / 60) * econ.hourlyRateByn);
+    const modelCostByn = round2((t.cost_usd || 0) * econ.usdByn);
+    const lostNoArticleByn = round2(((positionsNoArticle * econ.minutesPerPosition) / 60) * econ.hourlyRateByn);
+
     return {
       generatedAt: new Date().toISOString(),
+      economics: {
+        enabled: econ.hourlyRateByn > 0,
+        hourlyRateByn: econ.hourlyRateByn,
+        minutesPerPosition: econ.minutesPerPosition,
+        usdByn: econ.usdByn,
+        positions,
+        positionsNoArticle,
+        positionsNoArticlePct: positions ? round1((positionsNoArticle / positions) * 100) : 0,
+        grossSavedByn: savedByn,
+        modelCostByn,
+        netSavedByn: round2(savedByn - modelCostByn),
+        lostNoArticleByn,
+      },
       totals: {
         uploads: t.uploads || 0,
         files,
@@ -151,7 +187,14 @@ function toSortedArray(obj) {
 }
 
 const round1 = (x) => Math.round(x * 10) / 10;
+const round2 = (x) => Math.round(x * 100) / 100;
 const round4 = (x) => Math.round(x * 10000) / 10000;
+
+/** Coerce to a finite number, else fall back to default d. */
+function num(v, d) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+}
 
 // ── storage backends ─────────────────────────────────────────────────────────
 // Both expose: batch(ops: [cmd, key, field, n][]) and hgetall(key).

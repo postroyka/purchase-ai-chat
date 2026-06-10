@@ -102,3 +102,34 @@ describe('metrics (in-memory)', () => {
     expect(s.daily).toEqual([]);
   });
 });
+
+describe('metrics economics (#75)', () => {
+  const econMem = () => createMetrics({ redisUrl: '', hourlyRateByn: 18, minutesPerPosition: 2, usdBynRate: 3 });
+
+  it('estimates savings from positions and flags missing-article loss', async () => {
+    const m = econMem();
+    await m.recordFile({
+      format: 'pdf', status: 'done', outcome: 'ok', durationMs: 1000,
+      agent: { extractMethod: 'pdftotext', costUsd: 0.10, agentDurationMs: 1000 },
+      positions: 10, positionsNoArticle: 4,
+    });
+    const e = (await m.snapshot()).economics;
+    expect(e.enabled).toBe(true);
+    expect(e.positions).toBe(10);
+    expect(e.positionsNoArticle).toBe(4);
+    expect(e.positionsNoArticlePct).toBe(40);
+    expect(e.grossSavedByn).toBeCloseTo(6, 2);       // 10 × 2/60 × 18
+    expect(e.modelCostByn).toBeCloseTo(0.3, 2);       // 0.10 USD × 3
+    expect(e.netSavedByn).toBeCloseTo(5.7, 2);
+    expect(e.lostNoArticleByn).toBeCloseTo(2.4, 2);   // 4 × 2/60 × 18
+  });
+
+  it('clamps positionsNoArticle to positions and disables savings when rate is 0', async () => {
+    const m = createMetrics({ redisUrl: '', hourlyRateByn: 0 });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 0, agent: null, positions: 3, positionsNoArticle: 99 });
+    const e = (await m.snapshot()).economics;
+    expect(e.enabled).toBe(false);
+    expect(e.positionsNoArticle).toBe(3); // clamped to positions
+    expect(e.grossSavedByn).toBe(0);
+  });
+});

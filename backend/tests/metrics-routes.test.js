@@ -110,7 +110,11 @@ describe('metrics pipeline integration (upload → processJob → /metrics/data)
     const app = appWith({
       metrics,
       agentConfig: {
-        spawnFn: makeAgentSpawn({ result: { status: 'stub' }, cost: 0.05 }),
+        spawnFn: makeAgentSpawn({
+          // 3 line items, 2 without a supplier article (empty + missing vendorCode)
+          result: { items: [{ vendorCode: 'A-1', name: 'X' }, { vendorCode: '', name: 'Y' }, { name: 'Z' }] },
+          cost: 0.05,
+        }),
         extractFn: async () => ({ text: 'СЧЁТ № 1', method: 'pdftotext' }),
       },
     });
@@ -141,6 +145,11 @@ describe('metrics pipeline integration (upload → processJob → /metrics/data)
     expect(res.body.extract).toContainEqual({ name: 'pdftotext', count: 1 }); // via onMeta
     expect(res.body.totals.costUsd).toBeCloseTo(0.05, 6);                // total_cost_usd captured
     expect(res.body.totals.costRuns).toBe(1);
+    // economics (#75): positions + missing-article counted from items[]
+    expect(res.body.economics.enabled).toBe(true);
+    expect(res.body.economics.positions).toBe(3);
+    expect(res.body.economics.positionsNoArticle).toBe(2);
+    expect(res.body.economics.netSavedByn).toBeGreaterThan(0);
   });
 
   it('records a business error outcome (e.g. tool_unavailable) as done-but-not-ok', async () => {

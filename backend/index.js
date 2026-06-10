@@ -487,7 +487,18 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null) {
       const outcome = (result && typeof result === 'object' && typeof result.error === 'string')
         ? result.error
         : 'ok';
-      metrics?.recordFile({ format, status: 'done', outcome, durationMs: Date.now() - startedAt, agent: agentMeta });
+      // Count recognised line items + those missing a supplier article (vendorCode) for the
+      // savings estimate (#75). Items are present even when the deal couldn't be created
+      // (e.g. tool_unavailable) — the recognition/matching work was still done.
+      const items = Array.isArray(result?.items) ? result.items : [];
+      const positionsNoArticle = items.filter((it) => {
+        const vc = it && typeof it === 'object' ? it.vendorCode : null;
+        return vc == null || String(vc).trim() === '';
+      }).length;
+      metrics?.recordFile({
+        format, status: 'done', outcome, durationMs: Date.now() - startedAt, agent: agentMeta,
+        positions: items.length, positionsNoArticle,
+      });
     } catch (err) {
       // Redact any Bearer token before the message is logged, persisted, or returned.
       const safeMsg = redactToken(String(err?.message ?? 'agent error'));

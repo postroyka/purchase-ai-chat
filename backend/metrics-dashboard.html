@@ -84,6 +84,12 @@
 
   <div class="cards" id="cards"></div>
 
+  <h2 id="econHead" style="display:none">💰 Экономика (оценка)</h2>
+  <div id="econ" class="panel" style="display:none">
+    <div class="cards" id="econCards"></div>
+    <div id="econNote" style="color:var(--muted);font-size:12px;margin-top:12px"></div>
+  </div>
+
   <h2>Исходы обработки</h2>
   <div class="grid2">
     <div class="panel">
@@ -155,6 +161,7 @@
     return (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + ' с';
   }
   function fmtUsd(v) { return '$' + (Number(v) || 0).toFixed(v >= 1 ? 2 : 4); }
+  function fmtByn(v) { return (Number(v) || 0).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) + ' BYN'; }
 
   function card(label, value, sub) {
     const el = document.createElement('div');
@@ -236,6 +243,27 @@
         card('Сред. цена прогона', fmtUsd(t.avgCostUsd), 'на 1 запуск агента'),
         card('Сред. время агента', fmtMs(t.avgAgentMs), t.agentRuns + ' запусков'),
       );
+
+      // Economics (issue #75) — shown only when an hourly rate is configured.
+      const e = m.economics;
+      if (e && e.enabled) {
+        $('econHead').style.display = '';
+        $('econ').style.display = '';
+        const ec = $('econCards');
+        ec.innerHTML = '';
+        ec.append(
+          card('Сэкономлено (нетто)', fmtByn(e.netSavedByn), e.positions + ' позиций обработано'),
+          card('Потеря на пустых артикулах', fmtByn(e.lostNoArticleByn), e.positionsNoArticlePct + '% позиций без артикула'),
+          card('Стоимость модели', fmtByn(e.modelCostByn), 'за всё время'),
+          card('Позиций без артикула', e.positionsNoArticle, 'из ' + e.positions),
+        );
+        $('econNote').textContent = 'Допущения: ставка ' + e.hourlyRateByn + ' BYN/ч, '
+          + e.minutesPerPosition + ' мин/позицию, курс USD→BYN ' + e.usdByn
+          + '. Настраивается в .env (HOURLY_RATE_BYN, MINUTES_PER_POSITION, USD_BYN_RATE).';
+      } else {
+        $('econHead').style.display = 'none';
+        $('econ').style.display = 'none';
+      }
 
       renderDonut(t.successRatePct, t.ok, t.files);
       renderBars($('outcomes'), m.outcomes, { labels: OUTCOME_LABELS, colorFn: outcomeColor });

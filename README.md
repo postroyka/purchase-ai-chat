@@ -140,7 +140,12 @@ curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
 curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"   # либо Basic-логин страницы
 ```
 
-> Счётчики копятся в Redis без TTL (lifetime). Новых переменных окружения не требуется.
+Дашборд также оценивает **экономию** (сэкономленное время × ставку − стоимость прогона модели)
+и **потерю на позициях без артикула поставщика** (их нельзя автосопоставить). Параметры оценки —
+`HOURLY_RATE_BYN`, `MINUTES_PER_POSITION`, `USD_BYN_RATE` в `.env` (значения оценочные, уточнить
+с заказчиком; `HOURLY_RATE_BYN=0` скрывает блок экономики).
+
+> Счётчики копятся в Redis без TTL (lifetime).
 
 ## MCP — upstream и кастомные инструменты
 
