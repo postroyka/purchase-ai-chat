@@ -6,9 +6,19 @@ import { callV2 } from '~/server/utils/sdk-helpers'
 interface ContractResult {
   id: number | null
   number?: string
+  /** Contract date as returned by Bitrix24, formatted d.m.Y (e.g. "15.03.2025"). */
   date?: string
 }
 
+/**
+ * Find an active procurement contract for a supplier.
+ *
+ * Calls `shef.purchase.api.procurecontract.find` over the webhook (callV2). The
+ * controller queries the "Договора" iblock list (id 32): CLIENT = CO_<id>,
+ * ACTIVE=Y, STATUS != Брак, TYPE ∈ {Закупки, Закупки-Комиссионный}, optionally
+ * narrowed by NUMBER/DATE (exact), returning the minimum-id match. `number` /
+ * `date` are passed only when present.
+ */
 export default defineMcpTool({
   name: 'b24_pst_crm_find_contract',
   description:

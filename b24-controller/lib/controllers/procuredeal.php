@@ -18,13 +18,20 @@ use Shef\Options\TraitList;
  *   Сделка создаётся всегда (дублей не проверяем).
  *   fileContent (base64) → UF_CRM_DEAL_SH_PRCHS_AI_FILE + таймлайн-комментарий.
  *   processingLog → COMMENTS сделки + CommentEntry в таймлайне.
+ *   contractId → UF_CRM_DEAL_DOGOVOR (привязка договора).
  */
 class ProcureDeal
 	extends Engine\Controller
 {
 	use TraitList\Modules;
 
-	const UNIT_ID_SHT = 796; // ОКЕИ: штука
+	// ОКЕИ-код «штука». В CCrmDeal::SaveProductRows MEASURE_CODE — это код ОКЕИ
+	// (796 = штука), не ID записи b_catalog_measure. Переопределяется опцией
+	// модуля на случай нестандартной настройки каталога.
+	const UNIT_OKEI_SHT = 796;
+
+	// Защита от перегрузки: разумный потолок числа позиций в одной сделке.
+	const MAX_ITEMS = 500;
 
 	protected static function getModulesList(): array
 	{
@@ -47,8 +54,8 @@ class ProcureDeal
 	 * @param string $fileContent       Содержимое файла в base64
 	 * @param string $processingLog     Лог обработки (пишется в COMMENTS и таймлайн)
 	 * @param array  $items             Позиции: [{ productId?, vendorCode?, name, priceExclVat, quantity }]
-	 * @param int    $contractId        ID договора (0 = не найден)
-	 * @return array|null { dealId } | null при ошибке
+	 * @param int    $contractId        ID договора (0 = не найден) → UF_CRM_DEAL_DOGOVOR
+	 * @return array|null { dealId, warnings?: string[] } | null при ошибке создания
 	 */
 	public function createAction(
 		int $supplierId,
@@ -79,8 +86,15 @@ class ProcureDeal
 			return null;
 		}
 
-		$categoryId = (int)Option::get('shef.purchase', 'B24_DEAL_CATEGORY_ID', 1);
-		$stageId    = Option::get('shef.purchase', 'B24_DEAL_DEFAULT_STAGE_ID', 'C1:NEW');
+		if(count($items) > static::MAX_ITEMS)
+		{
+			$this->addError(new Error('too many items (max '.static::MAX_ITEMS.')', 'deal:021'));
+			return null;
+		}
+
+		$categoryId  = (int)Option::get('shef.purchase', 'B24_DEAL_CATEGORY_ID', 1);
+		$stageId     = Option::get('shef.purchase', 'B24_DEAL_DEFAULT_STAGE_ID', 'C1:NEW');
+		$measureCode = (int)Option::get('shef.purchase', 'B24_UNIT_OKEI_SHT', static::UNIT_OKEI_SHT);
 
 		// --- 1) Создать сделку ---
 		$dealFields = [
@@ -93,6 +107,12 @@ class ProcureDeal
 			'COMMENTS'       => $processingLog,
 		];
 
+		// Привязка договора к сделке (поле подтверждено заказчиком).
+		if($contractId > 0)
+		{
+			$dealFields['UF_CRM_DEAL_DOGOVOR'] = $contractId;
+		}
+
 		$deal   = new \CCrmDeal(false);
 		$dealId = $deal->Add($dealFields, true);
 
@@ -104,23 +124,40 @@ class ProcureDeal
 		}
 
 		$dealId = (int)$dealId;
+		// Некритичные проблемы после создания сделки: не валят вызов (агент должен
+		// получить dealId), но возвращаются в payload, чтобы попасть в отчёт.
+		$warnings = [];
 
 		// --- 2) Товарные позиции (TAX_RATE=20, TAX_INCLUDED=Y — бизнес-решение) ---
 		$productRows = [];
 		foreach($items as $item)
 		{
+			// Серверная страховка: цена/кол-во не отрицательные (Zod на стороне
+			// MCP уже это проверяет, но прямой REST-вызов мог бы обойти).
+			$price    = max(0.0, (float)($item['priceExclVat'] ?? 0));
+			$quantity = (float)($item['quantity'] ?? 1);
+			if($quantity <= 0)
+			{
+				$quantity = 1;
+			}
+
 			$productRows[] = [
 				'PRODUCT_ID'   => isset($item['productId']) ? (int)$item['productId'] : 0,
 				'PRODUCT_NAME' => (string)($item['name'] ?? ''),
-				'PRICE'        => (float)($item['priceExclVat'] ?? 0),
-				'QUANTITY'     => (float)($item['quantity'] ?? 1),
+				'PRICE'        => $price,
+				'QUANTITY'     => $quantity,
 				'TAX_RATE'     => 20,
 				'TAX_INCLUDED' => 'Y',
-				'MEASURE_CODE' => static::UNIT_ID_SHT,
+				'MEASURE_CODE' => $measureCode,
 				'MEASURE_NAME' => 'шт',
 			];
 		}
-		\CCrmDeal::SaveProductRows($dealId, $productRows);
+		if(!\CCrmDeal::SaveProductRows($dealId, $productRows))
+		{
+			// Сделка уже создана; позиции не сохранились — сигналим в warnings, но
+			// сделку не откатываем (агент увидит и сможет дозаполнить вручную).
+			$warnings[] = 'product_rows_failed';
+		}
 
 		// --- 3) Прикрепить файл к UF-полю сделки (B6) ---
 		if($fileContent !== '')
@@ -128,9 +165,15 @@ class ProcureDeal
 			$fileArray = \CRestUtil::saveFile([$fileName, $fileContent]);
 			if(is_array($fileArray))
 			{
-				$deal->Update($dealId, [
-					'UF_CRM_DEAL_SH_PRCHS_AI_FILE' => $fileArray,
-				]);
+				if(!$deal->Update($dealId, ['UF_CRM_DEAL_SH_PRCHS_AI_FILE' => $fileArray]))
+				{
+					// Файл — не критичная часть сделки: фиксируем как warning.
+					$warnings[] = 'file_attach_failed';
+				}
+			}
+			else
+			{
+				$warnings[] = 'invalid_base64_file';
 			}
 		}
 
@@ -159,6 +202,11 @@ class ProcureDeal
 			}
 		}
 
-		return ['dealId' => $dealId];
+		$result = ['dealId' => $dealId];
+		if(!empty($warnings))
+		{
+			$result['warnings'] = $warnings;
+		}
+		return $result;
 	}
 }

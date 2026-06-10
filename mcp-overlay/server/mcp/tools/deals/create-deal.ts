@@ -1,5 +1,5 @@
 import { basename, resolve, sep } from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath, stat } from 'node:fs/promises'
 import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
 import { useBitrix24 } from '~/server/utils/bitrix24'
@@ -16,23 +16,46 @@ interface DealResult {
  * and reads the file here to base64-encode it for the deal attachment — so the
  * heavy binary never has to travel through the LLM context window.
  *
+ * Read once at module load. NOTE: changing NUXT_UPLOADS_DIR after the process
+ * has started does not take effect (acceptable — it is deployment config).
  * Overridable via NUXT_UPLOADS_DIR for local dev / tests.
  */
 const UPLOADS_DIR = process.env.NUXT_UPLOADS_DIR || '/app/uploads'
 
 /**
- * Resolve `filePath` and assert it stays inside UPLOADS_DIR. The path comes
- * (indirectly) from a document-driven agent, so a crafted value like
- * `../../etc/passwd` must not let the tool read and exfiltrate arbitrary host
- * files into a Bitrix24 deal. Returns the safe absolute path or throws.
+ * Hard cap on the source file size before we read it into memory and base64-
+ * encode it (~+33% overhead). Mirrors the app's MAX_FILE_SIZE_MB=20 with head-
+ * room; guards the MCP container (512M limit) against a memory-exhaustion DoS
+ * via an oversized upload. Overridable via NUXT_MAX_ATTACH_MB.
  */
-function resolveWithinUploads(filePath: string): string {
-  const base = resolve(UPLOADS_DIR)
-  const abs = resolve(base, filePath)
-  if (abs !== base && !abs.startsWith(base + sep)) {
-    throw new Error(`filePath escapes the uploads directory: ${JSON.stringify(filePath)}`)
+const MAX_ATTACH_BYTES = (Number(process.env.NUXT_MAX_ATTACH_MB) || 25) * 1024 * 1024
+
+/**
+ * Resolve `filePath`, assert it stays inside UPLOADS_DIR, and reject symlinks
+ * that escape it. The path comes (indirectly) from a document-driven agent, so
+ * a crafted value like `../../etc/passwd` — or a symlink planted in uploads
+ * pointing outside — must not let the tool read and exfiltrate arbitrary host
+ * files into a Bitrix24 deal. Returns the safe REAL absolute path or throws.
+ *
+ * Two layers: (1) lexical containment after `resolve()` blocks `..` traversal;
+ * (2) `realpath()` dereferences symlinks and we re-check containment so a
+ * symlink can't smuggle the read target outside the base.
+ */
+async function resolveWithinUploads(filePath: string): Promise<string> {
+  const base = await realpath(resolve(UPLOADS_DIR))
+  const lexical = resolve(base, filePath)
+  if (lexical !== base && !lexical.startsWith(base + sep)) {
+    // Do NOT echo filePath back — avoid confirming host path structure to a
+    // potentially adversarial document. Generic message only.
+    throw new Error('filePath escapes the uploads directory')
   }
-  return abs
+  // Dereference symlinks (realpath throws ENOENT if the file is missing — that
+  // is fine, it surfaces as file_read_failed upstream).
+  const real = await realpath(lexical)
+  if (real !== base && !real.startsWith(base + sep)) {
+    throw new Error('filePath resolves (via symlink) outside the uploads directory')
+  }
+  return real
 }
 
 export default defineMcpTool({
@@ -60,10 +83,18 @@ export default defineMcpTool({
   handler: async ({ supplierId, contractId, responsibleUserId, filePath, processingLog, items }) => {
     let fileContent: string
     try {
-      const safePath = resolveWithinUploads(filePath)
+      const safePath = await resolveWithinUploads(filePath)
+      const { size } = await stat(safePath)
+      if (size > MAX_ATTACH_BYTES) {
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify({ error: true, code: 'file_too_large', message: `Source file is ${size} bytes, exceeds the ${MAX_ATTACH_BYTES}-byte attachment limit.` }) }],
+        }
+      }
       const buffer = await readFile(safePath)
       fileContent = buffer.toString('base64')
     } catch (err) {
+      // Surface a stable code; keep the message generic so a crafted filePath
+      // can't probe host path structure via the error text.
       const message = err instanceof Error ? err.message : String(err)
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({ error: true, code: 'file_read_failed', message }) }],

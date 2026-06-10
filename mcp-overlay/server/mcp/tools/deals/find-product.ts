@@ -9,6 +9,14 @@ interface ProductResult {
   vendorCode?: string
 }
 
+/**
+ * Find an active parent product in the catalog by vendor code.
+ *
+ * Calls `shef.purchase.api.procureproduct.findByVendorCode` over the webhook
+ * (callV2). The controller matches `PURCHASE_ARTICLE` exactly on active parent
+ * products (empty PURCHASE_69_PARENT_PRODUCT) and returns the minimum-id match.
+ * Matching by name is intentionally NOT supported — vendor code only (B5).
+ */
 export default defineMcpTool({
   name: 'b24_pst_crm_find_product',
   description:

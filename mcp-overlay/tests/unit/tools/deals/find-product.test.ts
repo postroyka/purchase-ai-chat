@@ -38,6 +38,18 @@ describe('b24_pst_crm_find_product', () => {
     expect(JSON.parse(result.content[0].text)).toEqual({ id: null })
   })
 
+  it('propagates a Bitrix24 error response (!isSuccess) as a throw', async () => {
+    fake.v2Call.mockResolvedValue({ isSuccess: false, getData: () => ({ result: null }), getErrorMessages: () => ['IBLOCK_NOT_FOUND'] })
+
+    await expect((tool as any).handler({ vendorCode: 'SKU-001' })).rejects.toThrow('IBLOCK_NOT_FOUND')
+  })
+
+  it('propagates a transport failure as a throw', async () => {
+    fake.v2Call.mockRejectedValue(new Error('socket hang up'))
+
+    await expect((tool as any).handler({ vendorCode: 'SKU-001' })).rejects.toThrow()
+  })
+
   it('rejects empty vendorCode via Zod schema', () => {
     expect((tool as any).inputSchema.vendorCode.safeParse('').success).toBe(false)
   })

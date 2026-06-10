@@ -58,6 +58,18 @@ describe('b24_pst_crm_find_contract', () => {
     expect(JSON.parse(result.content[0].text)).toEqual({ id: null })
   })
 
+  it('propagates a Bitrix24 error response (!isSuccess) as a throw', async () => {
+    fake.v2Call.mockResolvedValue({ isSuccess: false, getData: () => ({ result: null }), getErrorMessages: () => ['ERROR_CORE'] })
+
+    await expect((tool as any).handler({ supplierId: '1' })).rejects.toThrow('ERROR_CORE')
+  })
+
+  it('propagates a transport failure as a throw', async () => {
+    fake.v2Call.mockRejectedValue(new Error('timeout'))
+
+    await expect((tool as any).handler({ supplierId: '1' })).rejects.toThrow()
+  })
+
   it('rejects empty supplierId via Zod schema', () => {
     expect((tool as any).inputSchema.supplierId.safeParse('').success).toBe(false)
   })

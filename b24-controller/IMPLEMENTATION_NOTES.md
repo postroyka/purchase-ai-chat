@@ -99,7 +99,7 @@ $clientField = $entity->getField('CLIENT'); // getPropertyId()
 
 ## B4 — Товар (каталог)
 
-- `IBLOCK_ID = 15` (каталог)
+- `IBLOCK_ID = 15` (каталог; в коде — опция `B24_CATALOG_IBLOCK_ID`, default 15)
 - Фильтр матчинга по артикулу поставщика:
   - `ACTIVE = Y` (штатное поле)
   - `PROPERTY_PURCHASE_ARTICLE` = артикул поставщика из документа
@@ -117,9 +117,21 @@ $clientField = $entity->getField('CLIENT'); // getPropertyId()
 - Позиции: `TAX_RATE = 20`, `TAX_INCLUDED = Y`, единица = шт, цена = `priceExclVat`.
 - Сделка создаётся всегда (дублей не проверяем).
 
-### Открыто (ждём B6, B7)
-- B6 — как крепить `sourceFile` к карточке (CFile / Disk / поле)?
-- B7 — лог обработки в комментарий: `CCrmActivity` COMMENT или timeline-event?
+### B6 — вложение файла ✅ реализовано
+Файл приходит как base64 (MCP читает его из uploads-тома по `filePath`).
+`\CRestUtil::saveFile([$fileName, $fileContent])` → `$deal->Update($id, ['UF_CRM_DEAL_SH_PRCHS_AI_FILE' => $fileArray])`.
+Сбой вложения не валит сделку — попадает в `warnings`.
 
-`createAction` реализован: `CCrmDeal::Add` + `CCrmDeal::SaveProductRows`.
-Вложение файла (B6) и лог-комментарий (B7) — помечены TODO, ждём примеры от заказчика.
+### B7 — лог-комментарий ✅ реализовано
+`processingLog` пишется в поле `COMMENTS` при `CCrmDeal::Add`, и отдельно в таймлайн:
+`\Bitrix\Crm\Timeline\CommentEntry::create(...)` + `CommentController::getInstance()->onCreate(...)`.
+
+### Привязка договора ✅
+`contractId` → `UF_CRM_DEAL_DOGOVOR` (поле подтверждено заказчиком).
+
+### Итог по `createAction`
+Полностью реализован: `CCrmDeal::Add` (с `UF_CRM_DEAL_DOGOVOR`), `SaveProductRows`
+(результат проверяется), вложение файла (B6), таймлайн-лог (B7). Некритичные сбои
+(позиции/файл) возвращаются в `warnings`, сделку не откатывают. Единица измерения —
+ОКЕИ-код (опция `B24_UNIT_OKEI_SHT`, default 796), позиции с защитой от
+отрицательной цены/нулевого кол-ва, потолок `MAX_ITEMS = 500`.

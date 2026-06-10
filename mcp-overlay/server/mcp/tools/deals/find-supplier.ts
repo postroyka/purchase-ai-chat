@@ -9,6 +9,15 @@ interface SupplierResult {
   unp?: string
 }
 
+/**
+ * Find a Belarusian supplier company by УНП (taxpayer number).
+ *
+ * Calls the custom controller `shef.purchase.api.procuresupplier.findByUnp`
+ * over the standard webhook (callV2). The controller matches the company
+ * requisite field `RQ_INN` (exact, country = BY) and returns the minimum-id
+ * company when several share one УНП. Russian suppliers (INN+KPP without УНП)
+ * are out of scope — see docs/PROJECT_BRIEF.md.
+ */
 export default defineMcpTool({
   name: 'b24_pst_crm_find_supplier',
   description:

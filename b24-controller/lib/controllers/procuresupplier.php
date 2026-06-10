@@ -53,6 +53,14 @@ class ProcureSupplier
 			return null;
 		}
 
+		// УНП РБ — 9 цифр. Не валим на точном формате (вдруг придёт с пробелами/
+		// дефисами от OCR), но отсекаем заведомо мусорные длинные значения.
+		if(mb_strlen($unp) > 32)
+		{
+			$this->addError(new Error('Слишком длинный УНП', 'sup:011'));
+			return null;
+		}
+
 		// Страна реквизита (4 = Беларусь по умолчанию).
 		$countryId = (int)\Bitrix\Main\Config\Option::get(
 			'crm',
@@ -60,6 +68,8 @@ class ProcureSupplier
 			4
 		);
 
+		// Поиск по реквизиту: CCrmCompany::GetListEx поддерживает спец-ключ 'RQ'
+		// (фильтр по реквизитам компании) — проверено на рабочей коробке.
 		$filter = [
 			'RQ' => [
 				[

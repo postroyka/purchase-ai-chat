@@ -79,6 +79,10 @@ class ProcureContract
 		$clientField = $entity->getField('CLIENT');
 
 		$filter = [
+			// Только активные элементы инфоблока. ВАЖНО: Dogovor\Entity::getList
+			// внутри вызывает getListInner(isActive=false), который добавляет
+			// SHOW_NEW=Y, а НЕ ACTIVE=Y — поэтому фильтр по ACTIVE ставим явно.
+			'ACTIVE' => 'Y',
 			// CLIENT is stored as CO_<id> for companies (confirmed B3a)
 			'PROPERTY_'.$clientField->getPropertyId() => 'CO_'.$supplierId,
 			// STATUS != TO_DELETE (брак) — exclude all broken contracts

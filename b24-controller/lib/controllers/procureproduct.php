@@ -3,6 +3,7 @@ namespace Shef\Purchase\Controllers;
 
 use Bitrix\Main\Engine;
 use Bitrix\Main\Error;
+use Bitrix\Main\Config\Option;
 use Shef\Options\TraitList;
 
 /**
@@ -14,7 +15,9 @@ class ProcureProduct
 {
 	use TraitList\Modules;
 
-	const IBLOCK_ID = 15; // каталог
+	// ID каталога по умолчанию (b24.postroyka.by). Переопределяется опцией
+	// модуля B24_CATALOG_IBLOCK_ID — на dev/тестовой коробке ID может отличаться.
+	const DEFAULT_IBLOCK_ID = 15;
 
 	protected static function getModulesList(): array
 	{
@@ -57,8 +60,10 @@ class ProcureProduct
 			return null;
 		}
 
+		$iblockId = (int)Option::get('shef.purchase', 'B24_CATALOG_IBLOCK_ID', static::DEFAULT_IBLOCK_ID);
+
 		$filter = [
-			'IBLOCK_ID'                            => static::IBLOCK_ID,
+			'IBLOCK_ID'                            => $iblockId,
 			'ACTIVE'                               => 'Y',
 			'=PROPERTY_PURCHASE_ARTICLE'           => $vendorCode,
 			'=PROPERTY_PURCHASE_69_PARENT_PRODUCT' => false, // пустое → родительский

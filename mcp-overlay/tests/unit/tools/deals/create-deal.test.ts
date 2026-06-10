@@ -93,6 +93,40 @@ describe('b24_pst_crm_create_deal', () => {
     expect(fake.v2Call).not.toHaveBeenCalled()
   })
 
+  it('does not leak the offending filePath in the traversal error message', async () => {
+    const result = await (tool as any).handler({ ...baseInput, filePath: join(uploadsDir, '../../etc/shadow') })
+    const payload = JSON.parse(result.content[0].text)
+
+    expect(payload.code).toBe('file_read_failed')
+    expect(payload.message).not.toContain('shadow')
+    expect(payload.message).not.toContain('etc')
+  })
+
+  it('returns file_too_large and does NOT call B24 when the file exceeds the limit', async () => {
+    const bigPath = join(uploadsDir, 'big.bin')
+    // NUXT_MAX_ATTACH_MB defaults to 25MB; write just over it.
+    await writeFile(bigPath, Buffer.alloc(26 * 1024 * 1024, 0))
+
+    const result = await (tool as any).handler({ ...baseInput, filePath: bigPath })
+    const payload = JSON.parse(result.content[0].text)
+
+    expect(payload.error).toBe(true)
+    expect(payload.code).toBe('file_too_large')
+    expect(fake.v2Call).not.toHaveBeenCalled()
+  })
+
+  it('propagates a Bitrix24 error response (!isSuccess) as a throw after reading the file', async () => {
+    fake.v2Call.mockResolvedValue({ isSuccess: false, getData: () => ({ result: null }), getErrorMessages: () => ['DEAL_ADD_FAILED'] })
+
+    await expect((tool as any).handler({ ...baseInput, filePath: pdfPath })).rejects.toThrow('DEAL_ADD_FAILED')
+  })
+
+  it('propagates a transport failure as a throw', async () => {
+    fake.v2Call.mockRejectedValue(new Error('connection reset'))
+
+    await expect((tool as any).handler({ ...baseInput, filePath: pdfPath })).rejects.toThrow()
+  })
+
   it('rejects empty items array via Zod schema', () => {
     expect((tool as any).inputSchema.items.safeParse([]).success).toBe(false)
   })

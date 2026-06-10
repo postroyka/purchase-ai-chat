@@ -38,6 +38,25 @@ describe('b24_pst_crm_find_supplier', () => {
     expect(JSON.parse(result.content[0].text)).toEqual({ id: null })
   })
 
+  it('returns { id: null } when controller returns an empty success body', async () => {
+    fake.v2Call.mockResolvedValue({ isSuccess: true, getData: () => ({ result: undefined }), getErrorMessages: () => [] })
+
+    const result = await (tool as any).handler({ unp: '123456789' })
+    expect(JSON.parse(result.content[0].text)).toEqual({ id: null })
+  })
+
+  it('propagates a Bitrix24 error response (!isSuccess) as a throw', async () => {
+    fake.v2Call.mockResolvedValue({ isSuccess: false, getData: () => ({ result: null }), getErrorMessages: () => ['ACCESS_DENIED'] })
+
+    await expect((tool as any).handler({ unp: '123456789' })).rejects.toThrow('ACCESS_DENIED')
+  })
+
+  it('propagates a transport failure as a throw', async () => {
+    fake.v2Call.mockRejectedValue(new Error('network down'))
+
+    await expect((tool as any).handler({ unp: '123456789' })).rejects.toThrow()
+  })
+
   it('rejects UNP shorter than 9 digits via Zod schema', () => {
     expect((tool as any).inputSchema.unp.safeParse('12345').success).toBe(false)
   })
