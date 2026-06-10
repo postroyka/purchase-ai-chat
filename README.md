@@ -331,4 +331,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-10 (feature/b24-controller — REST-контроллеры `shef.purchase.api.procure*`, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
+*Last reviewed: 2026-06-10 (PR #71 — REST-контроллеры `shef.purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*

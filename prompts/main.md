@@ -152,4 +152,4 @@
 
 ---
 
-*Last reviewed: 2026-06-10 (b24-controller — create_deal принимает `filePath` + `processingLog`; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*
+*Last reviewed: 2026-06-10 (PR #71 — create_deal принимает `filePath` + `processingLog`, warnings[] обработка; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*

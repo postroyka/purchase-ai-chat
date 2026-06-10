@@ -93,19 +93,16 @@ export default defineMcpTool({
       const buffer = await readFile(safePath)
       fileContent = buffer.toString('base64')
     } catch (err) {
-      // Surface a stable code; keep the message generic so a crafted filePath
-      // can't probe host path structure or confirm traversal via the error text.
-      // For traversal errors (our own throws) the message itself is safe, but
-      // we unify all read failures under the same generic code anyway.
+      // Surface a stable code. For traversal / symlink errors (our own throws)
+      // use a neutral message that neither echoes the offending path nor
+      // confirms to an attacker that traversal was detected. All other
+      // read failures (ENOENT, EPERM, …) pass their message through.
       const isOwnError = err instanceof Error && (
         err.message.includes('escapes') || err.message.includes('resolves (via symlink)')
       )
+      const message = isOwnError ? 'file access denied' : (err instanceof Error ? err.message : String(err))
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify({
-          error: true,
-          code: 'file_read_failed',
-          ...(!isOwnError && { message: err instanceof Error ? err.message : String(err) }),
-        }) }],
+        content: [{ type: 'text' as const, text: JSON.stringify({ error: true, code: 'file_read_failed', message }) }],
       }
     }
 
