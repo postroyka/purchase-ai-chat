@@ -20,24 +20,28 @@ function getMetricsPage() {
   if (_metricsPageCache != null) return _metricsPageCache;
   try {
     _metricsPageCache = fs.readFileSync(path.join(__dirname, 'metrics-dashboard.html'), 'utf8');
+    return _metricsPageCache;
   } catch {
-    _metricsPageCache = '<!doctype html><meta charset="utf-8"><title>Procure AI — метрики</title>'
+    // Don't cache the fallback: a transient read miss must not pin the stub for the whole
+    // process — a later request should retry reading the real file.
+    return '<!doctype html><meta charset="utf-8"><title>Procure AI — метрики</title>'
       + '<body style="font-family:sans-serif;max-width:720px;margin:40px auto"><h1>Procure AI — метрики</h1>'
       + '<pre id="o">загрузка…</pre><script>fetch("/metrics/data",{cache:"no-store"}).then(r=>r.json())'
       + '.then(d=>{o.textContent=JSON.stringify(d,null,2)}).catch(e=>{o.textContent=String(e)})</script>';
   }
-  return _metricsPageCache;
 }
 
 // Map a thrown agent error message to a small, stable label for the metrics outcome
 // breakdown (issue #67). Business errors (file_unreadable, tool_unavailable, …) arrive in
 // the agent's result payload instead and are recorded directly.
-function classifyAgentError(msg) {
+// Order matters: a crash's stderr may embed "ENOENT"/"not found", so match agent-runner's
+// exact "CLI not found" phrase and check "exited with code" before the JSON-shape errors.
+export function classifyAgentError(msg) {
   const m = String(msg);
   if (/timed out/i.test(m)) return 'timeout';
-  if (/not found/i.test(m) || /ENOENT/.test(m)) return 'cli_missing';
-  if (/no JSON|not valid JSON/i.test(m)) return 'bad_output';
+  if (/CLI not found/i.test(m)) return 'cli_missing';
   if (/exited with code/i.test(m)) return 'agent_crash';
+  if (/no JSON|not valid JSON/i.test(m)) return 'bad_output';
   return 'other_error';
 }
 
@@ -383,7 +387,7 @@ export function createApp(config = {}) {
       }
 
       activeJobs++;
-      metrics.recordUpload({ fileCount: fileEntries.length });
+      metrics.recordUpload({ fileCount: fileEntries.length }).catch(() => {}); // best-effort
       processJob(jobId, jobs, agentConfig, metrics).catch((e) =>
         console.error(`[processJob] unhandled error for job ${jobId}:`, e),
       ).finally(() => { activeJobs--; });
@@ -426,6 +430,8 @@ export function createApp(config = {}) {
   // GET /metrics — protected usage dashboard (issue #67). Behind page Basic auth so it's
   // browsable; the page fetches /metrics/data for the numbers. Registered before the static
   // UI catch-all below so it isn't shadowed by it.
+  // NOTE: the dashboard uses inline <script>/<style>. When a strict CSP is added (#50), it
+  // must allow them via nonce/hash or the assets must be split into separate files.
   app.get('/metrics', requirePageAuth, (_req, res) => {
     res.type('html').send(getMetricsPage());
   });

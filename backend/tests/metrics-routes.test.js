@@ -4,7 +4,7 @@ import request from 'supertest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createApp } from '../index.js';
+import { createApp, classifyAgentError } from '../index.js';
 import { createMetrics } from '../metrics.js';
 
 vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -166,18 +166,103 @@ describe('metrics pipeline integration (upload → processJob → /metrics/data)
       .post('/upload')
       .set('Authorization', `Bearer ${TOKEN}`)
       .attach('files[]', validPdf(), 'scan.pdf');
-    const jobId = up.body.jobId;
-
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      const r = await request(app).get(`/job/${jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
-      if (r.body.status === 'done' || r.body.status === 'error') break;
-      await new Promise((res) => setTimeout(res, 30));
-    }
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
 
     const res = await request(app).get('/metrics/data').set('Authorization', `Bearer ${TOKEN}`);
     expect(res.body.totals.ok).toBe(0);
     expect(res.body.totals.filesDone).toBe(1); // resolved (not a thrown error) → done
     expect(res.body.outcomes).toContainEqual({ name: 'tool_unavailable', count: 1 });
+  });
+});
+
+// Poll a job to a terminal state; returns the final status.
+async function waitJob(app, jobId, maxMs = 5000) {
+  const deadline = Date.now() + maxMs;
+  let status = '';
+  while (Date.now() < deadline) {
+    const r = await request(app).get(`/job/${jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    status = r.body.status;
+    if (status === 'done' || status === 'error') break;
+    await new Promise((res) => setTimeout(res, 30));
+  }
+  return status;
+}
+
+function makeProcMock(emit) {
+  return vi.fn(() => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = { end: vi.fn() };
+    proc.kill = vi.fn();
+    setImmediate(() => emit(proc));
+    return proc;
+  });
+}
+
+describe('metrics pipeline — error & edge paths', () => {
+  it('records an infra failure (agent crash) as files_error + classified outcome', async () => {
+    const metrics = createMetrics({ redisUrl: '' });
+    const spawnFn = makeProcMock((proc) => { proc.stderr.emit('data', 'claude: command failed'); proc.emit('close', 2); });
+    const app = appWith({ metrics, agentConfig: { spawnFn, extractFn: async () => ({ text: 't', method: 'pdftotext' }) } });
+
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`).attach('files[]', validPdf(), 'fail.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('error');
+
+    const res = await request(app).get('/metrics/data').set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.body.totals.filesError).toBe(1);
+    expect(res.body.totals.filesDone).toBe(0);
+    expect(res.body.outcomes).toContainEqual({ name: 'agent_crash', count: 1 });
+  });
+
+  it('does not record cost when the wrapper omits total_cost_usd (DeepSeek case)', async () => {
+    const metrics = createMetrics({ redisUrl: '' });
+    const spawnFn = makeProcMock((proc) => {
+      // wrapper WITHOUT total_cost_usd
+      proc.stdout.emit('data', JSON.stringify({ is_error: false, result: JSON.stringify({ items: [] }), duration_ms: 500 }));
+      proc.emit('close', 0);
+    });
+    const app = appWith({ metrics, agentConfig: { spawnFn, extractFn: async () => null } });
+
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`).attach('files[]', validPdf(), 'inv.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+
+    const res = await request(app).get('/metrics/data').set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.body.totals.costRuns).toBe(0);
+    expect(res.body.totals.costUsd).toBe(0);
+    expect(Number.isFinite(res.body.totals.avgCostUsd)).toBe(true); // not NaN
+    expect(res.body.totals.agentRuns).toBe(1);                      // agent still ran
+  });
+});
+
+describe('GET /metrics/data — auth & robustness', () => {
+  it('accepts Basic credentials (browser dual-auth)', async () => {
+    const app = appWith({ basicAuthUser: 'op', basicAuthPass: 'secret-pass', publicPageEnabled: true });
+    const res = await request(app).get('/metrics/data').set('Authorization', basic('op', 'secret-pass'));
+    expect(res.status).toBe(200);
+    expect(res.body.totals).toBeDefined();
+  });
+
+  it('returns 503 when snapshot fails', async () => {
+    const metrics = {
+      recordUpload: async () => {}, recordFile: async () => {}, ping: async () => {},
+      snapshot: async () => { throw new Error('redis down'); },
+    };
+    const res = await request(appWith({ metrics })).get('/metrics/data').set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.status).toBe(503);
+  });
+});
+
+describe('classifyAgentError', () => {
+  it.each([
+    ['Agent timed out after 300000ms', 'timeout'],
+    ['Claude Code CLI not found at "claude". Set CLAUDE_CODE_BIN env var or ensure "claude" is in PATH.', 'cli_missing'],
+    ['Agent process exited with code 1: claude: command failed', 'agent_crash'],
+    ['Agent process exited with code 1: spawn ENOENT', 'agent_crash'], // embedded ENOENT must NOT read as cli_missing
+    ['Agent output is not valid JSON. stdout: blah', 'bad_output'],
+    ['Agent produced no JSON in its response. result: hello', 'bad_output'],
+    ['Something completely unexpected', 'other_error'],
+  ])('classifies %j → %s', (msg, expected) => {
+    expect(classifyAgentError(msg)).toBe(expected);
   });
 });

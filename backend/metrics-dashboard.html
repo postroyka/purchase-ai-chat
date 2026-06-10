@@ -252,13 +252,13 @@
         const ec = $('econCards');
         ec.innerHTML = '';
         ec.append(
-          card('Сэкономлено (нетто)', fmtByn(e.netSavedByn), e.positions + ' позиций обработано'),
+          card('Сэкономлено (оценка)', fmtByn(e.netSavedByn), 'нетто, ' + e.positions + ' позиций'),
           card('Потеря на пустых артикулах', fmtByn(e.lostNoArticleByn), e.positionsNoArticlePct + '% позиций без артикула'),
           card('Стоимость модели', fmtByn(e.modelCostByn), 'за всё время'),
           card('Позиций без артикула', e.positionsNoArticle, 'из ' + e.positions),
         );
-        $('econNote').textContent = 'Допущения: ставка ' + e.hourlyRateByn + ' BYN/ч, '
-          + e.minutesPerPosition + ' мин/позицию, курс USD→BYN ' + e.usdByn
+        $('econNote').textContent = '⚠️ Оценка — ставка не подтверждена заказчиком. Допущения: '
+          + e.hourlyRateByn + ' BYN/ч, ' + e.minutesPerPosition + ' мин/позицию, курс USD→BYN ' + e.usdByn
           + '. Настраивается в .env (HOURLY_RATE_BYN, MINUTES_PER_POSITION, USD_BYN_RATE).';
       } else {
         $('econHead').style.display = 'none';

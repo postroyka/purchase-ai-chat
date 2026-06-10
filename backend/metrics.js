@@ -18,7 +18,9 @@ import Redis from 'ioredis';
  *     status?: 'done'|'error',
  *     outcome?: string,
  *     durationMs?: number,
- *     agent?: { extractMethod?: string|null, costUsd?: number|null, agentDurationMs?: number|null }|null,
+ *     positions?: number,
+ *     positionsNoArticle?: number,
+ *     agent?: { extractMethod?: string|null, costUsd?: number|null, agentDurationMs?: number }|null,
  *   }): Promise<void>,
  *   snapshot(): Promise<object>,
  *   ping(): Promise<void>,
@@ -43,7 +45,22 @@ function today() {
 function label(s, fallback = 'other') {
   if (typeof s !== 'string') return fallback;
   const v = s.trim().toLowerCase();
-  return /^[a-z][a-z0-9_]{0,39}$/.test(v) ? v : fallback;
+  return /^[a-z0-9][a-z0-9_]{0,39}$/.test(v) ? v : fallback;
+}
+
+// `outcome` partly originates from the agent's result (untrusted document content via
+// prompt-injection). label() bounds the shape, but a regex-passing value would still add a
+// unique hash field with no TTL. Pin to a known set; anything else → 'other' (cardinality cap).
+const KNOWN_OUTCOMES = new Set([
+  'ok', 'unknown', 'other',
+  // business errors returned by the agent (prompts/main.md)
+  'tool_unavailable', 'file_unreadable', 'unreadable_document', 'unsupported_currency', 'missing_responsible',
+  // infra failures classified in backend/index.js (classifyAgentError)
+  'timeout', 'cli_missing', 'agent_crash', 'bad_output', 'other_error',
+]);
+function outcomeLabel(s) {
+  const v = label(s, 'unknown');
+  return KNOWN_OUTCOMES.has(v) ? v : 'other';
 }
 
 function warn(ctx, e) {
@@ -80,14 +97,15 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
 
   async function recordFile({ format, status, outcome, durationMs = 0, agent = null, positions = 0, positionsNoArticle = 0 } = {}) {
     try {
+      const out = outcomeLabel(outcome);
       const ops = [
         ['hincrby', K.totals, status === 'done' ? 'files_done' : 'files_error', 1],
         ['hincrby', K.totals, 'file_ms', Math.max(0, Math.round(Number(durationMs) || 0))],
         ['hincrby', K.formats, label(format, 'unknown'), 1],
-        ['hincrby', K.outcomes, label(outcome, 'unknown'), 1],
+        ['hincrby', K.outcomes, out, 1],
         ['hincrby', K.daily, today(), 1],
       ];
-      if (outcome === 'ok') ops.push(['hincrby', K.totals, 'ok', 1]);
+      if (out === 'ok') ops.push(['hincrby', K.totals, 'ok', 1]);
       // Line-item counts drive the savings estimate (#75): positions recognised, and how
       // many lacked a supplier article (vendorCode) → not auto-matchable, manual fallback.
       const pos = Math.max(0, Math.trunc(Number(positions) || 0));
@@ -120,6 +138,7 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
     const ok = t.ok || 0;
     const costRuns = t.cost_runs || 0;
     const agentRuns = t.agent_runs || 0;
+    const processed = (t.files_done || 0) + (t.files_error || 0); // files that reached recordFile
 
     // Savings estimate (#75): manual time avoided × hourly rate, minus model cost.
     const positions = t.positions || 0;
@@ -155,7 +174,7 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
         avgCostUsd: costRuns ? round4((t.cost_usd || 0) / costRuns) : 0,
         agentRuns,
         avgAgentMs: agentRuns ? Math.round((t.agent_ms || 0) / agentRuns) : 0,
-        avgFileMs: files ? Math.round((t.file_ms || 0) / files) : 0,
+        avgFileMs: processed ? Math.round((t.file_ms || 0) / processed) : 0,
       },
       outcomes: toSortedArray(outcomes),
       formats: toSortedArray(formats),
@@ -207,7 +226,11 @@ function redisBackend(url) {
     async batch(ops) {
       const p = client.pipeline();
       for (const [cmd, ...args] of ops) p[cmd](...args);
-      await p.exec();
+      const results = await p.exec();
+      // ioredis pipelines don't throw on a per-command error (e.g. WRONGTYPE) — surface it.
+      if (Array.isArray(results)) {
+        for (const [err] of results) { if (err) { warn('redis pipeline', err); break; } }
+      }
     },
     async hgetall(key) { return client.hgetall(key); },
     async ping() { await client.ping(); },
