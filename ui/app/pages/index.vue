@@ -8,7 +8,7 @@
           Загрузите прайс-листы
         </h1>
         <p class="mt-3 text-base text-base-600 max-w-md mx-auto">
-          PDF, XLSX или DOCX. Создадим сделки в Bitrix24 автоматически.
+          PDF, фото (JPG/PNG), Excel (XLSX/XLS) или Word. Создадим сделки в Bitrix24 автоматически.
         </p>
       </header>
 
@@ -17,7 +17,7 @@
         <B24FileUpload
           v-model="selectedFiles"
           :multiple="true"
-          accept=".pdf,.xlsx,.docx"
+          accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls,.docx"
           variant="area"
           layout="list"
           class="w-full min-h-[220px]"
