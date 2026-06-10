@@ -1,24 +1,64 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fakeOk, makeFakeBitrix24 } from '../../_helpers/bitrix24-mock'
 
 vi.mock('@nuxtjs/mcp-toolkit/server', () => ({
   defineMcpTool: <T,>(spec: T) => spec,
 }))
 
+const fake = makeFakeBitrix24()
+vi.mock('~/server/utils/bitrix24', () => ({ useBitrix24: () => fake.b24 }))
+
 const { default: tool } = await import('../../../../server/mcp/tools/deals/find-contract')
 
 describe('b24_pst_crm_find_contract', () => {
+  beforeEach(() => { fake.v2Call.mockReset() })
+
   it('has correct tool name', () => {
     expect((tool as any).name).toBe('b24_pst_crm_find_contract')
   })
 
-  it('throws not-implemented error', async () => {
-    await expect((tool as any).handler({ supplierId: '42' })).rejects.toThrow(
-      'b24_pst_crm_find_contract is not implemented yet',
-    )
+  it('calls procurecontract.find with supplierId only', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ id: 77, number: '2025/12', date: '01.03.2025' }))
+
+    const result = await (tool as any).handler({ supplierId: '42' })
+    const payload = JSON.parse(result.content[0].text)
+
+    expect(fake.v2Call).toHaveBeenCalledWith({
+      method: 'shef.purchase.api.procurecontract.find',
+      params: { supplierId: '42' },
+    })
+    expect(payload).toMatchObject({ id: 77, number: '2025/12' })
+  })
+
+  it('passes number and date when provided', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ id: 5 }))
+
+    await (tool as any).handler({ supplierId: '42', number: '2025/12', date: '01.03.2025' })
+
+    expect(fake.v2Call).toHaveBeenCalledWith({
+      method: 'shef.purchase.api.procurecontract.find',
+      params: { supplierId: '42', number: '2025/12', date: '01.03.2025' },
+    })
+  })
+
+  it('omits number and date when not provided', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ id: null }))
+
+    await (tool as any).handler({ supplierId: '1' })
+
+    const params = (fake.v2Call.mock.calls[0]![0] as any).params
+    expect(params).not.toHaveProperty('number')
+    expect(params).not.toHaveProperty('date')
+  })
+
+  it('returns { id: null } when not found', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk(null))
+
+    const result = await (tool as any).handler({ supplierId: '1' })
+    expect(JSON.parse(result.content[0].text)).toEqual({ id: null })
   })
 
   it('rejects empty supplierId via Zod schema', () => {
-    const schema = (tool as any).inputSchema
-    expect(schema.supplierId.safeParse('').success).toBe(false)
+    expect((tool as any).inputSchema.supplierId.safeParse('').success).toBe(false)
   })
 })

@@ -1,4 +1,6 @@
 node_modules
+# PHP модуль для Bitrix24 — деплоится по SSH, не входит в Docker-образы
+b24-controller/
 .env.prod
 .env.local
 uploads/

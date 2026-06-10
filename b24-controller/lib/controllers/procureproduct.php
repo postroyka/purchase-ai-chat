@@ -1,0 +1,86 @@
+<?php
+namespace Shef\Purchase\Controllers;
+
+use Bitrix\Main\Engine;
+use Bitrix\Main\Error;
+use Shef\Options\TraitList;
+
+/**
+ * Поиск товара по артикулу поставщика для procure-ai.
+ * REST: shef.purchase.api.procureproduct.findByVendorCode
+ */
+class ProcureProduct
+	extends Engine\Controller
+{
+	use TraitList\Modules;
+
+	const IBLOCK_ID = 15; // каталог
+
+	protected static function getModulesList(): array
+	{
+		return [
+			'iblock',
+			'catalog',
+		];
+	}
+
+	public function configureActions()
+	{
+		return [
+			'findByVendorCode' => [
+				'prefilters' => parent::getDefaultPreFilters(),
+			],
+		];
+	}
+
+	/**
+	 * Ищет активный родительский товар по артикулу поставщика.
+	 * Родительский = пустое свойство PURCHASE_69_PARENT_PRODUCT.
+	 * Несколько найдено → товар с минимальным ID.
+	 *
+	 * @param string $vendorCode Артикул поставщика из документа
+	 * @return array|null { id, name, vendorCode } | { id: null }
+	 */
+	public function findByVendorCodeAction(string $vendorCode): ?array
+	{
+		$response = $this->includeModules();
+		if(!$response->isSuccess())
+		{
+			$this->addErrors($response->getErrors());
+			return null;
+		}
+
+		$vendorCode = trim($vendorCode);
+		if($vendorCode === '')
+		{
+			$this->addError(new Error('Пустой артикул', 'prd:010'));
+			return null;
+		}
+
+		$filter = [
+			'IBLOCK_ID'                            => static::IBLOCK_ID,
+			'ACTIVE'                               => 'Y',
+			'=PROPERTY_PURCHASE_ARTICLE'           => $vendorCode,
+			'=PROPERTY_PURCHASE_69_PARENT_PRODUCT' => false, // пустое → родительский
+		];
+
+		$dbResult = \CIBlockElement::GetList(
+			['ID' => 'ASC'],          // мин. ID при дублях
+			$filter,
+			false,
+			['nTopCount' => 1],
+			['ID', 'NAME', 'PROPERTY_PURCHASE_ARTICLE']
+		);
+
+		if(is_object($dbResult) && ($fields = $dbResult->Fetch()))
+		{
+			return [
+				'id'         => (int)$fields['ID'],
+				'name'       => (string)$fields['NAME'],
+				'vendorCode' => (string)$fields['PROPERTY_PURCHASE_ARTICLE_VALUE'],
+			];
+		}
+
+		return ['id' => null];
+	}
+}

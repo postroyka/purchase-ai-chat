@@ -57,18 +57,17 @@
 
 ### Шаг 4 — Поиск товаров в каталоге
 
-Для каждой позиции из списка вызови `b24_pst_crm_find_product` (по артикулу, если есть; иначе по названию).
+Для каждой позиции, у которой есть **артикул поставщика**, вызови `b24_pst_crm_find_product` с параметром `vendorCode`. Поиск идёт по **точному совпадению** артикула.
 
 - Запомни `productId` для каждой найденной позиции.
-- Если товар не найден — используй `null` для `productId` и сохрани оригинальное название.
+- Если товар не найден или у позиции нет артикула — используй `null` для `productId` и сохрани оригинальное название. Позиция всё равно попадёт в сделку (как свободная строка).
 
 ### Шаг 5 — Создание сделки
 
 Вызови инструмент `b24_pst_crm_create_deal` с собранными данными. Обязательно передай:
-- `sourceFile` — путь к исходному файлу (`FILE_PATH`), чтобы он был прикреплён к карточке сделки в Б24.
+- `filePath` — путь к исходному файлу (`FILE_PATH`). MCP-сервер сам прочитает файл и прикрепит его к карточке сделки. **Не** читай файл сам и **не** передавай его содержимое — только путь.
 - `responsibleUserId` — `RESPONSIBLE_USER_ID`.
-
-Инструмент запишет лог обработки как комментарий к сделке автоматически.
+- `processingLog` — краткий человекочитаемый лог обработки на русском (что найдено: поставщик, договор, сколько позиций сопоставлено, какие не сопоставлены). Этот текст попадёт в комментарий и таймлайн сделки.
 
 ---
 
@@ -101,7 +100,7 @@
     "dealId": "string",
     "url": "string | null"
   },
-  "sourceFile": "string"
+  "filePath": "string"
 }
 ```
 
@@ -111,7 +110,7 @@
 {
   "error": "error_code",
   "message": "Описание ошибки на русском языке",
-  "sourceFile": "string"
+  "filePath": "string"
 }
 ```
 
@@ -135,9 +134,9 @@
 | Инструмент | Когда вызывать | Ключевые параметры |
 |---|---|---|
 | `b24_pst_crm_find_supplier` | Шаг 2 | `unp` |
-| `b24_pst_crm_find_contract` | Шаг 3 | `supplierId` |
-| `b24_pst_crm_find_product` | Шаг 4, для каждой позиции | `vendorCode`, `name` |
-| `b24_pst_crm_create_deal` | Шаг 5 | `supplierId`, `contractId`, `items[]`, `sourceFile`, `responsibleUserId` |
+| `b24_pst_crm_find_contract` | Шаг 3 | `supplierId` (опц. `number`, `date`) |
+| `b24_pst_crm_find_product` | Шаг 4, для позиций с артикулом | `vendorCode` |
+| `b24_pst_crm_create_deal` | Шаг 5 | `supplierId`, `contractId`, `items[]`, `filePath`, `processingLog`, `responsibleUserId` |
 
 **Важно**: не вызывай `b24_pst_crm_create_deal`, если любой из предыдущих обязательных шагов завершился ошибкой.
 
@@ -149,4 +148,4 @@
 
 ---
 
-*Last reviewed: 2026-06-09 (PR #53 — `DOCUMENT_TEXT` (серверное извлечение текста) + маркер границ блока; PR #47/#48 — `priceExclVat`, защита от prompt-injection)*
+*Last reviewed: 2026-06-10 (b24-controller — create_deal принимает `filePath` + `processingLog`; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*
