@@ -62,6 +62,7 @@ const AGENT_ENV_KEYS = [
  *   jobId?: string,
  *   spawnFn?: typeof import('node:child_process').spawn,
  *   extractFn?: (filePath: string) => Promise<{ text: string, method: string }|null>,
+ *   onMeta?: (meta: { extractMethod: string|null, costUsd: number|null, agentDurationMs: number, numTurns: number|null }) => void,
  * }} AgentConfig
  */
 export async function runAgent(filePath, responsibleUserId, config = {}) {
@@ -146,7 +147,7 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const mcpConfigPath = join(tmpDir, 'config.json');
 
   try {
-    return await spawnClaude({
+    const { result, meta } = await spawnClaude({
       spawnFn,
       claudeBin,
       model,
@@ -157,6 +158,14 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
       timeoutMs,
       jobId,
     });
+    // Best-effort usage metric (issue #67): surface extraction method + agent cost/time.
+    // Wrapped so a throwing/absent hook can never break the agent run.
+    if (typeof config.onMeta === 'function') {
+      try {
+        config.onMeta({ extractMethod: extracted?.method ?? null, ...meta });
+      } catch { /* metrics must not affect the pipeline */ }
+    }
+    return result;
   } finally {
     // Always clean up — config file contains auth token.
     try {
@@ -397,7 +406,14 @@ function spawnClaude({
         return;
       }
 
-      resolve(parsed);
+      // The `claude --output-format json` wrapper carries run metadata (cost/turns/
+      // duration) that was previously discarded — surface it for usage metrics (#67).
+      const meta = {
+        costUsd: typeof wrapper.total_cost_usd === 'number' ? wrapper.total_cost_usd : null,
+        agentDurationMs: typeof wrapper.duration_ms === 'number' ? wrapper.duration_ms : durationMs,
+        numTurns: typeof wrapper.num_turns === 'number' ? wrapper.num_turns : null,
+      };
+      resolve({ result: parsed, meta });
     });
   });
 }

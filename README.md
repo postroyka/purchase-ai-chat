@@ -129,6 +129,19 @@ curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
 
 > ⚠️ В PowerShell используй `curl.exe` (не алиас `curl`), иначе синтаксис флагов другой.
 
+### Метрики использования (`/metrics`)
+
+Дашборд «за всё время» с показателями и графиками: загрузки, форматы, доля OCR vs текстового
+слоя, исходы обработки (включая `tool_unavailable`, пока инструменты Б24 — заглушки) и
+стоимость прогонов модели. Закрыт HTTP Basic (те же `PUBLIC_PAGE_BASIC_AUTH_*`) — открой в
+браузере `http://localhost:3000/metrics`. JSON-срез для скриптов:
+
+```bash
+curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"   # либо Basic-логин страницы
+```
+
+> Счётчики копятся в Redis без TTL (lifetime). Новых переменных окружения не требуется.
+
 ## MCP — upstream и кастомные инструменты
 
 `mcp/` подключён через **git subtree** из
