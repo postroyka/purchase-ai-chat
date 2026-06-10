@@ -47,7 +47,7 @@ const AGENT_ENV_KEYS = [
  * passes the system prompt from `prompts/main.md` and a temporary MCP config,
  * then parses the structured JSON result.
  *
- * @param {string} filePath - Absolute path to the uploaded file (PDF/XLSX/DOCX)
+ * @param {string} filePath - Absolute path to the uploaded file (PDF/XLSX/XLS/DOCX/JPG/PNG)
  * @param {string|null} responsibleUserId - Bitrix24 user ID to assign the deal
  * @param {AgentConfig} [config] - Injectable config (overrides env vars; used by tests)
  * @returns {Promise<object>} Parsed agent result (matches prompts/main.md output schema)
