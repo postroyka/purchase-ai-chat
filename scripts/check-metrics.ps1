@@ -56,6 +56,8 @@ if ($e.enabled) {
   Write-Host ("  Сэкономлено (нетто):        {0} BYN" -f $e.netSavedByn)
   Write-Host ("  Потеря на пустых артикулах: {0} BYN ({1}% позиций без артикула)" -f $e.lostNoArticleByn, $e.positionsNoArticlePct)
   Write-Host ("  Позиций:                    {0} (без артикула: {1})" -f $e.positions, $e.positionsNoArticle)
+  $rateDate = if ($e.usdBynDate) { ", $($e.usdBynDate)" } else { "" }
+  Write-Host ("  Курс USD->BYN:              {0} (источник: {1}{2})" -f $e.usdByn, $e.usdBynSource, $rateDate)
 } else {
   Write-Host ""
   Write-Host "ЭКОНОМИКА: выключена (HOURLY_RATE_BYN=0)"

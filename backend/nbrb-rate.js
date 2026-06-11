@@ -10,10 +10,12 @@ const NBRB_URL = 'https://api.nbrb.by/exrates/rates/USD?parammode=2';
 const TTL_MS = 12 * 60 * 60 * 1000;       // success cache — NB updates once a day
 const ERROR_TTL_MS = 5 * 60 * 1000;       // negative cache — don't retry a down API every poll
 const TIMEOUT_MS = 4000;
+const MAX_BYTES = 64 * 1024;              // the rate JSON is ~200 B; cap a pathological body
 
 /**
  * @param {{ fallbackRate?: number, url?: string, ttlMs?: number, errorTtlMs?: number,
- *           timeoutMs?: number, fetchImpl?: typeof fetch }} [config]
+ *           timeoutMs?: number, fetchImpl?: typeof fetch, nowFn?: () => number }} [config]
+ *   nowFn is injectable purely so tests can advance the clock to exercise cache expiry.
  * @returns {{ get: () => Promise<{ rate: number, date: string|null, source: 'nbrb'|'nbrb-stale'|'env' }> }}
  */
 export function createNbrbRate(config = {}) {
@@ -23,33 +25,47 @@ export function createNbrbRate(config = {}) {
   const errorTtlMs = config.errorTtlMs ?? ERROR_TTL_MS;
   const timeoutMs = config.timeoutMs ?? TIMEOUT_MS;
   const fetchImpl = config.fetchImpl ?? globalThis.fetch;
+  const now = config.nowFn ?? Date.now;
 
-  let cache = null; // { rate, date, source, at, ok }
+  let cache = null;    // { rate, date, source, at, ok }
+  let inflight = null; // dedupes concurrent get() calls (e.g. two dashboard tabs on cold start)
 
   const strip = (c) => ({ rate: c.rate, date: c.date, source: c.source });
-  const fresh = () => cache && (Date.now() - cache.at) < (cache.ok ? ttlMs : errorTtlMs);
+  const fresh = () => cache && (now() - cache.at) < (cache.ok ? ttlMs : errorTtlMs);
 
-  async function get() {
-    if (fresh()) return strip(cache);
+  async function fetchRate() {
+    if (typeof fetchImpl !== 'function') throw new Error('fetch unavailable');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let data;
     try {
-      if (typeof fetchImpl !== 'function') throw new Error('fetch unavailable');
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      let data;
-      try {
-        const res = await fetchImpl(url, { signal: ctrl.signal, headers: { accept: 'application/json' } });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        data = await res.json();
-      } finally {
-        clearTimeout(timer);
-      }
-      const scale = Number(data?.Cur_Scale) || 1;
-      const official = Number(data?.Cur_OfficialRate);
-      if (!Number.isFinite(official) || official <= 0) throw new Error('bad payload');
-      const rate = Math.round((official / scale) * 10000) / 10000;
-      const date = typeof data?.Date === 'string' ? data.Date.slice(0, 10) : null;
-      cache = { rate, date, source: 'nbrb', at: Date.now(), ok: true };
-      return strip(cache);
+      const res = await fetchImpl(url, {
+        signal: ctrl.signal,
+        redirect: 'error', // the rate endpoint must not redirect; refuse to follow if it does
+        headers: { accept: 'application/json' },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const declared = Number(res.headers?.get?.('content-length'));
+      if (Number.isFinite(declared) && declared > MAX_BYTES) throw new Error('response too large');
+      const text = await res.text();
+      if (text.length > MAX_BYTES) throw new Error('response too large');
+      data = JSON.parse(text);
+    } finally {
+      clearTimeout(timer);
+    }
+    const scale = Number(data?.Cur_Scale);
+    const official = Number(data?.Cur_OfficialRate);
+    if (!Number.isFinite(scale) || scale <= 0) throw new Error('bad scale');
+    if (!Number.isFinite(official) || official <= 0) throw new Error('bad rate');
+    const rate = Math.round((official / scale) * 10000) / 10000;
+    const date = typeof data?.Date === 'string' ? data.Date.slice(0, 10) : null;
+    return { rate, date };
+  }
+
+  async function refresh() {
+    try {
+      const { rate, date } = await fetchRate();
+      cache = { rate, date, source: 'nbrb', at: now(), ok: true };
     } catch (e) {
       console.warn(`[nbrb] rate fetch failed: ${e?.message ?? e} — using ${cache?.ok ? 'last good' : 'fallback'}`);
       // Prefer the last good rate (marked stale); else the static fallback. Negative-cache either.
@@ -58,11 +74,17 @@ export function createNbrbRate(config = {}) {
         rate: prevOk ? prevOk.rate : fallbackRate,
         date: prevOk ? prevOk.date : null,
         source: prevOk ? 'nbrb-stale' : 'env',
-        at: Date.now(),
+        at: now(),
         ok: false,
       };
-      return strip(cache);
     }
+    return strip(cache);
+  }
+
+  async function get() {
+    if (fresh()) return strip(cache);
+    if (!inflight) inflight = refresh().finally(() => { inflight = null; });
+    return inflight;
   }
 
   return { get };

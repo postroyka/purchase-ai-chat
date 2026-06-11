@@ -24,15 +24,6 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
-  // Prerendered routes are served as flat `<route>.html` by the backend (express.static with
-  // extensions:['html']). Payload extraction would emit per-route `<route>/_payload.json`,
-  // creating a `metrics/` directory that shadows the flat `metrics.html` and makes a direct
-  // GET /metrics redirect to /metrics/ (then 404). We fetch all data client-side anyway, so
-  // there is no SSR payload to lose by turning it off.
-  experimental: {
-    payloadExtraction: false
-  },
-
   runtimeConfig: {
     /**
      * @memo this will be overwritten from .env or Docker_*
@@ -56,6 +47,17 @@ export default defineNuxtConfig({
   devServer: {
     // Explicit port so Nuxt dev never clashes with backend on :3000.
     port: 3001
+  },
+
+  // Prerendered routes are served as flat `<route>.html` by the backend (express.static with
+  // extensions:['html']). Payload extraction would emit per-route `<route>/_payload.json`,
+  // creating a `metrics/` directory that shadows the flat `metrics.html` and makes a direct
+  // GET /metrics redirect to /metrics/ (then 404). We fetch all data client-side anyway, so
+  // there is no SSR payload to lose by turning it off.
+  // TODO(tech-debt): global flag — if we add an SSR page with server-side useFetch/useAsyncData,
+  // revisit with per-route `routeRules` instead of disabling payload extraction app-wide.
+  experimental: {
+    payloadExtraction: false
   },
 
   compatibilityDate: '2024-07-11',

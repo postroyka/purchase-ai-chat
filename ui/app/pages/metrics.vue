@@ -60,9 +60,14 @@ const sparkPoints = computed(() => {
   if (!d.length) return ''
   const max = Math.max(1, ...d.map(x => x.files))
   const n = d.length
+  if (n === 1) {
+    // A single day would render as one invisible point — draw it as a flat line instead.
+    const py = (100 - (d[0]!.files / max) * 100).toFixed(1)
+    return `0,${py} 100,${py}`
+  }
   return d
     .map((x, i) => {
-      const px = n === 1 ? 50 : (i / (n - 1)) * 100
+      const px = (i / (n - 1)) * 100
       const py = 100 - (x.files / max) * 100
       return `${px.toFixed(1)},${py.toFixed(1)}`
     })
@@ -126,7 +131,7 @@ const sparkPoints = computed(() => {
           />
           <MetricsStatCard
             label="Файлов обработано"
-            :value="data.totals.files"
+            :value="data.totals.filesDone + data.totals.filesError"
             :icon="FileIcon"
             :sub="`готово ${data.totals.filesDone} · ошибок ${data.totals.filesError}`"
           />
@@ -186,13 +191,11 @@ const sparkPoints = computed(() => {
             />
           </div>
 
-          <div class="flex items-start gap-2 rounded-lg border border-amber-300/60 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-950/20 p-3 text-xs text-base-700">
-            <WarningIcon class="size-4 shrink-0 text-amber-500" />
-            <p>
-              Оценка — ставка {{ econ.hourlyRateByn }} BYN/ч не подтверждена заказчиком,
-              {{ econ.minutesPerPosition }} мин/позицию; {{ rateNote }}.
-            </p>
-          </div>
+          <B24Alert
+            color="air-primary-warning"
+            :icon="WarningIcon"
+            :description="`Оценка — ставка ${econ.hourlyRateByn} BYN/ч не подтверждена заказчиком, ${econ.minutesPerPosition} мин/позицию; ${rateNote}.`"
+          />
         </section>
 
         <!-- Breakdowns -->

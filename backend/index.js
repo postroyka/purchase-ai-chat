@@ -128,6 +128,12 @@ function createRateLimiter({ windowMs, max }) {
  *   metrics?: object,
  * }} [config]
  * @returns {import('express').Express}
+ *
+ * NOTE: when `metrics` is omitted createApp builds a default Metrics WITHOUT a live USD→BYN
+ * rate provider (getUsdByn) — the savings estimate then uses the static USD_BYN_RATE fallback.
+ * The live NB RB rate is wired only at the prod entry point (bottom of this file) so the unit/
+ * route suites never make an outbound api.nbrb.by call. To get the live rate elsewhere, pass a
+ * `metrics` built via createMetrics({ getUsdByn: createNbrbRate(...).get }).
  */
 export function createApp(config = {}) {
   const uploadDir = path.resolve(
@@ -518,10 +524,14 @@ if (process.argv[1] === __filename) {
   // Wire the live NB RB USD→BYN rate here (not inside createApp) so the savings estimate (#75)
   // uses a real rate in production while the test suites stay offline. USD_BYN_RATE is the
   // offline fallback; the rate is cached 12h and fetched best-effort.
-  const metrics = createMetrics({
-    getUsdByn: createNbrbRate({ fallbackRate: Number(process.env.USD_BYN_RATE) || 3.3 }).get,
-  });
+  const nbrbRate = createNbrbRate({ fallbackRate: Number(process.env.USD_BYN_RATE) || 3.3 });
+  const metrics = createMetrics({ getUsdByn: nbrbRate.get });
   const app = createApp({ metrics });
+  // Warm the cache and surface the source at boot, so ops can tell whether НБРБ is reachable
+  // (vs. silently falling back to USD_BYN_RATE behind a strict egress firewall).
+  nbrbRate.get()
+    .then((r) => console.log(`[backend] USD→BYN rate: ${r.rate} (source: ${r.source}${r.date ? `, ${r.date}` : ''})`))
+    .catch(() => {});
   const server = app.listen(PORT, () => {
     console.log(`[backend] procure-ai backend listening on port ${PORT}`);
   });

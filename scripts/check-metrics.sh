@@ -68,6 +68,8 @@ if e.get("enabled"):
     print("  Сэкономлено (нетто):        %s BYN" % e.get("netSavedByn"))
     print("  Потеря на пустых артикулах: %s BYN (%s%% позиций без артикула)" % (e.get("lostNoArticleByn"), e.get("positionsNoArticlePct")))
     print("  Позиций:                    %s (без артикула: %s)" % (e.get("positions"), e.get("positionsNoArticle")))
+    rate_date = (", " + e.get("usdBynDate")) if e.get("usdBynDate") else ""
+    print("  Курс USD->BYN:              %s (источник: %s%s)" % (e.get("usdByn"), e.get("usdBynSource"), rate_date))
 else:
     print()
     print("ЭКОНОМИКА: выключена (HOURLY_RATE_BYN=0)")

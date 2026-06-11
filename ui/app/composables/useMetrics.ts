@@ -50,29 +50,54 @@ export function useMetrics() {
   const error = ref<string | null>(null)
   const pending = ref(false)
 
+  // Cancel an in-flight request when a newer refresh starts or the component unmounts,
+  // so a late response can't overwrite fresh data (or write into a dead ref).
+  let controller: AbortController | null = null
+
   async function refresh() {
+    controller?.abort()
+    controller = new AbortController()
+    const { signal } = controller
     pending.value = true
     try {
       const token = config.public.backendToken
-      data.value = await $fetch<MetricsSnapshot>('/metrics/data', {
+      const snapshot = await $fetch<MetricsSnapshot>('/metrics/data', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
-        cache: 'no-store'
+        cache: 'no-store',
+        signal
       })
+      if (signal.aborted) return
+      data.value = snapshot
       error.value = null
     } catch (e: unknown) {
+      if (signal.aborted) return // superseded/unmounted — not a real error
       error.value = extractError(e)
     } finally {
-      pending.value = false
+      if (!signal.aborted) pending.value = false
     }
   }
 
-  // Auto-refresh while the page is mounted (client only). Paused on unmount.
+  // Auto-refresh while mounted AND the tab is visible (client only): no point polling
+  // /metrics/data (5× Redis hgetall) for a backgrounded tab left open for hours.
   const { pause, resume } = useIntervalFn(refresh, REFRESH_MS, { immediate: false })
+  const visibility = useDocumentVisibility()
+  watch(visibility, (state) => {
+    if (state === 'visible') {
+      refresh()
+      resume()
+    } else {
+      pause()
+    }
+  })
+
   onMounted(() => {
     refresh()
-    resume()
+    if (visibility.value === 'visible') resume()
   })
-  onUnmounted(() => pause())
+  onUnmounted(() => {
+    pause()
+    controller?.abort()
+  })
 
   return { data, error, pending, refresh }
 }

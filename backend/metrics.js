@@ -22,9 +22,29 @@ import Redis from 'ioredis';
  *     positionsNoArticle?: number,
  *     agent?: { extractMethod?: string|null, costUsd?: number|null, agentDurationMs?: number }|null,
  *   }): Promise<void>,
- *   snapshot(): Promise<object>,
+ *   snapshot(): Promise<MetricsSnapshot>,
  *   ping(): Promise<void>,
  * }} Metrics
+ */
+
+/**
+ * Shape returned by {@link Metrics.snapshot}. Mirrors `MetricsSnapshot` in
+ * ui/app/composables/useMetrics.ts — keep the two in sync.
+ *
+ * @typedef {{
+ *   generatedAt: string,
+ *   economics: {
+ *     enabled: boolean, hourlyRateByn: number, minutesPerPosition: number,
+ *     usdByn: number, usdBynDate: string|null, usdBynSource: 'nbrb'|'nbrb-stale'|'env',
+ *     positions: number, positionsNoArticle: number, positionsNoArticlePct: number,
+ *     grossSavedByn: number, modelCostByn: number, netSavedByn: number, lostNoArticleByn: number,
+ *   },
+ *   totals: Record<string, number>,
+ *   outcomes: Array<{ name: string, count: number }>,
+ *   formats: Array<{ name: string, count: number }>,
+ *   extract: Array<{ name: string, count: number }>,
+ *   daily: Array<{ date: string, files: number }>,
+ * }} MetricsSnapshot
  */
 
 const K = {
