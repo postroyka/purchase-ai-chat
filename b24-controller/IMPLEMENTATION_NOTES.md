@@ -99,7 +99,7 @@ $clientField = $entity->getField('CLIENT'); // getPropertyId()
 
 ## B4 — Товар (каталог)
 
-- `IBLOCK_ID = 15` (каталог; в коде — опция `B24_CATALOG_IBLOCK_ID`, default 15)
+- `IBLOCK_ID = 15` (каталог; опция `B24_CATALOG_IBLOCK_ID`, default 15 — читается через `\Shef\Purchase\Config::getCatalogIblockId()`)
 - Фильтр матчинга по артикулу поставщика:
   - `ACTIVE = Y` (штатное поле)
   - `PROPERTY_PURCHASE_ARTICLE` = артикул поставщика из документа
@@ -133,5 +133,8 @@ $clientField = $entity->getField('CLIENT'); // getPropertyId()
 Полностью реализован: `CCrmDeal::Add` (с `UF_CRM_DEAL_DOGOVOR`), `SaveProductRows`
 (результат проверяется), вложение файла (B6), таймлайн-лог (B7). Некритичные сбои
 (позиции/файл) возвращаются в `warnings`, сделку не откатывают. Единица измерения —
-ОКЕИ-код (опция `B24_UNIT_OKEI_SHT`, default 796), позиции с защитой от
-отрицательной цены/нулевого кол-ва, потолок `MAX_ITEMS = 500`.
+ОКЕИ-код (опция `B24_UNIT_OKEI_SHT`, default 796 — через
+`\Shef\Purchase\Config::getUnitOkeiSht()`), позиции с защитой от
+отрицательной цены/нулевого кол-ва, потолок `MAX_ITEMS = 500`. Воронка и стадия —
+`Config::getDealCategoryId()` / `getDealDefaultStageId()` (опции
+`B24_DEAL_CATEGORY_ID`=1, `B24_DEAL_DEFAULT_STAGE_ID`=C1:NEW).

@@ -40,6 +40,7 @@ REST-контроллеры для procure-ai, размещаемые внутр
 ```
 b24-controller/
 └── lib/
+    ├── config.php              ← Config: централизованные параметры модуля
     └── controllers/
         ├── procuresupplier.php
         ├── procureproduct.php
@@ -47,7 +48,8 @@ b24-controller/
         └── procuredeal.php
 ```
 
-На сервере кладётся в: `…/bitrix/modules/shef.purchase/lib/controllers/`
+На сервере: контроллеры → `…/bitrix/modules/shef.purchase/lib/controllers/`,
+`config.php` → `…/bitrix/modules/shef.purchase/lib/`.
 
 ## Вебхук
 
@@ -73,7 +75,7 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
 `B24_SSH_HOST`, `B24_SSH_USER`, `B24_SSH_PORT`, `B24_CONTROLLERS_PATH`.
 
 Скрипт ([`scripts/deploy-b24-controller.sh`](../scripts/deploy-b24-controller.sh)):
-- копирует **только** `b24-controller/lib/controllers/procure*.php`;
+- копирует **только** `procure*.php` в `lib/controllers/` и `config.php` в `lib/`;
 - `rsync` **без** `--delete` — чужие файлы модуля `shef.purchase` не затрагиваются;
 - по умолчанию делает dry-run; реальная выкладка — `make deploy-b24 APPLY=1`.
 
@@ -92,17 +94,53 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
 3. **Права на запись** у `B24_SSH_USER` в целевой директории.
 4. **`scripts/.env.deploy`** заполнен по примеру `scripts/.env.deploy.example`.
 
+### Деплой при изменении контракта MCP ↔ PHP
+
+⚠️ **Контроллеры (`b24-controller`) и MCP-инструменты деплоятся по-разному:**
+PHP — полуручным `make deploy-b24 APPLY=1`, а Docker-образ MCP — автоматически
+через Watchtower после мержа в `main`. Из-за этого при изменении контракта
+(новые параметры, новые поля ответа, переименование action) есть риск
+«тихого» рассинхрона версий:
+
+- MCP обновился раньше PHP → инструмент шлёт новые параметры, старый контроллер их игнорирует / падает;
+- PHP обновился раньше MCP → новые поля ответа никто не читает.
+
+**Порядок действий при изменении контракта** (соблюдать строго):
+
+1. Изменить PHP-контроллер (`procure*.php`) + при необходимости `config.php`.
+2. Изменить MCP-инструмент (`mcp-overlay/server/mcp/tools/...`) + его тесты (`mcp-overlay/tests/`).
+3. **Сначала задеплоить PHP** на Битрикс: `make deploy-b24 APPLY=1`
+   (сначала dry-run без `APPLY` — проверить список файлов).
+4. **Затем обновить MCP** (мерж в `main` → Watchtower подтянет образ; либо вручную
+   на сервере через корневой prod-compose:
+   `docker compose -f docker-compose.prod.yml pull mcp && docker compose -f docker-compose.prod.yml up -d mcp`).
+   *(Не путать с upstream-файлами `mcp/docker-compose.*.yml` — для прод-деплоя
+   используется корневой `docker-compose.prod.yml`, где описан сервис `mcp`.)*
+5. Проверить smoke-тестом против живого вебхука (нужен `WEBHOOK_URL`):
+   - Linux: `WEBHOOK_URL=https://your-b24/rest/1/TOKEN/ bash scripts/smoke-test-b24.sh`
+   - Windows: `scripts/smoke-test-b24.ps1 -WebhookUrl https://your-b24/rest/1/TOKEN/`
+
+> Правило большого пальца: **PHP-сторона выкатывается первой** — она должна
+> уметь принять и старый, и новый формат запроса MCP. Тогда любой порядок
+> обновления контейнера безопасен.
+
+При открытии PR, меняющего `b24-controller/lib/controllers/procure*.php` или
+`config.php`, CI выводит напоминание задеплоить PHP вручную после мержа
+(job **«b24 deploy reminder»** в `.github/workflows/ci.yml`).
+
 ## Опции модуля (настройки)
 
-Часть параметров переопределяется через настройки модуля `shef.purchase`
-(`Option::get('shef.purchase', ...)`), чтобы не хардкодить ID конкретной коробки:
+Часть параметров переопределяется через настройки модуля `shef.purchase`,
+чтобы не хардкодить ID конкретной коробки. Все они читаются через единую точку —
+класс [`\Shef\Purchase\Config`](./lib/config.php) (`lib/config.php`), а не через
+прямые `Option::get` в контроллерах:
 
-| Опция | Default | Назначение |
-|---|---|---|
-| `B24_DEAL_CATEGORY_ID` | `1` | Воронка сделок («Закупки») |
-| `B24_DEAL_DEFAULT_STAGE_ID` | `C1:NEW` | Стадия новой сделки |
-| `B24_CATALOG_IBLOCK_ID` | `15` | Инфоблок каталога товаров |
-| `B24_UNIT_OKEI_SHT` | `796` | ОКЕИ-код единицы «штука» |
+| Опция | Default | Геттер `Config::` | Назначение |
+|---|---|---|---|
+| `B24_DEAL_CATEGORY_ID` | `1` | `getDealCategoryId()` | Воронка сделок («Закупки») |
+| `B24_DEAL_DEFAULT_STAGE_ID` | `C1:NEW` | `getDealDefaultStageId()` | Стадия новой сделки |
+| `B24_CATALOG_IBLOCK_ID` | `15` | `getCatalogIblockId()` | Инфоблок каталога товаров |
+| `B24_UNIT_OKEI_SHT` | `796` | `getUnitOkeiSht()` | ОКЕИ-код единицы «штука» |
 
 ## Тестирование
 

@@ -3,8 +3,8 @@ namespace Shef\Purchase\Controllers;
 
 use Bitrix\Main\Engine;
 use Bitrix\Main\Error;
-use Bitrix\Main\Config\Option;
 use Shef\Options\TraitList;
+use Shef\Purchase\Config;
 
 /**
  * Создание сделки закупки для procure-ai.
@@ -24,11 +24,6 @@ class ProcureDeal
 	extends Engine\Controller
 {
 	use TraitList\Modules;
-
-	// ОКЕИ-код «штука». В CCrmDeal::SaveProductRows MEASURE_CODE — это код ОКЕИ
-	// (796 = штука), не ID записи b_catalog_measure. Переопределяется опцией
-	// модуля на случай нестандартной настройки каталога.
-	const UNIT_OKEI_SHT = 796;
 
 	// Защита от перегрузки: разумный потолок числа позиций в одной сделке.
 	const MAX_ITEMS = 500;
@@ -101,9 +96,9 @@ class ProcureDeal
 			return null;
 		}
 
-		$categoryId  = (int)Option::get('shef.purchase', 'B24_DEAL_CATEGORY_ID', 1);
-		$stageId     = Option::get('shef.purchase', 'B24_DEAL_DEFAULT_STAGE_ID', 'C1:NEW');
-		$measureCode = (int)Option::get('shef.purchase', 'B24_UNIT_OKEI_SHT', static::UNIT_OKEI_SHT);
+		$categoryId  = Config::getDealCategoryId();
+		$stageId     = Config::getDealDefaultStageId();
+		$measureCode = Config::getUnitOkeiSht();
 
 		// --- 1) Создать сделку ---
 		$titleBase = $fileName !== '' ? pathinfo($fileName, PATHINFO_FILENAME) : 'поставщик #'.$supplierId;

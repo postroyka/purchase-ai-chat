@@ -152,4 +152,4 @@
 
 ---
 
-*Last reviewed: 2026-06-10 (PR #71 — create_deal принимает `filePath` + `processingLog`, warnings[] обработка; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*
+*Last reviewed: 2026-06-11 (PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров; PR #71 — create_deal принимает `filePath` + `processingLog`, warnings[] обработка; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*
