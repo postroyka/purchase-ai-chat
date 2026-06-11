@@ -40,6 +40,7 @@ REST-контроллеры для procure-ai, размещаемые внутр
 ```
 b24-controller/
 └── lib/
+    ├── config.php              ← Config: централизованные параметры модуля
     └── controllers/
         ├── procuresupplier.php
         ├── procureproduct.php
@@ -47,7 +48,8 @@ b24-controller/
         └── procuredeal.php
 ```
 
-На сервере кладётся в: `…/bitrix/modules/shef.purchase/lib/controllers/`
+На сервере: контроллеры → `…/bitrix/modules/shef.purchase/lib/controllers/`,
+`config.php` → `…/bitrix/modules/shef.purchase/lib/`.
 
 ## Вебхук
 
@@ -73,7 +75,7 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
 `B24_SSH_HOST`, `B24_SSH_USER`, `B24_SSH_PORT`, `B24_CONTROLLERS_PATH`.
 
 Скрипт ([`scripts/deploy-b24-controller.sh`](../scripts/deploy-b24-controller.sh)):
-- копирует **только** `b24-controller/lib/controllers/procure*.php`;
+- копирует **только** `procure*.php` в `lib/controllers/` и `config.php` в `lib/`;
 - `rsync` **без** `--delete` — чужие файлы модуля `shef.purchase` не затрагиваются;
 - по умолчанию делает dry-run; реальная выкладка — `make deploy-b24 APPLY=1`.
 
@@ -94,15 +96,17 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
 
 ## Опции модуля (настройки)
 
-Часть параметров переопределяется через настройки модуля `shef.purchase`
-(`Option::get('shef.purchase', ...)`), чтобы не хардкодить ID конкретной коробки:
+Часть параметров переопределяется через настройки модуля `shef.purchase`,
+чтобы не хардкодить ID конкретной коробки. Все они читаются через единую точку —
+класс [`\Shef\Purchase\Config`](./lib/config.php) (`lib/config.php`), а не через
+прямые `Option::get` в контроллерах:
 
-| Опция | Default | Назначение |
-|---|---|---|
-| `B24_DEAL_CATEGORY_ID` | `1` | Воронка сделок («Закупки») |
-| `B24_DEAL_DEFAULT_STAGE_ID` | `C1:NEW` | Стадия новой сделки |
-| `B24_CATALOG_IBLOCK_ID` | `15` | Инфоблок каталога товаров |
-| `B24_UNIT_OKEI_SHT` | `796` | ОКЕИ-код единицы «штука» |
+| Опция | Default | Геттер `Config::` | Назначение |
+|---|---|---|---|
+| `B24_DEAL_CATEGORY_ID` | `1` | `getDealCategoryId()` | Воронка сделок («Закупки») |
+| `B24_DEAL_DEFAULT_STAGE_ID` | `C1:NEW` | `getDealDefaultStageId()` | Стадия новой сделки |
+| `B24_CATALOG_IBLOCK_ID` | `15` | `getCatalogIblockId()` | Инфоблок каталога товаров |
+| `B24_UNIT_OKEI_SHT` | `796` | `getUnitOkeiSht()` | ОКЕИ-код единицы «штука» |
 
 ## Тестирование
 
