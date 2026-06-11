@@ -2,7 +2,8 @@
 import type { NavigationMenuItem, CommandPaletteGroup, CommandPaletteItem } from '@bitrix24/b24ui-nuxt'
 import type { Ref } from 'vue'
 import { computed, ref, inject, onMounted } from 'vue'
-import HomeIcon from '@bitrix24/b24icons-vue/outline/HomeIcon'
+import UploadIcon from '@bitrix24/b24icons-vue/outline/UploadIcon'
+import GraphsDiagramIcon from '@bitrix24/b24icons-vue/outline/GraphsDiagramIcon'
 import Bitrix24Icon from '@bitrix24/b24icons-vue/common-service/Bitrix24Icon'
 import TelegramIcon from '@bitrix24/b24icons-vue/outline/TelegramIcon'
 import GitHubIcon from '@bitrix24/b24icons-vue/social/GitHubIcon'
@@ -33,9 +34,17 @@ const b24DocsLink = computed(() => {
 const links = computed<NavigationMenuItem[][]>(() => [
   [
     {
-      label: 'Home',
-      icon: HomeIcon,
+      label: 'Загрузка счетов',
+      icon: UploadIcon,
       to: '/',
+      onSelect: () => {
+        open.value = false
+      }
+    },
+    {
+      label: 'Метрики',
+      icon: GraphsDiagramIcon,
+      to: '/metrics',
       onSelect: () => {
         open.value = false
       }

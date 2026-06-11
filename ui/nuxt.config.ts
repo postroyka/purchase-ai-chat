@@ -24,6 +24,15 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
+  // Prerendered routes are served as flat `<route>.html` by the backend (express.static with
+  // extensions:['html']). Payload extraction would emit per-route `<route>/_payload.json`,
+  // creating a `metrics/` directory that shadows the flat `metrics.html` and makes a direct
+  // GET /metrics redirect to /metrics/ (then 404). We fetch all data client-side anyway, so
+  // there is no SSR payload to lose by turning it off.
+  experimental: {
+    payloadExtraction: false
+  },
+
   runtimeConfig: {
     /**
      * @memo this will be overwritten from .env or Docker_*
@@ -57,12 +66,16 @@ export default defineNuxtConfig({
     devProxy: {
       '/upload': { target: 'http://localhost:3000/upload', changeOrigin: true },
       '/job': { target: 'http://localhost:3000/job', changeOrigin: true },
-      '/health': { target: 'http://localhost:3000/health', changeOrigin: true }
+      '/health': { target: 'http://localhost:3000/health', changeOrigin: true },
+      // Only the JSON data is a backend call; /metrics itself is a Nuxt page.
+      '/metrics/data': { target: 'http://localhost:3000/metrics/data', changeOrigin: true }
     },
     prerender: {
       routes: [
         // Корневой маршрут — иначе index.html не генерируется и Express отдаёт 404 на «/».
         '/',
+        // Дашборд метрик — статическая оболочка; данные тянутся с /metrics/data на клиенте.
+        '/metrics',
         ...pagesService
       ],
       crawlLinks: true,
