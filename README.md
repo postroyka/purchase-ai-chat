@@ -63,6 +63,9 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `OCR_LANGS` | app | — | Языки OCR (tesseract) для сканов/фото (по умолчанию: `rus+eng+bel`) |
 | `RATE_LIMIT_MAX` | app | — | Лимит запросов `/upload` на токен в окне (по умолчанию: `20`, `0` = выкл.) |
 | `RATE_LIMIT_WINDOW_MS` | app | — | Окно rate-limit в мс (по умолчанию: `60000`) |
+| `HOURLY_RATE_BYN` | app | — | Стоимость часа сотрудника для оценки экономии на `/metrics` (по умолчанию: `18`; `0` = скрыть блок). Оценочное — уточнить с заказчиком |
+| `MINUTES_PER_POSITION` | app | — | Ручное время на 1 позицию для оценки экономии (по умолчанию: `2`) |
+| `USD_BYN_RATE` | app | — | Курс USD→BYN для перевода стоимости модели в BYN (по умолчанию: `3.3`) |
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
 | `AGENT_TIMEOUT_MS` | app | — | Таймаут запуска агента в мс (по умолчанию: 300000 = 5 мин) |
 | `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
@@ -129,6 +132,31 @@ curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
 ```
 
 > ⚠️ В PowerShell используй `curl.exe` (не алиас `curl`), иначе синтаксис флагов другой.
+
+### Метрики использования (`/metrics`)
+
+Дашборд «за всё время» с показателями и графиками: загрузки, форматы, доля OCR vs текстового
+слоя, исходы обработки (включая `tool_unavailable`, пока инструменты Б24 — заглушки) и
+стоимость прогонов модели.
+
+- **`GET /metrics`** — HTML-дашборд, закрыт **HTTP Basic** (те же `PUBLIC_PAGE_BASIC_AUTH_*`).
+  Открой в браузере `http://localhost:3000/metrics`. Если `PUBLIC_PAGE_BASIC_AUTH_PASS` не задан
+  (или `PUBLIC_PAGE_ENABLED=false`) — отвечает **503** (не открывается анонимно).
+- **`GET /metrics/data`** — JSON-срез, принимает **Bearer-токен ИЛИ Basic** (браузер дошлёт Basic сам):
+
+```bash
+curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"   # либо Basic-логин страницы
+```
+
+Дашборд также оценивает **экономию** (сэкономленное время × ставку − стоимость прогона модели)
+и **потерю на позициях без артикула поставщика** (их нельзя автосопоставить). Параметры оценки —
+`HOURLY_RATE_BYN`, `MINUTES_PER_POSITION`, `USD_BYN_RATE` в `.env` (значения оценочные, уточнить
+с заказчиком; `HOURLY_RATE_BYN=0` скрывает блок экономики).
+
+> **Обслуживание.** Счётчики копятся в Redis без TTL (lifetime) в ключах `metrics:*`; ключ
+> `metrics:daily` растёт на одно поле в сутки. Сбросить все метрики (например, перед боевым
+> запуском после тестов): `redis-cli --scan --pattern 'metrics:*' | xargs redis-cli del`. При
+> восстановлении Redis из бэкапа метрики поднимаются вместе с журналом заданий.
 
 ## MCP — upstream и кастомные инструменты
 
@@ -331,4 +359,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-10 (PR #71 — REST-контроллеры `shef.purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
+*Last reviewed: 2026-06-11 (PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна, оценка экономии и потери на позициях без артикула; PR #71 — REST-контроллеры `shef.purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*

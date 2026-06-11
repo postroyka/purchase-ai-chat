@@ -7,10 +7,43 @@ import { fileURLToPath } from 'url';
 import { timingSafeEqual } from 'node:crypto';
 import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
+import { createMetrics } from './metrics.js';
 import { runAgent, redactToken } from './agent-runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Lazily read + cache the metrics dashboard HTML (served by GET /metrics). Falls back to a
+// minimal page that still renders /metrics/data, so a missing asset never breaks the route.
+let _metricsPageCache = null;
+function getMetricsPage() {
+  if (_metricsPageCache != null) return _metricsPageCache;
+  try {
+    _metricsPageCache = fs.readFileSync(path.join(__dirname, 'metrics-dashboard.html'), 'utf8');
+    return _metricsPageCache;
+  } catch {
+    // Don't cache the fallback: a transient read miss must not pin the stub for the whole
+    // process — a later request should retry reading the real file.
+    return '<!doctype html><meta charset="utf-8"><title>Procure AI — метрики</title>'
+      + '<body style="font-family:sans-serif;max-width:720px;margin:40px auto"><h1>Procure AI — метрики</h1>'
+      + '<pre id="o">загрузка…</pre><script>fetch("/metrics/data",{cache:"no-store"}).then(r=>r.json())'
+      + '.then(d=>{o.textContent=JSON.stringify(d,null,2)}).catch(e=>{o.textContent=String(e)})</script>';
+  }
+}
+
+// Map a thrown agent error message to a small, stable label for the metrics outcome
+// breakdown (issue #67). Business errors (supplier_not_found, tool_unavailable, …) arrive in
+// the agent's result payload instead and are recorded directly.
+// Order matters: a crash's stderr may embed "ENOENT"/"not found", so match agent-runner's
+// exact "CLI not found" phrase and check "exited with code" before the JSON-shape errors.
+export function classifyAgentError(msg) {
+  const m = String(msg);
+  if (/timed out/i.test(m)) return 'timeout';
+  if (/CLI not found/i.test(m)) return 'cli_missing';
+  if (/exited with code/i.test(m)) return 'agent_crash';
+  if (/no JSON|not valid JSON/i.test(m)) return 'bad_output';
+  return 'other_error';
+}
 
 const AUTH_PLACEHOLDER = 'replace-with-secure-token';
 const BASIC_AUTH_PLACEHOLDER = 'replace-with-secure-password';
@@ -105,6 +138,7 @@ function createRateLimiter({ windowMs, max }) {
  *   uiPublicDir?: string,
  *   agentConfig?: import('./agent-runner.js').AgentConfig,
  *   jobs?: object,
+ *   metrics?: object,
  * }} [config]
  * @returns {import('express').Express}
  */
@@ -154,6 +188,7 @@ export function createApp(config = {}) {
   });
 
   const jobs = config.jobs ?? createJobsStore({ redisUrl, ttlHours });
+  const metrics = config.metrics ?? createMetrics({ redisUrl });
   const agentConfig = config.agentConfig ?? {};
   const uploadRateLimit = createRateLimiter({ windowMs: rateLimitWindowMs, max: rateLimitMax });
 
@@ -352,7 +387,8 @@ export function createApp(config = {}) {
       }
 
       activeJobs++;
-      processJob(jobId, jobs, agentConfig).catch((e) =>
+      metrics.recordUpload({ fileCount: fileEntries.length }).catch(() => {}); // best-effort
+      processJob(jobId, jobs, agentConfig, metrics).catch((e) =>
         console.error(`[processJob] unhandled error for job ${jobId}:`, e),
       ).finally(() => { activeJobs--; });
 
@@ -391,6 +427,26 @@ export function createApp(config = {}) {
     }
   });
 
+  // GET /metrics — protected usage dashboard (issue #67). Behind page Basic auth so it's
+  // browsable; the page fetches /metrics/data for the numbers. Registered before the static
+  // UI catch-all below so it isn't shadowed by it.
+  // NOTE: the dashboard uses inline <script>/<style>. When a strict CSP is added (#50), it
+  // must allow them via nonce/hash or the assets must be split into separate files.
+  app.get('/metrics', requirePageAuth, (_req, res) => {
+    res.type('html').send(getMetricsPage());
+  });
+
+  // GET /metrics/data — JSON snapshot. Dual auth (Bearer for scripts; Basic for the
+  // in-browser dashboard, which resends the page credentials automatically on same-origin).
+  app.get('/metrics/data', requireAuth, async (_req, res) => {
+    try {
+      return res.json(await metrics.snapshot());
+    } catch (e) {
+      console.error('[metrics] snapshot error:', e.message);
+      return res.status(503).json({ error: 'Metrics unavailable' });
+    }
+  });
+
   // Serve built UI (only present in Docker image), guarded by Basic auth when the public
   // page is enabled. Mounted only if the build output exists, so dev runs (UI served
   // separately on :3001) and tests are unaffected.
@@ -405,7 +461,7 @@ export function createApp(config = {}) {
 // status transitions (pending → processing → done/error) to the jobs store.
 // NOTE: assumes single-process deployment — no distributed locking. Multi-instance
 // deployments would need a queue (e.g. BullMQ) to prevent duplicate processing.
-async function processJob(jobId, jobs, agentConfig = {}) {
+async function processJob(jobId, jobs, agentConfig = {}, metrics = null) {
   const job = await jobs.get(jobId);
   if (!job) return;
 
@@ -415,10 +471,15 @@ async function processJob(jobId, jobs, agentConfig = {}) {
   for (const fileEntry of job.files) {
     fileEntry.status = 'processing';
     await jobs.set(jobId, job);
+    const startedAt = Date.now();
+    const format = path.extname(fileEntry.path).slice(1).toLowerCase();
+    let agentMeta = null; // filled via onMeta on a successful run (extract method + cost/time)
     try {
       // Pass jobId into the agent config so agent-runner log lines are traceable
-      // when multiple jobs run concurrently.
-      const result = await runAgent(fileEntry.path, job.responsibleUserId, { ...agentConfig, jobId });
+      // when multiple jobs run concurrently. onMeta captures usage metadata (#67).
+      const result = await runAgent(fileEntry.path, job.responsibleUserId, {
+        ...agentConfig, jobId, onMeta: (m) => { agentMeta = m; },
+      });
       // Guard against an abnormally large agent result bloating Redis / the API response.
       let tooLarge = false;
       try { tooLarge = JSON.stringify(result).length > MAX_RESULT_BYTES; } catch { /* non-serialisable */ }
@@ -426,12 +487,31 @@ async function processJob(jobId, jobs, agentConfig = {}) {
         ? { truncated: true, message: 'agent result too large — omitted' }
         : result;
       fileEntry.status = 'done';
+      // A business error (e.g. tool_unavailable, supplier_not_found) comes back in the agent's
+      // result payload — not as a thrown exception — so the file is "done" but the outcome
+      // isn't "ok". Surface it for the metrics breakdown.
+      const outcome = (result && typeof result === 'object' && typeof result.error === 'string')
+        ? result.error
+        : 'ok';
+      // Count recognised line items + those missing a supplier article (vendorCode) for the
+      // savings estimate (#75). Items are present even when the deal couldn't be created
+      // (e.g. tool_unavailable) — the recognition/matching work was still done.
+      const items = Array.isArray(result?.items) ? result.items : [];
+      const positionsNoArticle = items.filter((it) => {
+        const vc = it && typeof it === 'object' ? it.vendorCode : null;
+        return vc == null || String(vc).trim() === '';
+      }).length;
+      metrics?.recordFile({
+        format, status: 'done', outcome, durationMs: Date.now() - startedAt, agent: agentMeta,
+        positions: items.length, positionsNoArticle,
+      });
     } catch (err) {
       // Redact any Bearer token before the message is logged, persisted, or returned.
       const safeMsg = redactToken(String(err?.message ?? 'agent error'));
       console.error(`[processJob] error processing file ${fileEntry.name} (job ${jobId}): ${safeMsg}`);
       fileEntry.status = 'error';
       fileEntry.error = safeMsg.slice(0, MAX_ERROR_CHARS);
+      metrics?.recordFile({ format, status: 'error', outcome: classifyAgentError(safeMsg), durationMs: Date.now() - startedAt, agent: agentMeta });
     }
     await jobs.set(jobId, job);
   }
