@@ -22,9 +22,29 @@ import Redis from 'ioredis';
  *     positionsNoArticle?: number,
  *     agent?: { extractMethod?: string|null, costUsd?: number|null, agentDurationMs?: number }|null,
  *   }): Promise<void>,
- *   snapshot(): Promise<object>,
+ *   snapshot(): Promise<MetricsSnapshot>,
  *   ping(): Promise<void>,
  * }} Metrics
+ */
+
+/**
+ * Shape returned by {@link Metrics.snapshot}. Mirrors `MetricsSnapshot` in
+ * ui/app/composables/useMetrics.ts — keep the two in sync.
+ *
+ * @typedef {{
+ *   generatedAt: string,
+ *   economics: {
+ *     enabled: boolean, hourlyRateByn: number, minutesPerPosition: number,
+ *     usdByn: number, usdBynDate: string|null, usdBynSource: 'nbrb'|'nbrb-stale'|'env',
+ *     positions: number, positionsNoArticle: number, positionsNoArticlePct: number,
+ *     grossSavedByn: number, modelCostByn: number, netSavedByn: number, lostNoArticleByn: number,
+ *   },
+ *   totals: Record<string, number>,
+ *   outcomes: Array<{ name: string, count: number }>,
+ *   formats: Array<{ name: string, count: number }>,
+ *   extract: Array<{ name: string, count: number }>,
+ *   daily: Array<{ date: string, files: number }>,
+ * }} MetricsSnapshot
  */
 
 const K = {
@@ -69,7 +89,8 @@ function warn(ctx, e) {
 }
 
 /**
- * @param {{ redisUrl?: string, hourlyRateByn?: number, minutesPerPosition?: number, usdBynRate?: number }} [config]
+ * @param {{ redisUrl?: string, hourlyRateByn?: number, minutesPerPosition?: number, usdBynRate?: number,
+ *           getUsdByn?: () => Promise<{ rate: number, date?: string|null, source?: string }> }} [config]
  * @returns {Metrics}
  */
 export function createMetrics(config = {}) {
@@ -77,16 +98,17 @@ export function createMetrics(config = {}) {
   const backend = redisUrl ? redisBackend(redisUrl) : memoryBackend();
   // Economic model (issue #75). hourlyRateByn = cost of an employee-hour to the company
   // (salary + payroll taxes). 0 disables the savings estimate. Defaults are placeholders
-  // to confirm with the client; all tunable via env.
+  // to confirm with the client; all tunable via env. usdByn here is the *fallback* — when
+  // getUsdByn is provided (live NB RB rate, see nbrb-rate.js) it takes precedence per snapshot.
   const econ = {
     hourlyRateByn: num(config.hourlyRateByn ?? process.env.HOURLY_RATE_BYN, 18),
     minutesPerPosition: num(config.minutesPerPosition ?? process.env.MINUTES_PER_POSITION, 2),
     usdByn: num(config.usdBynRate ?? process.env.USD_BYN_RATE, 3.3),
   };
-  return makeApi(backend, econ);
+  return makeApi(backend, econ, config.getUsdByn ?? null);
 }
 
-function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.3 }) {
+function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.3 }, getUsdByn = null) {
   async function recordUpload({ fileCount = 0 } = {}) {
     try {
       await b.batch([
@@ -142,10 +164,26 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
     const processed = (t.files_done || 0) + (t.files_error || 0); // files that reached recordFile
 
     // Savings estimate (#75): manual time avoided × hourly rate, minus model cost.
+    // Resolve the USD→BYN rate: live NB RB rate when a provider is wired (index.js), else the
+    // static env fallback. Best-effort — a failing provider must not break the snapshot.
+    let usdByn = econ.usdByn;
+    let usdBynDate = null;
+    let usdBynSource = 'env';
+    if (getUsdByn) {
+      try {
+        const r = await getUsdByn();
+        if (r && Number.isFinite(r.rate) && r.rate > 0) {
+          usdByn = r.rate;
+          usdBynDate = r.date ?? null;
+          usdBynSource = r.source ?? 'nbrb';
+        }
+      } catch (e) { warn('usdByn provider', e); }
+    }
+
     const positions = t.positions || 0;
     const positionsNoArticle = t.positions_no_article || 0;
     const savedByn = round2(((positions * econ.minutesPerPosition) / 60) * econ.hourlyRateByn);
-    const modelCostByn = round2((t.cost_usd || 0) * econ.usdByn);
+    const modelCostByn = round2((t.cost_usd || 0) * usdByn);
     const lostNoArticleByn = round2(((positionsNoArticle * econ.minutesPerPosition) / 60) * econ.hourlyRateByn);
 
     return {
@@ -154,7 +192,9 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
         enabled: econ.hourlyRateByn > 0,
         hourlyRateByn: econ.hourlyRateByn,
         minutesPerPosition: econ.minutesPerPosition,
-        usdByn: econ.usdByn,
+        usdByn: round4(usdByn),
+        usdBynDate,
+        usdBynSource,
         positions,
         positionsNoArticle,
         positionsNoArticlePct: positions ? round1((positionsNoArticle / positions) * 100) : 0,

@@ -35,6 +35,7 @@ jobs:
           node --check backend/jobs-store.js
           node --check backend/extract-text.js
           node --check backend/metrics.js
+          node --check backend/nbrb-rate.js
 
       - name: Run tests
         working-directory: backend

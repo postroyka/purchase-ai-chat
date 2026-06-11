@@ -1,124 +1,130 @@
 <template>
-  <HomeLoader v-if="isLoading" />
-  <div v-else class="min-h-screen flex flex-col items-center bg-base-50">
-    <div class="w-full max-w-2xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
-      <!-- Шапка-герой -->
-      <header class="text-center">
-        <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight text-base-master">
-          Загрузите прайс-листы
-        </h1>
-        <p class="mt-3 text-base text-base-600 max-w-md mx-auto">
-          PDF, фото (JPG/PNG), Excel (XLSX/XLS) или Word. Создадим сделки в Bitrix24 автоматически.
-        </p>
-      </header>
+  <B24DashboardPanel id="home">
+    <template #header>
+      <B24DashboardNavbar title="Загрузка счетов">
+        <template #leading>
+          <B24DashboardSidebarCollapse />
+        </template>
+      </B24DashboardNavbar>
+    </template>
 
-      <!-- Зона загрузки -->
-      <B24Card class="mt-10 rounded-xl" :b24ui="{ body: 'p-6 sm:p-8' }">
-        <B24FileUpload
-          v-model="selectedFiles"
-          :multiple="true"
-          accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls,.docx"
-          variant="area"
-          layout="list"
-          class="w-full min-h-[220px]"
-          label="Перетащите файлы сюда"
-          description="или нажмите, чтобы выбрать · до 10 файлов, по 20 МБ"
-          :file-delete="!uploading && !polling"
-          :disabled="uploading || polling"
+    <template #body>
+      <div class="w-full max-w-2xl mx-auto py-6 sm:py-10">
+        <!-- Шапка-герой -->
+        <header class="text-center">
+          <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight text-base-master">
+            Загрузите прайс-листы
+          </h1>
+          <p class="mt-3 text-base text-base-600 max-w-md mx-auto">
+            PDF, фото (JPG/PNG), Excel (XLSX/XLS) или Word. Создадим сделки в Bitrix24 автоматически.
+          </p>
+        </header>
+
+        <!-- Зона загрузки -->
+        <B24Card class="mt-10 rounded-xl" :b24ui="{ body: 'p-6 sm:p-8' }">
+          <B24FileUpload
+            v-model="selectedFiles"
+            :multiple="true"
+            accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls,.docx"
+            variant="area"
+            layout="list"
+            class="w-full min-h-[220px]"
+            label="Перетащите файлы сюда"
+            description="или нажмите, чтобы выбрать · до 10 файлов, по 20 МБ"
+            :file-delete="!uploading && !polling"
+            :disabled="uploading || polling"
+          />
+
+          <div v-if="uploading || polling" class="mt-5">
+            <B24Progress
+              :model-value="null"
+              animation="carousel"
+              color="air-primary"
+              size="xs"
+            />
+            <p class="mt-2 text-sm text-base-500 text-center">
+              {{ uploading ? 'Загружаем файлы…' : 'Обрабатываем…' }}
+            </p>
+          </div>
+        </B24Card>
+
+        <!-- Ошибка -->
+        <B24Alert
+          v-if="uploadError"
+          class="mt-6"
+          color="air-primary-alert"
+          title="Не получилось"
+          :description="uploadError"
+          :close="true"
+          @update:open="uploadError = null"
         />
 
-        <div v-if="uploading || polling" class="mt-5">
-          <B24Progress
-            :model-value="null"
-            animation="carousel"
-            color="air-primary"
-            size="xs"
-          />
-          <p class="mt-2 text-sm text-base-500 text-center">
-            {{ uploading ? 'Загружаем файлы…' : 'Обрабатываем…' }}
-          </p>
-        </div>
-      </B24Card>
-
-      <!-- Ошибка -->
-      <B24Alert
-        v-if="uploadError"
-        class="mt-6"
-        color="air-primary-alert"
-        title="Не получилось"
-        :description="uploadError"
-        :close="true"
-        @update:open="uploadError = null"
-      />
-
-      <!-- Статус обработки -->
-      <section v-if="job" class="mt-6 space-y-3">
-        <div class="flex items-center justify-between px-1">
-          <h2 class="text-sm font-medium text-base-700">
-            Статус обработки
-          </h2>
-          <B24Badge
-            :label="JOB_LABELS[job.status] ?? job.status"
-            :color="JOB_COLORS[job.status] ?? 'air-secondary'"
-            size="sm"
-          />
-        </div>
-
-        <B24Card
-          v-for="file in job.files"
-          :key="file.name"
-          class="rounded-xl"
-          :b24ui="{ body: 'p-4' }"
-        >
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-sm text-base-master truncate min-w-0">
-              {{ file.name }}
-            </span>
+        <!-- Статус обработки -->
+        <section v-if="job" class="mt-6 space-y-3">
+          <div class="flex items-center justify-between px-1">
+            <h2 class="text-sm font-medium text-base-700">
+              Статус обработки
+            </h2>
             <B24Badge
-              :label="FILE_LABELS[file.status] ?? file.status"
-              :color="FILE_COLORS[file.status] ?? 'air-secondary'"
+              :label="JOB_LABELS[job.status] ?? job.status"
+              :color="JOB_COLORS[job.status] ?? 'air-secondary'"
               size="sm"
-              class="shrink-0"
             />
           </div>
 
-          <B24Progress
-            v-if="file.status === 'processing' || file.status === 'pending'"
-            class="mt-3"
-            :model-value="null"
-            animation="carousel"
-            color="air-primary"
-            size="xs"
-          />
-
-          <p
-            v-if="file.error"
-            class="mt-2 text-xs text-red-500"
-            :title="file.error"
+          <B24Card
+            v-for="file in job.files"
+            :key="file.name"
+            class="rounded-xl"
+            :b24ui="{ body: 'p-4' }"
           >
-            {{ file.error }}
-          </p>
-        </B24Card>
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-sm text-base-master truncate min-w-0">
+                {{ file.name }}
+              </span>
+              <B24Badge
+                :label="FILE_LABELS[file.status] ?? file.status"
+                :color="FILE_COLORS[file.status] ?? 'air-secondary'"
+                size="sm"
+                class="shrink-0"
+              />
+            </div>
 
-        <div v-if="job.status === 'done' || job.status === 'error'" class="flex justify-center pt-2">
-          <B24Button color="air-secondary" size="sm" @click="resetState">
-            Загрузить ещё
-          </B24Button>
-        </div>
-      </section>
-    </div>
-  </div>
+            <B24Progress
+              v-if="file.status === 'processing' || file.status === 'pending'"
+              class="mt-3"
+              :model-value="null"
+              animation="carousel"
+              color="air-primary"
+              size="xs"
+            />
+
+            <p
+              v-if="file.error"
+              class="mt-2 text-xs text-red-500"
+              :title="file.error"
+            >
+              {{ file.error }}
+            </p>
+          </B24Card>
+
+          <div v-if="job.status === 'done' || job.status === 'error'" class="flex justify-center pt-2">
+            <B24Button color="air-secondary" size="sm" @click="resetState">
+              Загрузить ещё
+            </B24Button>
+          </div>
+        </section>
+      </div>
+    </template>
+  </B24DashboardPanel>
 </template>
 
 <script setup lang="ts">
-// Эта страница самодостаточна — без сайдбара и общего dashboard-каркаса.
-definePageMeta({ layout: false })
+// Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
+definePageMeta({ layout: 'default' })
 
 const toast = useToast()
 const config = useRuntimeConfig()
-
-// Индикатор подключения к Bitrix24 — прокидывается из app.vue.
-const isLoading = inject<Readonly<Ref<boolean>>>('isLoading', ref(false))
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 

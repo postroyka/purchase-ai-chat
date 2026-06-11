@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createMetrics } from '../metrics.js';
 
 // Empty redisUrl forces the in-memory backend (hermetic — no Redis needed).
@@ -143,5 +143,52 @@ describe('metrics economics (#75)', () => {
     expect(e.enabled).toBe(false);
     expect(e.positionsNoArticle).toBe(3); // clamped to positions
     expect(e.grossSavedByn).toBe(0);
+  });
+});
+
+describe('metrics — live USD→BYN rate provider (#75)', () => {
+  // A failing provider logs a best-effort warning — silence it to keep CI output clean.
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  const withCost = (m) => m.recordFile({
+    format: 'pdf', status: 'done', outcome: 'ok', durationMs: 0,
+    agent: { extractMethod: 'pdftotext', costUsd: 1, agentDurationMs: 1 },
+  });
+
+  it('uses the live rate from getUsdByn and surfaces its source + date', async () => {
+    const m = createMetrics({
+      redisUrl: '', hourlyRateByn: 18, usdBynRate: 3.3,
+      getUsdByn: async () => ({ rate: 2.5, date: '2026-06-11', source: 'nbrb' }),
+    });
+    await withCost(m);
+    const e = (await m.snapshot()).economics;
+    expect(e.usdByn).toBe(2.5);
+    expect(e.usdBynSource).toBe('nbrb');
+    expect(e.usdBynDate).toBe('2026-06-11');
+    expect(e.modelCostByn).toBeCloseTo(2.5, 2); // 1 USD × 2.5 (live), not the 3.3 fallback
+  });
+
+  it('falls back to the static env rate when the provider throws', async () => {
+    const m = createMetrics({
+      redisUrl: '', hourlyRateByn: 18, usdBynRate: 3.3,
+      getUsdByn: async () => { throw new Error('nbrb down'); },
+    });
+    await withCost(m);
+    const e = (await m.snapshot()).economics;
+    expect(e.usdByn).toBe(3.3);
+    expect(e.usdBynSource).toBe('env');
+    expect(e.modelCostByn).toBeCloseTo(3.3, 2);
+  });
+
+  it('ignores an invalid live rate (≤ 0) and keeps the fallback for the cost calc', async () => {
+    const m = createMetrics({
+      redisUrl: '', hourlyRateByn: 18, usdBynRate: 3.3,
+      getUsdByn: async () => ({ rate: 0, source: 'nbrb' }),
+    });
+    await withCost(m);
+    const e = (await m.snapshot()).economics;
+    expect(e.usdByn).toBe(3.3);
+    expect(e.usdBynSource).toBe('env');
+    expect(e.modelCostByn).toBeCloseTo(3.3, 2); // 1 USD × fallback 3.3, not the invalid 0
   });
 });

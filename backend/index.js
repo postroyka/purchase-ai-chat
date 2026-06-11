@@ -8,28 +8,15 @@ import { timingSafeEqual } from 'node:crypto';
 import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
 import { createMetrics } from './metrics.js';
+import { createNbrbRate } from './nbrb-rate.js';
 import { runAgent, redactToken } from './agent-runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Lazily read + cache the metrics dashboard HTML (served by GET /metrics). Falls back to a
-// minimal page that still renders /metrics/data, so a missing asset never breaks the route.
-let _metricsPageCache = null;
-function getMetricsPage() {
-  if (_metricsPageCache != null) return _metricsPageCache;
-  try {
-    _metricsPageCache = fs.readFileSync(path.join(__dirname, 'metrics-dashboard.html'), 'utf8');
-    return _metricsPageCache;
-  } catch {
-    // Don't cache the fallback: a transient read miss must not pin the stub for the whole
-    // process — a later request should retry reading the real file.
-    return '<!doctype html><meta charset="utf-8"><title>Procure AI — метрики</title>'
-      + '<body style="font-family:sans-serif;max-width:720px;margin:40px auto"><h1>Procure AI — метрики</h1>'
-      + '<pre id="o">загрузка…</pre><script>fetch("/metrics/data",{cache:"no-store"}).then(r=>r.json())'
-      + '.then(d=>{o.textContent=JSON.stringify(d,null,2)}).catch(e=>{o.textContent=String(e)})</script>';
-  }
-}
+// The usage dashboard (issue #67) is now a Nuxt page — ui/app/pages/metrics.vue — served as a
+// prerendered static asset by express.static below (behind the same Basic auth as the UI).
+// The backend only owns the data here: GET /metrics/data.
 
 // Map a thrown agent error message to a small, stable label for the metrics outcome
 // breakdown (issue #67). Business errors (supplier_not_found, tool_unavailable, …) arrive in
@@ -141,6 +128,12 @@ function createRateLimiter({ windowMs, max }) {
  *   metrics?: object,
  * }} [config]
  * @returns {import('express').Express}
+ *
+ * NOTE: when `metrics` is omitted createApp builds a default Metrics WITHOUT a live USD→BYN
+ * rate provider (getUsdByn) — the savings estimate then uses the static USD_BYN_RATE fallback.
+ * The live NB RB rate is wired only at the prod entry point (bottom of this file) so the unit/
+ * route suites never make an outbound api.nbrb.by call. To get the live rate elsewhere, pass a
+ * `metrics` built via createMetrics({ getUsdByn: createNbrbRate(...).get }).
  */
 export function createApp(config = {}) {
   const uploadDir = path.resolve(
@@ -188,6 +181,8 @@ export function createApp(config = {}) {
   });
 
   const jobs = config.jobs ?? createJobsStore({ redisUrl, ttlHours });
+  // The live NB RB rate is wired at the prod entry point (bottom of file), not here, so
+  // createApp stays hermetic — no outbound api.nbrb.by call from the unit/route test suites.
   const metrics = config.metrics ?? createMetrics({ redisUrl });
   const agentConfig = config.agentConfig ?? {};
   const uploadRateLimit = createRateLimiter({ windowMs: rateLimitWindowMs, max: rateLimitMax });
@@ -427,15 +422,6 @@ export function createApp(config = {}) {
     }
   });
 
-  // GET /metrics — protected usage dashboard (issue #67). Behind page Basic auth so it's
-  // browsable; the page fetches /metrics/data for the numbers. Registered before the static
-  // UI catch-all below so it isn't shadowed by it.
-  // NOTE: the dashboard uses inline <script>/<style>. When a strict CSP is added (#50), it
-  // must allow them via nonce/hash or the assets must be split into separate files.
-  app.get('/metrics', requirePageAuth, (_req, res) => {
-    res.type('html').send(getMetricsPage());
-  });
-
   // GET /metrics/data — JSON snapshot. Dual auth (Bearer for scripts; Basic for the
   // in-browser dashboard, which resends the page credentials automatically on same-origin).
   app.get('/metrics/data', requireAuth, async (_req, res) => {
@@ -450,8 +436,11 @@ export function createApp(config = {}) {
   // Serve built UI (only present in Docker image), guarded by Basic auth when the public
   // page is enabled. Mounted only if the build output exists, so dev runs (UI served
   // separately on :3001) and tests are unaffected.
+  // extensions:['html'] resolves GET /metrics → metrics.html (Nuxt prerenders routes as flat
+  // .html files because nuxt.config sets autoSubfolderIndex:false). /metrics/data is handled
+  // by the route above, so it never reaches the static layer.
   if (publicPageEnabled && fs.existsSync(uiPublicDir)) {
-    app.use(requirePageAuth, express.static(uiPublicDir));
+    app.use(requirePageAuth, express.static(uiPublicDir, { extensions: ['html'] }));
   }
 
   return app;
@@ -532,7 +521,17 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null) {
 // Entry point — only runs when executed directly, not when imported by tests.
 if (process.argv[1] === __filename) {
   const PORT = process.env.PORT ?? 3000;
-  const app = createApp();
+  // Wire the live NB RB USD→BYN rate here (not inside createApp) so the savings estimate (#75)
+  // uses a real rate in production while the test suites stay offline. USD_BYN_RATE is the
+  // offline fallback; the rate is cached 12h and fetched best-effort.
+  const nbrbRate = createNbrbRate({ fallbackRate: Number(process.env.USD_BYN_RATE) || 3.3 });
+  const metrics = createMetrics({ getUsdByn: nbrbRate.get });
+  const app = createApp({ metrics });
+  // Warm the cache and surface the source at boot, so ops can tell whether НБРБ is reachable
+  // (vs. silently falling back to USD_BYN_RATE behind a strict egress firewall).
+  nbrbRate.get()
+    .then((r) => console.log(`[backend] USD→BYN rate: ${r.rate} (source: ${r.source}${r.date ? `, ${r.date}` : ''})`))
+    .catch(() => {});
   const server = app.listen(PORT, () => {
     console.log(`[backend] procure-ai backend listening on port ${PORT}`);
   });

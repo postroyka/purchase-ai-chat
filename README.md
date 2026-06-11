@@ -18,7 +18,7 @@ UI (Nuxt SPA) ──upload/poll──▶ backend (Express, :3000) ──Claude C
                                    Redis (jobs persistence)
 ```
 
-- **Dev**: Nuxt dev-server на `:3001`, backend на `:3000`. devProxy в nuxt.config.ts перенаправляет `/upload`, `/job`, `/health` на backend.
+- **Dev**: Nuxt dev-server на `:3001`, backend на `:3000`. devProxy в nuxt.config.ts перенаправляет `/upload`, `/job`, `/health`, `/metrics/data` на backend.
 - **Prod**: Nuxt собирается в статику (`ui/.output/public/`); в образе она копируется в `ui/public/`, откуда Express раздаёт её через `express.static` — один процесс, один порт `:3000`.
 - MCP не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3000/mcp`).
 
@@ -65,7 +65,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `RATE_LIMIT_WINDOW_MS` | app | — | Окно rate-limit в мс (по умолчанию: `60000`) |
 | `HOURLY_RATE_BYN` | app | — | Стоимость часа сотрудника для оценки экономии на `/metrics` (по умолчанию: `18`; `0` = скрыть блок). Оценочное — уточнить с заказчиком |
 | `MINUTES_PER_POSITION` | app | — | Ручное время на 1 позицию для оценки экономии (по умолчанию: `2`) |
-| `USD_BYN_RATE` | app | — | Курс USD→BYN для перевода стоимости модели в BYN (по умолчанию: `3.3`) |
+| `USD_BYN_RATE` | app | — | **Фолбэк** курса USD→BYN (живой курс берётся из НБРБ `api.nbrb.by`, кэш 12 ч; фолбэк — при сбое). По умолчанию `3.3` |
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
 | `AGENT_TIMEOUT_MS` | app | — | Таймаут запуска агента в мс (по умолчанию: 300000 = 5 мин) |
 | `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
@@ -135,23 +135,31 @@ curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
 
 ### Метрики использования (`/metrics`)
 
-Дашборд «за всё время» с показателями и графиками: загрузки, форматы, доля OCR vs текстового
-слоя, исходы обработки (включая `tool_unavailable`, пока инструменты Б24 — заглушки) и
-стоимость прогонов модели.
+Дашборд «за всё время» с KPI-карточками и графиками: загрузки, форматы, доля OCR vs текстового
+слоя, исходы обработки (включая `tool_unavailable` / `supplier_not_found`, пока инструменты Б24 —
+заглушки), стоимость прогонов модели и **экономика**.
 
-- **`GET /metrics`** — HTML-дашборд, закрыт **HTTP Basic** (те же `PUBLIC_PAGE_BASIC_AUTH_*`).
-  Открой в браузере `http://localhost:3000/metrics`. Если `PUBLIC_PAGE_BASIC_AUTH_PASS` не задан
-  (или `PUBLIC_PAGE_ENABLED=false`) — отвечает **503** (не открывается анонимно).
-- **`GET /metrics/data`** — JSON-срез, принимает **Bearer-токен ИЛИ Basic** (браузер дошлёт Basic сам):
+- **Страница `/metrics`** — часть UI (Nuxt + b24ui), пункт сайдбара **«Метрики»** рядом с
+  **«Загрузка счетов»**. Закрыта тем же **HTTP Basic**, что и весь UI (`PUBLIC_PAGE_BASIC_AUTH_*`).
+  Локально (dev) — `http://localhost:3001/metrics`, в проде — `/metrics` того же origin.
+- **`GET /metrics/data`** — JSON-срез для скриптов, принимает **Bearer-токен ИЛИ Basic**:
 
 ```bash
+# BASE и TOKEN — как в блоке «Мониторинг задач (API)» выше
 curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"   # либо Basic-логин страницы
 ```
 
-Дашборд также оценивает **экономию** (сэкономленное время × ставку − стоимость прогона модели)
-и **потерю на позициях без артикула поставщика** (их нельзя автосопоставить). Параметры оценки —
-`HOURLY_RATE_BYN`, `MINUTES_PER_POSITION`, `USD_BYN_RATE` в `.env` (значения оценочные, уточнить
-с заказчиком; `HOURLY_RATE_BYN=0` скрывает блок экономики).
+Дашборд оценивает **экономию** (сэкономленное время × ставку − стоимость прогона модели) и
+**потерю на позициях без артикула поставщика** (их нельзя автосопоставить). Курс **USD→BYN
+берётся живым из НБРБ** (`api.nbrb.by`, кэш 12 ч). Источник курса виден на карточке и в поле
+`usdBynSource`: `nbrb` — свежий курс НБРБ; `nbrb-stale` — последний успешный курс (НБРБ временно
+недоступен); `env` — фолбэк на `USD_BYN_RATE` (НБРБ недоступен и кэша ещё нет). Остальные
+параметры — `HOURLY_RATE_BYN`, `MINUTES_PER_POSITION` в `.env` (оценочные, уточнить с заказчиком;
+`HOURLY_RATE_BYN=0` скрывает блок экономики).
+
+> **Сеть.** Backend делает исходящий HTTPS-запрос к `api.nbrb.by` (раз в ~12 ч из-за кэша). За
+> строгим egress-файрволом курс автоматически берётся из `USD_BYN_RATE`; при старте это видно в
+> логах: `[backend] USD→BYN rate: … (source: env)`.
 
 > **Обслуживание.** Счётчики копятся в Redis без TTL (lifetime) в ключах `metrics:*`; ключ
 > `metrics:daily` растёт на одно поле в сутки. Сбросить все метрики (например, перед боевым
@@ -359,4 +367,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-11 (PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef.purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
+*Last reviewed: 2026-06-11 (PR #79 — переезд дашборда `/metrics` на Nuxt/b24ui + живой курс USD→BYN из НБРБ (фолбэк `USD_BYN_RATE`); PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef.purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
