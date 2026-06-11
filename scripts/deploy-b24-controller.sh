@@ -55,7 +55,8 @@ if [ "${#files[@]}" -eq 0 ]; then
 fi
 
 # Путь до lib/ модуля = родитель lib/controllers (туда кладём config.php).
-B24_LIB_PATH="$(dirname "$B24_CONTROLLERS_PATH")"
+# Срезаем возможный trailing slash, иначе dirname вернёт сам каталог controllers.
+B24_LIB_PATH="$(dirname "${B24_CONTROLLERS_PATH%/}")"
 
 echo "Файлы к выкладке:"
 for f in "${files[@]}"; do echo "  - controllers/$(basename "$f")"; done

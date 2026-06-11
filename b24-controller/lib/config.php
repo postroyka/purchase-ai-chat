@@ -30,7 +30,7 @@ class Config
 	/** STAGE_ID новой сделки (например C1:NEW). */
 	public static function getDealDefaultStageId(): string
 	{
-		return Option::get('shef.purchase', 'B24_DEAL_DEFAULT_STAGE_ID', 'C1:NEW');
+		return (string)Option::get('shef.purchase', 'B24_DEAL_DEFAULT_STAGE_ID', 'C1:NEW');
 	}
 
 	/**
