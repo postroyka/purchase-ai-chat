@@ -30,7 +30,7 @@
 
 Деление обусловлено архитектурным принципом изоляции: `app` не имеет прямого доступа к Б24 API — только через `mcp`.
 
-**Примечание по текущей реализации MCP-сервера.** Неделя 1: инструменты являются заглушками (stub). Начиная с Недели 2 инструменты обращаются к Bitrix24 напрямую через REST-вебхук (`NUXT_BITRIX24_WEBHOOK_URL`). Кастомный `b24-controller`, упомянутый выше, фигурирует в контексте возможного будущего прокси для договоров (`B24_CONTRACTS_API_URL`) — архитектурное решение будет принято в начале Week 2.
+**Интеграция с Bitrix24 (Week 2+).** MCP-инструменты (`b24_pst_crm_*`) вызывают **REST-контроллеры `shef.purchase.api.procure*`**, добавленные в живой модуль коробки `shef.purchase` (через его `restIntegration`). Транспорт — стандартный REST-вебхук (`NUXT_BITRIX24_WEBHOOK_URL`); отдельного URL контроллера нет. `B24_CONTRACTS_API_URL` убран — не нужен. Исходники — `b24-controller/`, деплой полуручной (`make deploy-b24`, rsync только `procure*.php`, без `--delete`). **Существующий код `shef.purchase` не трогаем.**
 
 ---
 
@@ -46,8 +46,8 @@
 - **Валюта: только BYN.** Не-BYN → сделка не создаётся, причина в отчёте. Backend проверяет только формат/размер.
 - **Допустимые форматы: PDF, XLSX, DOCX, XLS, JPG/PNG.** _(Обновлено 2026-06-09: к ТЗ добавлены `.xls` и фото/скан. Текст извлекается на сервере — PDF/изображения через OCR (tesseract), office через python-хелпер; структуру из текста по-прежнему достаёт агент-LLM.)_
 - **Матчинг товара:** только активный, только родительский. Несколько найдено → активный с минимальным ID. Два артикула поставщика на один товар (R-12) → один хранится; второй не находим → предупреждение, позиция не привязывается, ручная обработка.
-- **Поиск поставщика** — по УНП. Российских (ИНН+КПП без УНП) не ищем.
-- **Поиск договора** — через контроллер; точные критерии уточняются при реализации.
+- **Поиск поставщика** — по УНП через реквизит `RQ_INN` (страна `crm_requisite_preset_country_id`, default 4 = Беларусь), `CCrmCompany::GetListEx` с фильтром `RQ`. Точное совпадение (`=`). Несколько компаний с одним УНП → берём с **минимальным ID**. Российских (ИНН+КПП без УНП) не ищем.
+- **Поиск договора** — контроллер `procurecontract.find`: `CLIENT=CO_<supplierId>`, `ACTIVE=Y`, `STATUS≠TO_DELETE` (брак), `TYPE ∈ {PURCHASE, PURCHASE_ZAK}`; опционально точное совпадение по `NUMBER` и `DATE` (d.m.Y). Несколько → минимальный ID. Детали — `b24-controller/IMPLEMENTATION_NOTES.md` §B3.
 - **Отчёт пофайловый.** `GET /job/:id/status` отдаёт статусы по файлам по мере готовности.
 - **`create_deal`** прикрепляет исходный файл к карточке сделки и пишет лог обработки в комментарий.
 - **Секреты — только в `.env.prod` на сервере.** Не коммитить, не запекать в образ.
@@ -73,8 +73,8 @@ procure-ai/
 │   ├── extract-text.js             #   файл→текст: pdftotext/OCR (poppler+tesseract); office→doc_to_text.py
 │   └── doc_to_text.py              #   xlsx/xls/docx → текст (openpyxl/xlrd/python-docx)
 ├── mcp/                            # MCP-сервер: find_supplier / find_contract / find_product / create_deal
-│                                   # (b24-controller — ВНЕШНИЙ сервис заказчика, в этом репо его нет;
-│                                   #  адрес задаётся через B24_CONTRACTS_API_URL)
+├── mcp-overlay/                    # PST-инструменты (b24_pst_crm_*), накладываются поверх mcp/ при сборке
+├── b24-controller/                 # PHP REST-контроллеры shef.purchase.api.procure* (деплой make deploy-b24)
 ├── ui/                             # templates-dashboard + UI Kit: загрузка + пофайловый отчёт
 ├── docs/
 │   ├── PROJECT_BRIEF.md            # этот файл
@@ -92,7 +92,7 @@ procure-ai/
 |---|---|
 | `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | `purchase.postroyka.by` |
 | `NUXT_BITRIX24_WEBHOOK_URL` | вебхук Б24 (имя в коде/`.env.prod`; ранее в брифе — `B24_WEBHOOK_URL`) |
-| `B24_CONTRACTS_API_URL` | внешний REST-контроллер договоров (сервис заказчика, не в этом репо) |
+| ~~`B24_CONTRACTS_API_URL`~~ | **Убрана.** Контроллеры встроены в коробку B24 как PHP-модуль (`shef.purchase`), вызываются через `NUXT_BITRIX24_WEBHOOK_URL`. |
 | `B24_DEAL_CATEGORY_ID` | `1` |
 | `B24_DEAL_DEFAULT_STAGE_ID` | `C1:NEW` |
 | `DEEPSEEK_*` | из ТЗ; в коде не используются. DeepSeek подключён как провайдер модели через Claude Code (`~/.claude/settings.json`, `ANTHROPIC_BASE_URL`), а не через эти переменные |

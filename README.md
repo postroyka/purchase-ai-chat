@@ -44,7 +44,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `NUXT_PUBLIC_BACKEND_TOKEN` | app | ✅ | Токен, которым UI зовёт бэкенд из браузера — **должен совпадать с `BACKEND_API_TOKEN`** |
 | `REDIS_PASSWORD` | app/redis | ✅ | Пароль Redis (тот же подставляется в `REDIS_URL` в compose) |
 | `NUXT_MCP_AUTH_TOKEN` | mcp | ✅ | Bearer-токен для `/mcp` endpoint |
-| `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Webhook Bitrix24 с правами CRM |
+| `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Вебхук Bitrix24: вызывает контроллеры `shef.purchase.api.procure*` + стандартные `crm.*` |
 | `PUBLIC_PAGE_BASIC_AUTH_PASS` | app | ✅ | Пароль публичной страницы |
 | `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | app | ✅¹ | Домен приложения для nginx-proxy + acme |
 | `LETSENCRYPT_EMAIL` | acme | ✅¹ | E-mail для Let's Encrypt (глобально в acme-companion) |
@@ -52,7 +52,6 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `MCP_SERVER_URL` | app | — | URL MCP внутри сети (по умолчанию: `http://mcp:3000/mcp`) |
 | `B24_DEAL_CATEGORY_ID` | mcp | — | Воронка сделок (по умолчанию: `1` «Закупки») |
 | `B24_DEAL_DEFAULT_STAGE_ID` | mcp | — | Стадия сделки (по умолчанию: `C1:NEW`) |
-| `B24_CONTRACTS_API_URL` | mcp | — | URL внешнего REST-контроллера договоров (см. ниже) |
 | `PUBLIC_PAGE_ENABLED` | app | — | Включить публичную страницу (по умолчанию: `true`) |
 | `PUBLIC_PAGE_BASIC_AUTH_USER` | app | — | Логин публичной страницы (по умолчанию: `procure`) |
 | `PUBLIC_PAGE_RESPONSIBLE_USER_ID` | app | — | ID пользователя Б24 по умолчанию |
@@ -85,8 +84,10 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 > [Установка Claude Code CLI на сервере](#установка-claude-code-cli-на-сервере-провайдер-deepseek)).
 > Отдельные `DEEPSEEK_*` переменные из ТЗ/брифа в коде по-прежнему не задействованы.
 >
-> **`B24_CONTRACTS_API_URL` (поиск договоров)** указывает на **внешний** REST-контроллер
-> на стороне Bitrix24 BUS — это не каталог в этом репозитории, а отдельный сервис заказчика.
+> **Интеграция с Bitrix24** реализована REST-контроллерами в живом модуле коробки `shef.purchase`
+> (исходники — папка `b24-controller/`, деплой `make deploy-b24`). Методы доступны как
+> `shef.purchase.api.procure*`; MCP-сервер вызывает их через стандартный вебхук
+> `NUXT_BITRIX24_WEBHOOK_URL` — никакого отдельного URL контроллера не нужно.
 
 ## Мониторинг задач (API)
 
@@ -358,4 +359,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-09 (PR #53 — серверное извлечение текста: OCR + office (XLS/JPG/PNG), DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek-провайдер; PR #47/#49)*
+*Last reviewed: 2026-06-10 (PR #71 — REST-контроллеры `shef.purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*

@@ -73,6 +73,12 @@ services:
     networks:
       - procure-net
     restart: unless-stopped
+    # Read-only mount of the same uploads volume the app writes to: create_deal
+    # reads the source file by path and base64-encodes it for attachment to the
+    # Bitrix24 deal. RO keeps the MCP container from mutating uploads — it only
+    # consumes the file the app already persisted.
+    volumes:
+      - uploads:/app/uploads:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 30s

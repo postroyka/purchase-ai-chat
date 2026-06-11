@@ -3,6 +3,7 @@ node_modules/
 .env.local
 .env
 backend/.env
+scripts/.env.deploy
 uploads/
 fixtures/
 *.log

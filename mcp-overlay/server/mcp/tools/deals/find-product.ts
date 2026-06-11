@@ -1,23 +1,40 @@
 import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
+import { useBitrix24 } from '~/server/utils/bitrix24'
+import { callV2 } from '~/server/utils/sdk-helpers'
 
+interface ProductResult {
+  id: number | null
+  name?: string
+  vendorCode?: string
+}
+
+/**
+ * Find an active parent product in the catalog by vendor code.
+ *
+ * Calls `shef.purchase.api.procureproduct.findByVendorCode` over the webhook
+ * (callV2). The controller matches `PURCHASE_ARTICLE` exactly on active parent
+ * products (empty PURCHASE_69_PARENT_PRODUCT) and returns the minimum-id match.
+ * Matching by name is intentionally NOT supported — vendor code only (B5).
+ */
 export default defineMcpTool({
   name: 'b24_pst_crm_find_product',
-  description: '[NOT IMPLEMENTED] Find an active parent product in Bitrix24 catalog by vendor code or name. If multiple active products match, returns the one with minimum id.',
+  description:
+    'Find an active parent product in the Bitrix24 catalog by vendor code (PURCHASE_ARTICLE). Exact match. If multiple active products match, returns the one with minimum id.',
   inputSchema: {
-    vendorCode: z.string().optional().describe('Vendor article/code from supplier document'),
-    name: z.string().optional().describe('Product name from supplier document'),
+    vendorCode: z.string().min(1).describe('Vendor article/code from the supplier document — exact match against PURCHASE_ARTICLE field'),
   },
-  handler: async ({ vendorCode, name }) => {
-    // Both fields are optional in the schema (the toolkit's inputSchema is a
-    // raw Zod shape, so a cross-field `.refine()` can't be attached). Guard
-    // here instead: a call with neither field set has nothing to search on.
-    if (!vendorCode && !name) {
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({ error: true, message: 'Specify at least one of vendorCode or name to search for a product.' }) }],
-      }
+  handler: async ({ vendorCode }) => {
+    const b24 = useBitrix24()
+    const result = await callV2<ProductResult>(
+      b24,
+      'shef.purchase.api.procureproduct.findbyvendorcode',
+      { vendorCode },
+      'Failed to find product by vendor code',
+    )
+
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result ?? { id: null }) }],
     }
-    // TODO Week 2: call b24-controller REST API
-    throw new Error('b24_pst_crm_find_product is not implemented yet (Week 2)')
   },
 })

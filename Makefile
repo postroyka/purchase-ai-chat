@@ -1,6 +1,7 @@
 .PHONY: dev logs shell-app shell-mcp \
 	prod-up prod-down prod-redeploy prod-pull \
-	init-network init-nginxproxy
+	init-network init-nginxproxy \
+	deploy-b24
 
 # Shared reverse-proxy network name on the server (грабли #1).
 PROXY_NET ?= proxy-net
@@ -13,6 +14,12 @@ NGINX     := docker compose -p procure-proxy -f docker-compose.nginxproxy.yml --
 dev:
 	cd backend && pnpm run dev &
 	cd mcp && pnpm run dev
+
+# ---- b24-controller (semi-manual SSH deploy) ----
+# Выкладывает только procure*.php в живой модуль shef.purchase. По умолчанию
+# dry-run; реальная выкладка: make deploy-b24 APPLY=1
+deploy-b24:
+	APPLY=$(APPLY) ./scripts/deploy-b24-controller.sh
 
 # ---- production (on the server) ----
 # Pull latest images from GHCR and (re)create containers.
