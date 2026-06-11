@@ -112,9 +112,13 @@ PHP — полуручным `make deploy-b24 APPLY=1`, а Docker-образ MCP
 3. **Сначала задеплоить PHP** на Битрикс: `make deploy-b24 APPLY=1`
    (сначала dry-run без `APPLY` — проверить список файлов).
 4. **Затем обновить MCP** (мерж в `main` → Watchtower подтянет образ; либо вручную
+   на сервере через корневой prod-compose:
    `docker compose -f docker-compose.prod.yml pull mcp && docker compose -f docker-compose.prod.yml up -d mcp`).
-5. Проверить smoke-тестом против живого вебхука: `scripts/smoke-test-b24.sh`
-   (Linux) или `scripts/smoke-test-b24.ps1` (Windows).
+   *(Не путать с upstream-файлами `mcp/docker-compose.*.yml` — для прод-деплоя
+   используется корневой `docker-compose.prod.yml`, где описан сервис `mcp`.)*
+5. Проверить smoke-тестом против живого вебхука (нужен `WEBHOOK_URL`):
+   - Linux: `WEBHOOK_URL=https://your-b24/rest/1/TOKEN/ bash scripts/smoke-test-b24.sh`
+   - Windows: `scripts/smoke-test-b24.ps1 -WebhookUrl https://your-b24/rest/1/TOKEN/`
 
 > Правило большого пальца: **PHP-сторона выкатывается первой** — она должна
 > уметь принять и старый, и новый формат запроса MCP. Тогда любой порядок

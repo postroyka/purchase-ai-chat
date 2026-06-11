@@ -194,10 +194,13 @@ jobs:
           fetch-depth: 0
 
       - name: Warn if b24-controller PHP changed
+        env:
+          # base_ref — имя целевой ветки PR (обычно main). Сравниваем merge-base
+          # этой ветки с HEAD (merge-ref PR) — не зависит от достижимости head.sha
+          # в локальной истории (важно для PR из форков).
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          base="${{ github.event.pull_request.base.sha }}"
-          head="${{ github.event.pull_request.head.sha }}"
-          changed=$(git diff --name-only "$base" "$head" -- \
+          changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- \
             'b24-controller/lib/controllers/procure*.php' \
             'b24-controller/lib/config.php' || true)
           if [ -n "$changed" ]; then
