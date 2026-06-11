@@ -34,6 +34,7 @@ jobs:
           node --check backend/agent-runner.js
           node --check backend/jobs-store.js
           node --check backend/extract-text.js
+          node --check backend/metrics.js
 
       - name: Run tests
         working-directory: backend
