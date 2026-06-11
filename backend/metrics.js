@@ -53,8 +53,9 @@ function label(s, fallback = 'other') {
 // unique hash field with no TTL. Pin to a known set; anything else → 'other' (cardinality cap).
 const KNOWN_OUTCOMES = new Set([
   'ok', 'unknown', 'other',
-  // business errors returned by the agent (prompts/main.md)
-  'tool_unavailable', 'file_unreadable', 'unreadable_document', 'unsupported_currency', 'missing_responsible',
+  // business errors returned by the agent in result.error — keep in sync with prompts/main.md
+  // (updated for PR #71: supplier_not_found / contract_not_found replaced the old file_* codes).
+  'tool_unavailable', 'unreadable_document', 'supplier_not_found', 'contract_not_found', 'unsupported_currency',
   // infra failures classified in backend/index.js (classifyAgentError)
   'timeout', 'cli_missing', 'agent_crash', 'bad_output', 'other_error',
 ]);

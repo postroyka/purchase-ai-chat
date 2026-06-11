@@ -32,7 +32,7 @@ function getMetricsPage() {
 }
 
 // Map a thrown agent error message to a small, stable label for the metrics outcome
-// breakdown (issue #67). Business errors (file_unreadable, tool_unavailable, …) arrive in
+// breakdown (issue #67). Business errors (supplier_not_found, tool_unavailable, …) arrive in
 // the agent's result payload instead and are recorded directly.
 // Order matters: a crash's stderr may embed "ENOENT"/"not found", so match agent-runner's
 // exact "CLI not found" phrase and check "exited with code" before the JSON-shape errors.
@@ -487,7 +487,7 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null) {
         ? { truncated: true, message: 'agent result too large — omitted' }
         : result;
       fileEntry.status = 'done';
-      // A business error (e.g. tool_unavailable, file_unreadable) comes back in the agent's
+      // A business error (e.g. tool_unavailable, supplier_not_found) comes back in the agent's
       // result payload — not as a thrown exception — so the file is "done" but the outcome
       // isn't "ok". Surface it for the metrics breakdown.
       const outcome = (result && typeof result === 'object' && typeof result.error === 'string')

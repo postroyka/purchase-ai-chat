@@ -81,6 +81,18 @@ describe('metrics (in-memory)', () => {
     expect(s.outcomes.find((o) => o.name === 'unknown')).toBeTruthy(); // 80-char outcome → unknown
   });
 
+  it('keeps known agent outcomes but buckets unknown ones as "other"', async () => {
+    const m = mem();
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'supplier_not_found', durationMs: 0, agent: null }); // prompts/main.md (#71)
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'contract_not_found', durationMs: 0, agent: null }); // prompts/main.md (#71)
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'totally_made_up_code', durationMs: 0, agent: null }); // valid shape, not whitelisted
+    const s = await m.snapshot();
+    expect(s.outcomes).toContainEqual({ name: 'supplier_not_found', count: 1 });
+    expect(s.outcomes).toContainEqual({ name: 'contract_not_found', count: 1 });
+    expect(s.outcomes).toContainEqual({ name: 'other', count: 1 });                  // unknown code → capped
+    expect(s.outcomes.find((o) => o.name === 'totally_made_up_code')).toBeFalsy();   // never stored verbatim
+  });
+
   it('is best-effort: never throws on missing/garbage input', async () => {
     const m = mem();
     await expect(m.recordUpload({})).resolves.toBeUndefined();
