@@ -180,3 +180,33 @@ jobs:
       - name: Build
         working-directory: ui
         run: pnpm build
+
+  b24-deploy-reminder:
+    name: b24 deploy reminder
+    runs-on: ubuntu-latest
+    # Только для PR: если затронуты PHP-контроллеры / config модуля shef.purchase,
+    # они НЕ деплоятся CI/Watchtower — нужна ручная выкладка make deploy-b24 после
+    # мержа. Шаг лишь предупреждает, никогда не падает (issue #73).
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Warn if b24-controller PHP changed
+        env:
+          # base_ref — имя целевой ветки PR (обычно main). Сравниваем merge-base
+          # этой ветки с HEAD (merge-ref PR) — не зависит от достижимости head.sha
+          # в локальной истории (важно для PR из форков).
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- \
+            'b24-controller/lib/controllers/procure*.php' \
+            'b24-controller/lib/config.php' || true)
+          if [ -n "$changed" ]; then
+            echo "::warning title=Deploy PHP controllers manually::Изменены файлы b24-controller — после мержа выполните 'make deploy-b24 APPLY=1' (Docker/Watchtower их НЕ деплоит). См. b24-controller/README.md → «Деплой при изменении контракта MCP ↔ PHP»."
+            echo "Изменённые файлы b24-controller:"
+            echo "$changed" | sed 's/^/  - /'
+          else
+            echo "Файлы b24-controller не затронуты — ручной деплой не требуется."
+          fi
