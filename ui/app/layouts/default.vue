@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import type { NavigationMenuItem, CommandPaletteGroup, CommandPaletteItem } from '@bitrix24/b24ui-nuxt'
+import type { NavigationMenuItem } from '@bitrix24/b24ui-nuxt'
 import type { Ref } from 'vue'
 import { computed, ref, inject, onMounted } from 'vue'
 import UploadIcon from '@bitrix24/b24icons-vue/outline/UploadIcon'
 import GraphsDiagramIcon from '@bitrix24/b24icons-vue/outline/GraphsDiagramIcon'
-import Bitrix24Icon from '@bitrix24/b24icons-vue/common-service/Bitrix24Icon'
-import TelegramIcon from '@bitrix24/b24icons-vue/outline/TelegramIcon'
 import GitHubIcon from '@bitrix24/b24icons-vue/social/GitHubIcon'
 import HamburgerMenuIcon from '@bitrix24/b24icons-vue/outline/HamburgerMenuIcon'
 
@@ -13,23 +11,6 @@ const toast = useToast()
 
 const open = ref(false)
 const isLoading = inject<Ref<boolean>>('isLoading', ref(false))
-
-const isNeedChangeTarget = ref(false)
-const tgLink = computed(() => {
-  return (
-    isNeedChangeTarget.value && (typeof window !== 'undefined' && window.navigator?.language.includes('ru'))
-  )
-    ? 'https://t.me/bitrix24apps'
-    : 'https://t.me/b24_dev'
-})
-
-const b24DocsLink = computed(() => {
-  return (
-    isNeedChangeTarget.value && (typeof window !== 'undefined' && window.navigator?.language.includes('ru'))
-  )
-    ? 'https://apidocs.bitrix24.ru/'
-    : 'https://apidocs.bitrix24.com/'
-})
 
 const links = computed<NavigationMenuItem[][]>(() => [
   [
@@ -52,37 +33,16 @@ const links = computed<NavigationMenuItem[][]>(() => [
   ],
   [
     {
-      label: 'Bitrix24 REST API',
-      icon: Bitrix24Icon,
-      to: b24DocsLink.value,
-      target: '_blank'
-    },
-    {
-      label: 'Help & Support',
-      icon: TelegramIcon,
-      to: tgLink.value,
-      target: '_blank'
-    },
-    {
       label: 'GitHub',
       icon: GitHubIcon,
       to: 'https://github.com/postroyka/purchase-ai-chat',
-      target: '_blank'
+      target: '_blank',
+      rel: 'noopener noreferrer'
     }
   ]
 ])
 
-const groups = computed<CommandPaletteGroup[]>(() => [
-  {
-    id: 'links',
-    label: 'Go to',
-    items: links.value.flat() as CommandPaletteItem[]
-  }
-])
-
-onMounted(async () => {
-  isNeedChangeTarget.value = true
-
+onMounted(() => {
   const cookie = useCookie('cookie-consent')
   if (cookie.value === 'accepted') {
     return
@@ -130,11 +90,6 @@ onMounted(async () => {
       </template>
 
       <template #default="{ collapsed }">
-        <B24DashboardSearchButton
-          :collapsed="collapsed"
-          class="opacity-70 hover:opacity-100"
-        />
-
         <B24NavigationMenu
           :collapsed="collapsed"
           :items="links[0]"
@@ -149,13 +104,7 @@ onMounted(async () => {
           class="mt-auto"
         />
       </template>
-
-      <template #footer="{ collapsed }">
-        <UserMenu class="mb-2" :collapsed="collapsed" />
-      </template>
     </B24DashboardSidebar>
-
-    <B24DashboardSearch :groups="groups" :color-mode="false" />
 
     <slot />
   </B24DashboardGroup>

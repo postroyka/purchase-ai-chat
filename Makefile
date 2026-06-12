@@ -1,7 +1,7 @@
 .PHONY: dev logs shell-app shell-mcp \
 	prod-up prod-down prod-redeploy prod-pull \
 	init-network init-nginxproxy \
-	deploy-b24 deploy-images
+	deploy-b24 deploy-images ui-smoke
 
 # Shared reverse-proxy network name on the server (грабли #1).
 PROXY_NET ?= proxy-net
@@ -26,6 +26,10 @@ deploy-b24:
 # Actions недоступны). Нужен Docker + PAT: GHCR_TOKEN=ghp_xxx make deploy-images
 deploy-images:
 	bash ./scripts/deploy-images.sh
+
+# ---- UI-смоук: ESLint + nuxt typecheck без полной сборки ----
+ui-smoke:
+	bash ./scripts/ui-smoke.sh
 
 # ---- production (on the server) ----
 # Pull latest images from GHCR and (re)create containers.

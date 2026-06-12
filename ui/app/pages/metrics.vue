@@ -49,9 +49,9 @@ const econ = computed(() => data.value?.economics ?? null)
 const rateNote = computed(() => {
   const e = econ.value
   if (!e) return ''
-  if (e.usdBynSource === 'nbrb') return `курс НБРБ ${e.usdByn} BYN/USD на ${e.usdBynDate}`
-  if (e.usdBynSource === 'nbrb-stale') return `курс НБРБ ${e.usdByn} BYN/USD (последний доступный${e.usdBynDate ? `, ${e.usdBynDate}` : ''})`
-  return `курс ${e.usdByn} BYN/USD из .env (НБРБ недоступен)`
+  if (e.usdBynSource === 'nbrb') return `Курс НБРБ ${e.usdByn} BYN/USD на ${e.usdBynDate}`
+  if (e.usdBynSource === 'nbrb-stale') return `Курс НБРБ ${e.usdByn} BYN/USD (последний доступный${e.usdBynDate ? `, ${e.usdBynDate}` : ''})`
+  return `Курс ${e.usdByn} BYN/USD из .env (НБРБ недоступен)`
 })
 
 // Daily files → SVG polyline points (viewBox 0 0 100 100, y flipped).
@@ -94,6 +94,7 @@ const sparkPoints = computed(() => {
             aria-label="Обновить"
             @click="refresh"
           />
+          <ThemeToggle />
         </template>
       </B24DashboardNavbar>
     </template>
@@ -194,7 +195,8 @@ const sparkPoints = computed(() => {
           <B24Alert
             color="air-primary-warning"
             :icon="WarningIcon"
-            :description="`Оценка — ставка ${econ.hourlyRateByn} BYN/ч не подтверждена заказчиком, ${econ.minutesPerPosition} мин/позицию; ${rateNote}.`"
+            :title="`Оценка — ставка ${econ.hourlyRateByn} BYN/ч не подтверждена заказчиком, ${econ.minutesPerPosition} мин/позицию`"
+            :description="`${rateNote}.`"
           />
         </section>
 
