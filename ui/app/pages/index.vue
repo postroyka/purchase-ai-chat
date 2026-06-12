@@ -115,6 +115,18 @@
           </div>
         </section>
       </div>
+
+      <!-- Подтверждение ухода при активной загрузке/обработке (Проблема 3) -->
+      <B24Modal
+        v-model:open="leaveModalOpen"
+        title="Прервать загрузку?"
+        description="Идёт загрузка или обработка файлов. Если уйти, отслеживание прогресса на этой странице будет потеряно."
+      >
+        <template #footer>
+          <B24Button color="air-secondary" label="Остаться" @click="decideLeave(false)" />
+          <B24Button color="air-primary-alert" label="Всё равно уйти" @click="decideLeave(true)" />
+        </template>
+      </B24Modal>
     </template>
   </B24DashboardPanel>
 </template>
@@ -335,6 +347,38 @@ function extractErrorMessage(e: unknown): string {
   if (e instanceof Error) return e.message
   return 'Неизвестная ошибка'
 }
+
+// ── Защита от потери прогресса при уходе со страницы ───────────────────────────
+
+// Есть незавершённая работа: идёт загрузка/обработка или задание ещё не финализировано.
+const hasActiveWork = computed(() =>
+  uploading.value || polling.value
+  || (!!job.value && job.value.status !== 'done' && job.value.status !== 'error')
+)
+
+const leaveModalOpen = ref(false)
+let leaveResolver: ((leave: boolean) => void) | null = null
+
+function decideLeave(leave: boolean) {
+  leaveResolver?.(leave)
+  leaveResolver = null
+  leaveModalOpen.value = false
+}
+
+// Закрыли модалку мимо кнопок (Esc / клик вне) — трактуем как «остаться».
+watch(leaveModalOpen, (open) => {
+  if (!open && leaveResolver) decideLeave(false)
+})
+
+// Перехватываем клиентскую навигацию (клик «Метрики» в сайдбаре и т.п.): при активной
+// работе показываем подтверждение и уходим только если пользователь выбрал «Уйти».
+onBeforeRouteLeave(() => {
+  if (!hasActiveWork.value) return true
+  leaveModalOpen.value = true
+  return new Promise<boolean>((resolve) => {
+    leaveResolver = resolve
+  })
+})
 
 // ── Очистка ───────────────────────────────────────────────────────────────────
 
