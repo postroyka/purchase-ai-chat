@@ -50,28 +50,9 @@ describe('GET /metrics/data', () => {
   });
 });
 
-describe('GET /metrics (dashboard page)', () => {
-  const pageApp = () => appWith({ basicAuthUser: 'op', basicAuthPass: 'secret-pass', publicPageEnabled: true });
-
-  it('serves HTML when page Basic auth is configured and valid', async () => {
-    const res = await request(pageApp()).get('/metrics').set('Authorization', basic('op', 'secret-pass'));
-    expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toMatch(/html/);
-    expect(res.text).toContain('Procure AI');
-    expect(res.text).toContain('/metrics/data'); // page fetches the JSON snapshot
-  });
-
-  it('challenges with 401 + WWW-Authenticate when no credentials', async () => {
-    const res = await request(pageApp()).get('/metrics');
-    expect(res.status).toBe(401);
-    expect(res.headers['www-authenticate']).toMatch(/Basic/);
-  });
-
-  it('returns 503 when page Basic auth is not configured', async () => {
-    const res = await request(appWith()).get('/metrics');
-    expect(res.status).toBe(503);
-  });
-});
+// The dashboard page itself is now a Nuxt route (ui/app/pages/metrics.vue) served as a static
+// asset — no longer an Express route — so its rendering is covered by the UI build, not here.
+// This suite owns the JSON contract at /metrics/data.
 
 // Mock `claude --output-format json`: returns a valid wrapper carrying cost/turns/duration
 // so the onMeta → recordFile path (extract method + cost) can be asserted end-to-end.
