@@ -140,7 +140,8 @@ jobs:
           changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- \
             Dockerfile.app Dockerfile.mcp \
             backend ui mcp \
-            docker-compose.prod.yml docker-compose.nginxproxy.yml || true)
+            docker-compose.prod.yml docker-compose.nginxproxy.yml \
+            .github/workflows/ci.yml || true)
           if [ -n "$changed" ]; then
             echo "docker=true" >> "$GITHUB_OUTPUT"
             echo "Затронут Docker-контекст — валидация нужна:"
