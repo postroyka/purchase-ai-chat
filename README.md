@@ -230,9 +230,11 @@ cd ui      && pnpm install && pnpm dev               # :3001 (проксируе
 ## Тесты
 
 ```bash
-cd backend && pnpm test           # vitest — upload, auth, jobs-store
+cd backend && pnpm test           # vitest — upload, auth, jobs-store, agent-runner
 cd mcp     && pnpm test           # vitest — инструменты, mcp-auth, naming
 cd ui      && pnpm lint && pnpm build
+make ui-smoke                     # ESLint + nuxt typecheck фронта без полной сборки
+make check-agent-stdin            # регрессия #58: claude --print читает промпт из stdin
 ```
 
 ## Деплой

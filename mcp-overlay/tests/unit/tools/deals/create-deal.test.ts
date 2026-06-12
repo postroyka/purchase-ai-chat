@@ -151,11 +151,12 @@ describe('b24_pst_crm_create_deal', () => {
     expect((tool as any).inputSchema.responsibleUserId.safeParse('').success).toBe(false)
   })
 
-  it('rejects empty filePath via Zod schema', () => {
-    expect((tool as any).inputSchema.filePath.safeParse('').success).toBe(false)
+  it('rejects missing/empty contractId via Zod schema (contract is mandatory — see prompt step 3)', () => {
+    expect((tool as any).inputSchema.contractId.safeParse(undefined).success).toBe(false)
+    expect((tool as any).inputSchema.contractId.safeParse('').success).toBe(false)
   })
 
-  it('accepts contractId being omitted (optional) via Zod schema', () => {
-    expect((tool as any).inputSchema.contractId.safeParse(undefined).success).toBe(true)
+  it('rejects empty filePath via Zod schema', () => {
+    expect((tool as any).inputSchema.filePath.safeParse('').success).toBe(false)
   })
 })

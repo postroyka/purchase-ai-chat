@@ -7,6 +7,8 @@
 #
 #  Запуск:  powershell -ExecutionPolicy Bypass -File scripts\check-agent-stdin.ps1
 #  claude нет в PATH → пропуск (exit 0). Реальный ключ НЕ нужен (фейк → 401).
+#  ВНИМАНИЕ: делает РЕАЛЬНЫЙ сетевой вызов к API; при недоступном API job снимается
+#  по таймауту (40с) и скрипт завершается exit 0.
 # =====================================================================
 $ErrorActionPreference = "Continue"
 
@@ -15,19 +17,19 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
   exit 0
 }
 
-# Подменяем ANTHROPIC_* на фейк, чтобы не зависеть от ambient-конфига; восстановим после.
-$keys = 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN'
-$saved = @{}
-foreach ($k in $keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
-try {
-  $env:ANTHROPIC_API_KEY = 'sk-ant-invalid-0000'
-  $env:ANTHROPIC_BASE_URL = ''
-  $env:ANTHROPIC_AUTH_TOKEN = ''
-  $out = 'ping' | claude --print --output-format json --bare 2>&1 | Out-String
+# Изолированный прогон в Job: фейк-ключ и сброс ambient ANTHROPIC_*/CLAUDE_CODE_* делаем
+# ВНУТРИ job (аналог `env -i` в .sh — окружение родителя не трогаем), плюс таймаут 40с,
+# чтобы скрипт не висел при недоступном API.
+$job = Start-Job -ArgumentList 'sk-ant-invalid-0000' -ScriptBlock {
+  param($fakeKey)
+  foreach ($k in 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL',
+                 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC') { Set-Item "env:$k" '' }
+  $env:ANTHROPIC_API_KEY = $fakeKey
+  'ping' | claude --print --output-format json --bare 2>&1 | Out-String
 }
-finally {
-  foreach ($k in $keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
-}
+if (Wait-Job $job -Timeout 40) { $out = (Receive-Job $job | Out-String) }
+else { Stop-Job $job; $out = 'TIMEOUT: claude не ответил за 40с' }
+Remove-Job $job -Force
 
 $head = $out.Substring(0, [Math]::Min(300, $out.Length))
 if ($out -match 'Input must be provided') {

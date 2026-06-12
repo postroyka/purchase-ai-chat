@@ -329,10 +329,14 @@ function spawnClaude({
     if (cwd) spawnOpts.cwd = cwd;
     const proc = spawnFn(command, [...prefixArgs, ...args], spawnOpts);
     // Feed the prompt via stdin, then EOF. (Without any input the CLI waits ~3s for stdin on a
-    // non-TTY before proceeding; here we hand it the prompt and close.) Swallow EPIPE in case
-    // the CLI exits before draining stdin — the exit code is handled in the close handler.
-    proc.stdin.on('error', () => {});
-    proc.stdin.write(userMessage);
+    // non-TTY before proceeding; here we hand it the prompt and close.) Explicit 'utf8' documents
+    // intent and guards a future non-string userMessage from a silent Latin-1 default.
+    proc.stdin.on('error', (err) => {
+      // EPIPE is expected if the CLI exits before draining stdin (its exit code is handled in the
+      // close handler). Surface anything else instead of swallowing it silently.
+      if (err.code !== 'EPIPE') console.warn(`${tag} stdin error: ${err.code || err.message}`);
+    });
+    proc.stdin.write(userMessage, 'utf8');
     proc.stdin.end();
 
     let stdout = '';
