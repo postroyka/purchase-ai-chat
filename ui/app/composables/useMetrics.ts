@@ -12,7 +12,7 @@ export interface MetricsSnapshot {
     minutesPerPosition: number
     usdByn: number
     usdBynDate: string | null
-    usdBynSource: 'nbrb' | 'nbrb-stale' | 'env' | string
+    usdBynSource: 'nbrb' | 'nbrb-stale' | 'env'
     positions: number
     positionsNoArticle: number
     positionsNoArticlePct: number

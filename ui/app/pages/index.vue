@@ -5,6 +5,9 @@
         <template #leading>
           <B24DashboardSidebarCollapse />
         </template>
+        <template #right>
+          <ThemeToggle />
+        </template>
       </B24DashboardNavbar>
     </template>
 
@@ -116,17 +119,19 @@
         </section>
       </div>
 
-      <!-- Подтверждение ухода при активной загрузке/обработке (Проблема 3) -->
-      <B24Modal
-        v-model:open="leaveModalOpen"
-        title="Прервать загрузку?"
-        description="Идёт загрузка или обработка файлов. Если уйти, отслеживание прогресса на этой странице будет потеряно."
-      >
-        <template #footer>
-          <B24Button color="air-secondary" label="Остаться" @click="decideLeave(false)" />
-          <B24Button color="air-primary-alert" label="Всё равно уйти" @click="decideLeave(true)" />
-        </template>
-      </B24Modal>
+      <!-- Подтверждение ухода со страницы при активной загрузке/обработке -->
+      <ClientOnly>
+        <B24Modal
+          v-model:open="leaveModalOpen"
+          title="Уйти со страницы?"
+          description="Идёт загрузка или обработка файлов. Если уйти, страница перестанет показывать их прогресс."
+        >
+          <template #footer>
+            <B24Button color="air-secondary" label="Остаться" @click="decideLeave(false)" />
+            <B24Button color="air-primary-alert" label="Всё равно уйти" @click="decideLeave(true)" />
+          </template>
+        </B24Modal>
+      </ClientOnly>
     </template>
   </B24DashboardPanel>
 </template>
@@ -308,6 +313,9 @@ async function pollOnce(jobId: string) {
     pollErrors++
     if (pollErrors >= MAX_POLL_ERRORS) {
       stopPolling()
+      // Бэкенд недостижим — помечаем задание ошибочным, иначе hasActiveWork залипнет на
+      // 'pending' и guard будет зря удерживать пользователя на странице.
+      if (job.value) job.value = { ...job.value, status: 'error' }
       uploadError.value = 'Не удалось получить статус задачи. Обновите страницу.'
       return
     }
@@ -359,28 +367,47 @@ const hasActiveWork = computed(() =>
 const leaveModalOpen = ref(false)
 let leaveResolver: ((leave: boolean) => void) | null = null
 
+// Завершает ожидание решения: резолвит висящий промис (если есть) и закрывает модалку.
+// Resolver обнуляется ДО изменения leaveModalOpen, чтобы реакция watch на закрытие не
+// вызвала повторный резолв.
 function decideLeave(leave: boolean) {
-  leaveResolver?.(leave)
+  const resolve = leaveResolver
   leaveResolver = null
   leaveModalOpen.value = false
+  resolve?.(leave)
 }
 
 // Закрыли модалку мимо кнопок (Esc / клик вне) — трактуем как «остаться».
 watch(leaveModalOpen, (open) => {
-  if (!open && leaveResolver) decideLeave(false)
+  if (!open) decideLeave(false)
 })
 
 // Перехватываем клиентскую навигацию (клик «Метрики» в сайдбаре и т.п.): при активной
 // работе показываем подтверждение и уходим только если пользователь выбрал «Уйти».
 onBeforeRouteLeave(() => {
   if (!hasActiveWork.value) return true
-  leaveModalOpen.value = true
+  decideLeave(false) // снять предыдущий висящий промис, если переход сработал повторно
   return new Promise<boolean>((resolve) => {
     leaveResolver = resolve
+    leaveModalOpen.value = true
   })
 })
 
+// onBeforeRouteLeave не ловит закрытие/перезагрузку вкладки (F5, Ctrl+W) — для этого
+// нативное предупреждение браузера при активной работе.
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (hasActiveWork.value) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+onMounted(() => window.addEventListener('beforeunload', onBeforeUnload))
+
 // ── Очистка ───────────────────────────────────────────────────────────────────
 
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  window.removeEventListener('beforeunload', onBeforeUnload)
+  if (leaveResolver) decideLeave(true) // не оставлять навигацию заблокированной висящим промисом
+})
 </script>

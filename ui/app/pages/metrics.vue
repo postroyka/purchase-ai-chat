@@ -94,6 +94,7 @@ const sparkPoints = computed(() => {
             aria-label="Обновить"
             @click="refresh"
           />
+          <ThemeToggle />
         </template>
       </B24DashboardNavbar>
     </template>

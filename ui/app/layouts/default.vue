@@ -36,7 +36,8 @@ const links = computed<NavigationMenuItem[][]>(() => [
       label: 'GitHub',
       icon: GitHubIcon,
       to: 'https://github.com/postroyka/purchase-ai-chat',
-      target: '_blank'
+      target: '_blank',
+      rel: 'noopener noreferrer'
     }
   ]
 ])
