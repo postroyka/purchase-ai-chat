@@ -1,7 +1,7 @@
 .PHONY: dev logs shell-app shell-mcp \
 	prod-up prod-down prod-redeploy prod-pull \
 	init-network init-nginxproxy \
-	deploy-b24 deploy-images ui-smoke
+	deploy-b24 deploy-images ui-smoke check-agent-stdin
 
 # Shared reverse-proxy network name on the server (грабли #1).
 PROXY_NET ?= proxy-net
@@ -30,6 +30,10 @@ deploy-images:
 # ---- UI-смоук: ESLint + nuxt typecheck без полной сборки ----
 ui-smoke:
 	bash ./scripts/ui-smoke.sh
+
+# ---- Регрессия #58: claude --print читает промпт из stdin (E2BIG-фикс) ----
+check-agent-stdin:
+	bash ./scripts/check-agent-stdin.sh
 
 # ---- production (on the server) ----
 # Pull latest images from GHCR and (re)create containers.

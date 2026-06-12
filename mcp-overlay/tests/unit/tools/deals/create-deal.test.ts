@@ -139,6 +139,10 @@ describe('b24_pst_crm_create_deal', () => {
     expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 0 }]).success).toBe(false)
   })
 
+  it('rejects fractional quantity via Zod schema (unit is always шт → integer)', () => {
+    expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 2.5 }]).success).toBe(false)
+  })
+
   it('rejects empty supplierId via Zod schema', () => {
     expect((tool as any).inputSchema.supplierId.safeParse('').success).toBe(false)
   })

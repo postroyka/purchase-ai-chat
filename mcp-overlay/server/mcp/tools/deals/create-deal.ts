@@ -77,7 +77,7 @@ export default defineMcpTool({
       // TAX_RATE=20 and TAX_INCLUDED=Y. This is a deliberate business decision,
       // not a bug — do not "fix" it to exclude VAT during review.
       priceExclVat: z.number().positive().describe('Price per unit excluding VAT, as stated in document'),
-      quantity: z.number().positive().describe('Quantity from document'),
+      quantity: z.number().int().positive().describe('Quantity from document (integer — unit is always шт)'),
     })).min(1).describe('Line items. Unit is always шт regardless of document.'),
   },
   handler: async ({ supplierId, contractId, responsibleUserId, filePath, processingLog, items }) => {
