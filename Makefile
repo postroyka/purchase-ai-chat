@@ -1,7 +1,7 @@
 .PHONY: dev logs shell-app shell-mcp \
 	prod-up prod-down prod-redeploy prod-pull \
 	init-network init-nginxproxy \
-	deploy-b24
+	deploy-b24 deploy-images
 
 # Shared reverse-proxy network name on the server (грабли #1).
 PROXY_NET ?= proxy-net
@@ -20,6 +20,12 @@ dev:
 # dry-run; реальная выкладка: make deploy-b24 APPLY=1
 deploy-b24:
 	APPLY=$(APPLY) ./scripts/deploy-b24-controller.sh
+
+# ---- ручной деплой образов в GHCR без GitHub Actions (путь B) ----
+# Сборка + пуш образов app & mcp в ghcr.io, минуя Actions (полезно, когда раннеры/квота
+# Actions недоступны). Нужен Docker + PAT: GHCR_TOKEN=ghp_xxx make deploy-images
+deploy-images:
+	bash ./scripts/deploy-images.sh
 
 # ---- production (on the server) ----
 # Pull latest images from GHCR and (re)create containers.

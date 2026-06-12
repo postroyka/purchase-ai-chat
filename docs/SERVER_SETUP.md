@@ -181,6 +181,12 @@ bash agent-e2e-test.sh
 | Приложение (app, mcp, redis, watchtower) | `docker-compose.prod.yml` | `procure-ai` | `make prod-up` / `prod-redeploy` |
 | Реверс-прокси (nginx-proxy, acme-companion) | `docker-compose.nginxproxy.yml` | `procure-proxy` | `make init-nginxproxy` |
 
+> 🛠️ **Деплой без GitHub Actions.** Обычно образы публикует workflow `Deploy` (после
+> зелёного CI), их подхватывает Watchtower. Если раннеры/минуты Actions недоступны —
+> собрать и запушить образы вручную с любой машины с Docker:
+> `GHCR_TOKEN=ghp_xxx make deploy-images` (PAT со scope `write:packages`), затем на
+> сервере `make prod-redeploy`.
+
 > 🩹 **Грабля (исправлена).** Раньше у обоих файлов не было поля `name:`, и Docker
 > присваивал им **одно** имя проекта (по имени каталога). Из-за этого
 > `make prod-redeploy` (внутри — `up --remove-orphans`) удалял `nginx-proxy` и
