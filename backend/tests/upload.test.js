@@ -487,9 +487,53 @@ describe('POST /upload', () => {
     expect(res.body.error).toMatch(/too many files/i);
   });
 
-  // NOTE: LIMIT_FILE_SIZE cannot be reliably tested with supertest — it buffers
-  // the entire request in memory before sending, so busboy never fires the 'limit'
-  // event during streaming. Integration tests with a real HTTP client are needed.
+  it('returns 400 when file exceeds maxFileSizeMb limit', async () => {
+    // supertest buffers the full request before sending, so busboy's streaming
+    // fileSize limit never fires. Use a real http.Server + node:http client to
+    // stream the multipart body and actually trigger the limit event.
+    const { createServer } = await import('node:http');
+    const { request: httpReq } = await import('node:http');
+    const { once } = await import('node:events');
+
+    const smallApp = createApp({ token: TOKEN, uploadDir: UPLOAD_DIR, maxFileSizeMb: 1 / 1024 }); // 1 KB
+    const server = createServer(smallApp);
+    server.listen(0);
+    await once(server, 'listening');
+    const { port } = server.address();
+
+    const boundary = '----TestBoundary999';
+    // Minimal valid-looking PDF so MIME sniff passes, padded past the 1 KB limit.
+    const preamble = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="files[]"; filename="oversized.pdf"\r\nContent-Type: application/pdf\r\n\r\n`
+    );
+    const fileBody = Buffer.from('%PDF-1.4\n' + 'x'.repeat(2048)); // ~2 KB > 1 KB cap
+    const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`);
+
+    const { status, body } = await new Promise((resolve, reject) => {
+      const chunks = [];
+      const r = httpReq(
+        { hostname: '127.0.0.1', port, method: 'POST', path: '/upload',
+          headers: {
+            Authorization: `Bearer ${TOKEN}`,
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            'Content-Length': preamble.length + fileBody.length + epilogue.length,
+          } },
+        (res) => {
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            try { resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString()) }); }
+            catch (e) { reject(e); }
+          });
+        }
+      );
+      r.on('error', reject);
+      r.write(preamble); r.write(fileBody); r.write(epilogue); r.end();
+    });
+
+    server.close();
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/too large/i);
+  });
 });
 
 // ── GET /job/:id/status ───────────────────────────────────────────────────────
