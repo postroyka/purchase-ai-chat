@@ -57,7 +57,16 @@ b24() {
   echo ""
 }
 
-FAKE_B64=$(printf '%s' '%PDF-1.4 1 0 obj<</Type/Catalog>>endobj' | base64 -w0 2>/dev/null || printf '%s' '%PDF-1.4 test' | base64)
+# Файл для прикрепления к тестовым сделкам (B6-поле UF_CRM_DEAL_SH_PRCHS_AI_FILE):
+# берём реальный эталонный счёт из репозитория, чтобы smoke проверял загрузку
+# настоящего PDF. Если файла нет — откат на минимальный валидный PDF, чтобы
+# скрипт оставался самодостаточным.
+ETALON_PDF="$(dirname "$0")/samples/etalon-invoice.pdf"
+if [ -f "$ETALON_PDF" ]; then
+  FILE_B64=$(base64 -w0 "$ETALON_PDF" 2>/dev/null || base64 "$ETALON_PDF" | tr -d '\n')
+else
+  FILE_B64=$(printf '%s' '%PDF-1.4 1 0 obj<</Type/Catalog>>endobj' | base64 -w0 2>/dev/null || printf '%s' '%PDF-1.4 test' | base64)
+fi
 
 # ── 1. procuresupplier.findbyunp ──────────────────────────────────────────────
 echo_sep "1a. findByUnp — реальный УНП (задайте SUPPLIER_UNP или отредактируйте)"
@@ -127,7 +136,7 @@ print(json.dumps({
   'supplierId': ${SUPPLIER_ID},
   'responsibleUserId': ${RESPONSIBLE_USER_ID},
   'fileName': 'smoke-test-invoice.pdf',
-  'fileContent': '${FAKE_B64}',
+  'fileContent': '${FILE_B64}',
   'processingLog': 'Smoke-test 4a — автоматический тест',
   'items': [{'name': 'Болт М8', 'priceExclVat': 1.5, 'quantity': 100}]
 }))")
@@ -142,7 +151,7 @@ print(json.dumps({
   'contractId': 1,
   'documentDate': '15.03.2025',
   'fileName': 'smoke-test-invoice.pdf',
-  'fileContent': '${FAKE_B64}',
+  'fileContent': '${FILE_B64}',
   'processingLog': 'Smoke-test 4b — с contractId и documentDate',
   'items': [
     {'vendorCode': '${VENDOR_CODE}', 'name': 'Болт М8', 'priceExclVat': 1.5, 'quantity': 10},
