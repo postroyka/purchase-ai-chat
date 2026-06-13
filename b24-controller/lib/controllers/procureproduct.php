@@ -95,6 +95,46 @@ class ProcureProduct
 			];
 		}
 
+		// --- Фолбэк для «грязных» данных каталога ---
+		// Значение артикула в каталоге бывает с краевыми пробелами/табами (приходит
+		// из выгрузок 1С/Excel, напр. «тех 100х25х6000\t»), а точный =PROPERTY к ним
+		// чувствителен и выше ничего не находит. Берём кандидатов по LIKE-подстроке
+		// (по каждому гомоглиф-варианту — LIKE, в отличие от основного прохода,
+		// раскладку сам не сводит) и подтверждаем визуальное равенство через
+		// foldHomoglyphs(): она гасит регистр, раскладку и краевые пробелы. Путь
+		// редкий (только когда точный матч дал 0) — цена LIKE приемлема.
+		$needleFold = Config::foldHomoglyphs($vendorCode);
+		foreach($articleVariants as $variant)
+		{
+			$likeResult = \CIBlockElement::GetList(
+				['ID' => 'ASC'],              // мин. ID при дублях
+				[
+					'IBLOCK_ID'                            => $iblockId,
+					'ACTIVE'                               => 'Y',
+					'%PROPERTY_PURCHASE_ARTICLE'           => $variant, // LIKE %variant%
+					'=PROPERTY_PURCHASE_69_PARENT_PRODUCT' => false,
+				],
+				false,
+				['nTopCount' => 50],
+				['ID', 'NAME', 'PROPERTY_PURCHASE_ARTICLE']
+			);
+			if(!is_object($likeResult))
+			{
+				continue;
+			}
+			while($row = $likeResult->Fetch())
+			{
+				if(Config::foldHomoglyphs((string)$row['PROPERTY_PURCHASE_ARTICLE_VALUE']) === $needleFold)
+				{
+					return [
+						'id'         => (int)$row['ID'],
+						'name'       => (string)$row['NAME'],
+						'vendorCode' => (string)$row['PROPERTY_PURCHASE_ARTICLE_VALUE'],
+					];
+				}
+			}
+		}
+
 		return ['id' => null];
 	}
 }
