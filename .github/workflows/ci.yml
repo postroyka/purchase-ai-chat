@@ -42,6 +42,8 @@ jobs:
           node --check backend/extract-text.js
           node --check backend/metrics.js
           node --check backend/nbrb-rate.js
+          node --check backend/eval/score.js
+          node --check backend/eval/run.js
 
       - name: Run tests
         working-directory: backend
