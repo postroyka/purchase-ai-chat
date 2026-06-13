@@ -16,6 +16,9 @@
 ]]
 ```
 → REST-метод формируется как `shef:purchase.api.<controller>.<action>`.
+> Двоеточие (`shef:purchase`, не `shef.purchase`) — разделитель `модуль:scope`
+> у кастомных коробочных модулей Б24. С точкой метод не находится:
+> `ERROR_METHOD_NOT_FOUND`.
 
 Паттерн контроллера (из `returning.php`, `returningreport.php`):
 - `extends \Bitrix\Main\Engine\Controller`
