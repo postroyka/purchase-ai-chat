@@ -131,6 +131,18 @@ b24 "shef:purchase.api.procureproduct.findbyvendorcode" \
   || echo "(ожидается ошибка)"
 
 # ── 4. procuredeal.create ─────────────────────────────────────────────────────
+# Реальный id договора поставщика для осмысленной привязки в 4b: берём из
+# procurecontract.find по SUPPLIER_ID (тот же договор, что отдаёт кейс 2a).
+# Если договор не найден — fallback на 1, чтобы тест всё равно отработал.
+REAL_CONTRACT_ID=$(curl -s -m 25 -X POST "${B24}/shef:purchase.api.procurecontract.find" \
+  -H "Content-Type: application/json" -d "{\"supplierId\":${SUPPLIER_ID}}" \
+  | python3 -c 'import sys, json
+try:
+    _v = json.load(sys.stdin).get("result", {}).get("id")
+except Exception:
+    _v = None
+print(_v if _v else 1)')
+
 echo_sep "4a. create deal — минимальный корректный запрос"
 BODY=$(python3 -c "
 import json
@@ -144,13 +156,13 @@ print(json.dumps({
 }))")
 b24 "shef:purchase.api.procuredeal.create" "${BODY}"
 
-echo_sep "4b. create deal — с contractId и documentDate (BEGINDATE = 15.03.2025 09:00)"
+echo_sep "4b. create deal — реальный contractId (из find) + documentDate (BEGINDATE = 15.03.2025)"
 BODY=$(python3 -c "
 import json
 print(json.dumps({
   'supplierId': ${SUPPLIER_ID},
   'responsibleUserId': ${RESPONSIBLE_USER_ID},
-  'contractId': 1,
+  'contractId': ${REAL_CONTRACT_ID},
   'documentDate': '15.03.2025',
   'fileName': 'smoke-test-invoice.pdf',
   'fileContent': '${FILE_B64}',
