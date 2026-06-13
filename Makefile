@@ -1,7 +1,7 @@
 .PHONY: dev logs shell-app shell-mcp \
 	prod-up prod-down prod-redeploy prod-pull \
 	init-network init-nginxproxy \
-	deploy-b24 deploy-images ui-smoke check-agent-stdin
+	deploy-b24 deploy-images ui-smoke check-agent-stdin eval
 
 # Shared reverse-proxy network name on the server (грабли #1).
 PROXY_NET ?= proxy-net
@@ -34,6 +34,13 @@ ui-smoke:
 # ---- Регрессия #58: claude --print читает промпт из stdin (E2BIG-фикс) ----
 check-agent-stdin:
 	bash ./scripts/check-agent-stdin.sh
+
+# ---- Eval-набор агента (#93): прогон по фикстурам со сверкой полей ----
+# Нужен рабочий агент: claude CLI + ключ модели + доступный MCP + извлечение текста
+# (pdftotext/OCR). НЕ для CI (платный вызов модели на фикстуру). Логика скоринга —
+# в backend/tests/eval-score.test.js. Подробности: backend/eval/README.md
+eval:
+	node backend/eval/run.js
 
 # ---- production (on the server) ----
 # Pull latest images from GHCR and (re)create containers.
