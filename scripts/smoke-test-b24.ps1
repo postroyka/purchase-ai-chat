@@ -56,6 +56,8 @@ function Show-Readable($s) {
 }
 
 $WebhookUrl      = Resolve-Val $WebhookUrl      'WEBHOOK_URL'         $null
+# Алиас PAI_WEBHOOK_URL (procure-ai namespace), если WEBHOOK_URL не задан.
+if (-not $WebhookUrl) { $WebhookUrl = Resolve-Val $null 'PAI_WEBHOOK_URL' $null }
 $SupplierId      = [int](Resolve-Val $SupplierId      'SUPPLIER_ID'         42)
 $VendorCode      =      Resolve-Val $VendorCode      'VENDOR_CODE'         'ART-12345'
 $ResponsibleUser = [int](Resolve-Val $ResponsibleUser 'RESPONSIBLE_USER_ID' 1)

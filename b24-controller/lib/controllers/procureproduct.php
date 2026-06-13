@@ -35,6 +35,7 @@ class ProcureProduct
 	/**
 	 * Ищет активный родительский товар по артикулу поставщика.
 	 * Родительский = пустое свойство PURCHASE_69_PARENT_PRODUCT.
+	 * Совпадение устойчиво к латинице/кириллице (гомоглифы, напр. «тех 100х25х6000»).
 	 * Несколько найдено → товар с минимальным ID.
 	 *
 	 * @param string $vendorCode Артикул поставщика из документа
@@ -64,10 +65,16 @@ class ProcureProduct
 
 		$iblockId = Config::getCatalogIblockId();
 
+		// Артикул мог быть набран в латинице или кириллице (напр. «тех 100х25х6000»);
+		// каталог большой — фолд в SQL невозможен, поэтому генерируем гомоглиф-варианты
+		// и матчим их через IN. Один вариант → строка, несколько → массив (=PROPERTY IN).
+		$articleVariants = Config::homoglyphVariants($vendorCode);
+		$articleFilter   = count($articleVariants) === 1 ? $articleVariants[0] : $articleVariants;
+
 		$filter = [
 			'IBLOCK_ID'                            => $iblockId,
 			'ACTIVE'                               => 'Y',
-			'=PROPERTY_PURCHASE_ARTICLE'           => $vendorCode,
+			'=PROPERTY_PURCHASE_ARTICLE'           => $articleFilter,
 			'=PROPERTY_PURCHASE_69_PARENT_PRODUCT' => false, // пустое → родительский
 		];
 

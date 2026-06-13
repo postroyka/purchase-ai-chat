@@ -22,7 +22,9 @@ if [ -f "$_ENV_FILE" ]; then
   set -a; . "$_ENV_FILE"; set +a
 fi
 
-B24="${WEBHOOK_URL:?Задайте WEBHOOK_URL (в scripts/.env.deploy или env): https://your-portal/rest/1/TOKEN/}"
+# Принимаем и WEBHOOK_URL, и PAI_WEBHOOK_URL (procure-ai namespace) как алиас.
+WEBHOOK_URL="${WEBHOOK_URL:-${PAI_WEBHOOK_URL:-}}"
+B24="${WEBHOOK_URL:?Задайте WEBHOOK_URL или PAI_WEBHOOK_URL (в scripts/.env.deploy или env): https://your-portal/rest/1/TOKEN/}"
 B24="${B24%/}"
 
 # --- Параметры под вашу коробку (дефолты, если не заданы в env/.env.deploy) ---

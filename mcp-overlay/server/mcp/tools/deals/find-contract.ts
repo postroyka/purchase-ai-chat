@@ -16,16 +16,17 @@ interface ContractResult {
  * Calls `shef:purchase.api.procurecontract.find` over the webhook (callV2). The
  * controller queries the "Договора" iblock list (id 32): CLIENT = CO_<id>,
  * ACTIVE=Y, STATUS != Брак, TYPE ∈ {Закупки, Закупки-Комиссионный}, optionally
- * narrowed by NUMBER/DATE (exact), returning the minimum-id match. `number` /
- * `date` are passed only when present.
+ * narrowed by NUMBER/DATE, returning the minimum-id match. `number` / `date`
+ * are passed only when present. NUMBER matching is homoglyph-tolerant
+ * (Latin/Cyrillic look-alikes fold together, e.g. "243Э20"); DATE is exact d.m.Y.
  */
 export default defineMcpTool({
   name: 'b24_pst_crm_find_contract',
   description:
-    'Find an active procurement contract for a supplier in Bitrix24. Filters by supplier (CLIENT), active status, TYPE in {Закупки, Закупки-Комиссионный}, STATUS != Брак. Optionally narrows by contract number and date (exact match). Returns contract id if found.',
+    'Find an active procurement contract for a supplier in Bitrix24. Filters by supplier (CLIENT), active status, TYPE in {Закупки, Закупки-Комиссионный}, STATUS != Брак. Optionally narrows by contract number (homoglyph-tolerant Latin/Cyrillic) and date (exact d.m.Y). Returns contract id if found.',
   inputSchema: {
     supplierId: z.string().min(1).describe('Bitrix24 company id of the supplier'),
-    number: z.string().optional().describe('Contract number from the document — exact match'),
+    number: z.string().optional().describe('Contract number from the document — pass verbatim (Latin/Cyrillic letters are matched interchangeably server-side, e.g. "243Э20")'),
     date: z.string().optional().describe('Contract date from the document, format d.m.Y (e.g. "15.03.2025") — exact match'),
   },
   handler: async ({ supplierId, number, date }) => {

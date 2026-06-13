@@ -5,6 +5,7 @@ use Bitrix\Main\Engine;
 use Bitrix\Main\Error;
 use Shef\Options\TraitList;
 use Shef\IBlock\Lists\Dogovor;
+use Shef\Purchase\Config;
 
 /**
  * Поиск договора закупки для procure-ai.
@@ -12,7 +13,9 @@ use Shef\IBlock\Lists\Dogovor;
  *
  * Инфоблок-список IBLOCK_ID=32 (Shef\IBlock\Lists\Dogovor\Entity).
  * Фильтр: CLIENT=CO_<supplierId>, ACTIVE=Y, STATUS != TO_DELETE,
- *         TYPE in {PURCHASE, PURCHASE_ZAK}, опц. NUMBER (exact), DATE (exact day).
+ *         TYPE in {PURCHASE, PURCHASE_ZAK}. Опц. сужение по NUMBER и DATE
+ *         сверяется в PHP: номер — устойчиво к латинице/кириллице (гомоглифы),
+ *         дата — по отображаемому d.m.Y.
  * При нескольких совпадениях возвращается запись с минимальным ID.
  */
 class ProcureContract
@@ -42,7 +45,8 @@ class ProcureContract
 	 * Ищет договор закупки по компании-поставщику.
 	 *
 	 * @param int    $supplierId ID компании (CLIENT = CO_<id>)
-	 * @param string $number     Номер договора из документа (опциональный, exact match)
+	 * @param string $number     Номер договора из документа (опц.); совпадение
+	 *                           устойчиво к латинице/кириллице (напр. 243Э20)
 	 * @param string $date       Дата договора из документа, формат d.m.Y (опциональный)
 	 * @return array|null { id, number, date } | { id: null } при не найдено
 	 */
@@ -94,39 +98,46 @@ class ProcureContract
 			],
 		];
 
-		// Narrow by contract number if provided (exact match)
-		if($number !== '')
-		{
-			$filter['=PROPERTY_'.$numberField->getPropertyId()] = $number;
-		}
-
-		// Narrow by date if provided (exact day equality, format d.m.Y)
-		if($date !== '')
-		{
-			$filter['=PROPERTY_'.$dateField->getPropertyId()] = $date;
-		}
+		// Номер и дату НЕ кладём в SQL-фильтр, а сверяем в PHP:
+		//  - номер: устойчиво к латинице/кириллице (243Э20 ↔ 243Э20) через
+		//    Config::foldHomoglyphs — точное =PROPERTY на уровне БД молча ломалось бы;
+		//  - дата: сравниваем отображаемое значение (d.m.Y), не завися от внутреннего
+		//    формата хранения свойства.
+		// Договоров у поставщика немного → выбираем кандидатов и фильтруем здесь.
+		$numProp  = 'PROPERTY_'.$numberField->getPropertyId();
+		$dateProp = 'PROPERTY_'.$dateField->getPropertyId();
 
 		$rows = Dogovor\Entity::getList([
 			'filter' => $filter,
 			'order'  => ['ID' => 'ASC'],
-			'limit'  => 1,
-			'select' => [
-				'ID',
-				'PROPERTY_'.$numberField->getPropertyId(),
-				'PROPERTY_'.$dateField->getPropertyId(),
-			],
+			'select' => ['ID', $numProp, $dateProp],
 		]);
 
-		if(empty($rows))
+		$wantNumber = $number !== '' ? Config::foldHomoglyphs($number) : '';
+		$wantDate   = trim($date);
+
+		foreach($rows as $row)
 		{
-			return ['id' => null];
+			$rowNumber = (string)($row[$numProp.'_VALUE'] ?? '');
+			$rowDate   = (string)($row[$dateProp.'_VALUE'] ?? '');
+
+			if($wantNumber !== '' && Config::foldHomoglyphs($rowNumber) !== $wantNumber)
+			{
+				continue;
+			}
+			if($wantDate !== '' && trim($rowDate) !== $wantDate)
+			{
+				continue;
+			}
+
+			// order ID ASC + первый подошедший = минимальный ID.
+			return [
+				'id'     => (int)$row['ID'],
+				'number' => $rowNumber,
+				'date'   => $rowDate,
+			];
 		}
 
-		$row = reset($rows);
-		return [
-			'id'     => (int)$row['ID'],
-			'number' => (string)($row['PROPERTY_'.$numberField->getPropertyId().'_VALUE'] ?? ''),
-			'date'   => (string)($row['PROPERTY_'.$dateField->getPropertyId().'_VALUE'] ?? ''),
-		];
+		return ['id' => null];
 	}
 }
