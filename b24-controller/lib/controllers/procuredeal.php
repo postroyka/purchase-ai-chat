@@ -207,27 +207,40 @@ class ProcureDeal
 		}
 
 		// --- 4) Запись в таймлайн сделки (B7) ---
+		// Таймлайн — некритичная часть: сделка уже создана. Любой сбой не должен
+		// валить весь вызов (агент обязан получить dealId) — фиксируем как warning.
 		if($processingLog !== '')
 		{
-			$commentId = \Bitrix\Crm\Timeline\CommentEntry::create([
-				'AUTHOR_ID' => $responsibleUserId,
-				'TEXT'      => $processingLog,
-				'SETTINGS'  => [],
-				'BINDINGS'  => [[
-					'ENTITY_TYPE_ID' => \CCrmOwnerType::Deal,
-					'ENTITY_ID'      => $dealId,
-					'IS_FIXED'       => true,
-				]],
-			]);
-
-			if($commentId > 0)
+			try
 			{
-				\Bitrix\Crm\Timeline\CommentController::getInstance()->onCreate($commentId, [
-					'COMMENT'        => $processingLog,
-					'ENTITY_TYPE_ID' => \CCrmOwnerType::Deal,
-					'ENTITY_ID'      => $dealId,
-					'AUTHOR_ID'      => $responsibleUserId,
+				$commentId = \Bitrix\Crm\Timeline\CommentEntry::create([
+					'AUTHOR_ID' => $responsibleUserId,
+					'TEXT'      => $processingLog,
+					'SETTINGS'  => [],
+					'BINDINGS'  => [[
+						'ENTITY_TYPE_ID' => \CCrmOwnerType::Deal,
+						'ENTITY_ID'      => $dealId,
+						'IS_FIXED'       => true,
+					]],
 				]);
+
+				if($commentId > 0)
+				{
+					// onCreate() принимает 2-й параметр ПО ССЫЛКЕ — нельзя передать
+					// литерал массива, только переменную (иначе фатальная ошибка
+					// «Cannot pass parameter 2 by reference»).
+					$onCreateFields = [
+						'COMMENT'        => $processingLog,
+						'ENTITY_TYPE_ID' => \CCrmOwnerType::Deal,
+						'ENTITY_ID'      => $dealId,
+						'AUTHOR_ID'      => $responsibleUserId,
+					];
+					\Bitrix\Crm\Timeline\CommentController::getInstance()->onCreate($commentId, $onCreateFields);
+				}
+			}
+			catch(\Throwable $e)
+			{
+				$warnings[] = 'timeline_comment_failed';
 			}
 		}
 
