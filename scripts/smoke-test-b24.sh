@@ -63,9 +63,11 @@ b24() {
 # скрипт оставался самодостаточным.
 ETALON_PDF="$(dirname "$0")/samples/etalon-invoice.pdf"
 if [ -f "$ETALON_PDF" ]; then
-  FILE_B64=$(base64 -w0 "$ETALON_PDF" 2>/dev/null || base64 "$ETALON_PDF" | tr -d '\n')
+  # base64 из stdin без флагов — кроссплатформенно (GNU и BSD/macOS: у macOS нет
+  # -w0 и файла позиционным аргументом). tr убирает переносы строк → одна строка.
+  FILE_B64=$(base64 < "$ETALON_PDF" | tr -d '\n')
 else
-  FILE_B64=$(printf '%s' '%PDF-1.4 1 0 obj<</Type/Catalog>>endobj' | base64 -w0 2>/dev/null || printf '%s' '%PDF-1.4 test' | base64)
+  FILE_B64=$(printf '%s' '%PDF-1.4 1 0 obj<</Type/Catalog>>endobj' | base64 | tr -d '\n')
 fi
 
 # ── 1. procuresupplier.findbyunp ──────────────────────────────────────────────
