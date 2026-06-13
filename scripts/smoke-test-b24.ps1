@@ -119,13 +119,14 @@ Invoke-B24 "shef:purchase.api.procuredeal.create/4a — минимальный �
     items             = @(@{ name = "Болт М8"; priceExclVat = 1.5; quantity = 100 })
 }
 
-Invoke-B24 "shef:purchase.api.procuredeal.create/4b — с contractId" @{
+Invoke-B24 "shef:purchase.api.procuredeal.create/4b — с contractId и documentDate (BEGINDATE = 15.03.2025 09:00)" @{
     supplierId        = $SupplierId
     responsibleUserId = $ResponsibleUser
     contractId        = 1
+    documentDate      = "15.03.2025"
     fileName          = "smoke-test-invoice.pdf"
     fileContent       = $FakeB64
-    processingLog     = "Smoke-test 4b с contractId"
+    processingLog     = "Smoke-test 4b с contractId и documentDate"
     items             = @(
         @{ vendorCode = $VendorCode; name = "Болт М8"; priceExclVat = 1.5; quantity = 10 },
         @{ name = "Гайка М8 (без артикула)"; priceExclVat = 0.5; quantity = 50 }

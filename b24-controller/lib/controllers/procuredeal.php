@@ -50,6 +50,8 @@ class ProcureDeal
 	 * @param string $processingLog     Лог обработки (пишется в COMMENTS и таймлайн)
 	 * @param array  $items             Позиции: [{ productId?, vendorCode?, name, priceExclVat, quantity }]
 	 * @param int    $contractId        ID договора (0 = не найден) → UF_CRM_DEAL_DOGOVOR
+	 * @param string $documentDate      Дата документа (счёта) в формате d.m.Y →
+	 *                                   BEGINDATE на 09:00. Пусто → текущие дата-время.
 	 * @return array|null { dealId, warnings?: string[] } | null при ошибке создания
 	 */
 	public function createAction(
@@ -59,7 +61,8 @@ class ProcureDeal
 		string $fileContent,
 		string $processingLog,
 		array $items,
-		int $contractId = 0
+		int $contractId = 0,
+		string $documentDate = ''
 	): ?array
 	{
 		$response = $this->includeModules();
@@ -102,6 +105,26 @@ class ProcureDeal
 
 		// --- 1) Создать сделку ---
 		$titleBase = $fileName !== '' ? pathinfo($fileName, PATHINFO_FILENAME) : 'поставщик #'.$supplierId;
+		// BEGINDATE («Дата начала») — обязательное поле воронки «Закупки».
+		// Если передана дата документа (счёта) — ставим её на 09:00 (считаем, что
+		// документ оформлен утром); иначе — текущие дата-время.
+		$beginTs = null;
+		if($documentDate !== '')
+		{
+			// Дата документа приходит в формате d.m.Y (как и дата договора в
+			// procurecontract). Пробуем и формат сайта, и явный DD.MM.YYYY.
+			$docTs = \MakeTimeStamp($documentDate, \CSite::GetDateFormat('SHORT'))
+				?: \MakeTimeStamp($documentDate, 'DD.MM.YYYY');
+			if($docTs)
+			{
+				$beginTs = mktime(9, 0, 0, (int)date('n', $docTs), (int)date('j', $docTs), (int)date('Y', $docTs));
+			}
+		}
+		if($beginTs === null)
+		{
+			$beginTs = time();
+		}
+
 		$dealFields = [
 			'TITLE'          => 'Закупка: '.$titleBase,
 			'COMPANY_ID'     => $supplierId,
@@ -110,6 +133,7 @@ class ProcureDeal
 			'STAGE_ID'       => $stageId,
 			'CURRENCY_ID'    => 'BYN',
 			'COMMENTS'       => $processingLog,
+			'BEGINDATE'      => \ConvertTimeStamp($beginTs, 'FULL'),
 		];
 
 		// Привязка договора к сделке (поле подтверждено заказчиком).

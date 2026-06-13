@@ -109,16 +109,17 @@ print(json.dumps({
 }))")
 b24 "shef:purchase.api.procuredeal.create" "${BODY}"
 
-echo_sep "4b. create deal — с contractId"
+echo_sep "4b. create deal — с contractId и documentDate (BEGINDATE = 15.03.2025 09:00)"
 BODY=$(python3 -c "
 import json
 print(json.dumps({
   'supplierId': ${SUPPLIER_ID},
   'responsibleUserId': ${RESPONSIBLE_USER_ID},
   'contractId': 1,
+  'documentDate': '15.03.2025',
   'fileName': 'smoke-test-invoice.pdf',
   'fileContent': '${FAKE_B64}',
-  'processingLog': 'Smoke-test 4b — с contractId',
+  'processingLog': 'Smoke-test 4b — с contractId и documentDate',
   'items': [
     {'vendorCode': '${VENDOR_CODE}', 'name': 'Болт М8', 'priceExclVat': 1.5, 'quantity': 10},
     {'name': 'Гайка М8 (без артикула)', 'priceExclVat': 0.5, 'quantity': 50}
