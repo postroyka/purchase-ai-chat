@@ -30,7 +30,7 @@
 
 Деление обусловлено архитектурным принципом изоляции: `app` не имеет прямого доступа к Б24 API — только через `mcp`.
 
-**Интеграция с Bitrix24 (Week 2+).** MCP-инструменты (`b24_pst_crm_*`) вызывают **REST-контроллеры `shef:purchase.api.procure*`**, добавленные в живой модуль коробки `shef.purchase` (через его `restIntegration`). Транспорт — стандартный REST-вебхук (`NUXT_BITRIX24_WEBHOOK_URL`); отдельного URL контроллера нет. `B24_CONTRACTS_API_URL` убран — не нужен. Исходники — `b24-controller/`, деплой полуручной (`make deploy-b24`, rsync только `procure*.php`, без `--delete`). **Существующий код `shef.purchase` не трогаем.**
+**Интеграция с Bitrix24.** MCP-инструменты (`b24_pst_crm_*`) вызывают **REST-контроллеры `shef:purchase.api.procure*`**, добавленные в живой модуль коробки `shef.purchase` (через его `restIntegration`). Транспорт — стандартный REST-вебхук (`NUXT_BITRIX24_WEBHOOK_URL`); отдельного URL контроллера нет. `B24_CONTRACTS_API_URL` убран — не нужен. Исходники — `b24-controller/`, деплой полуручной (`make deploy-b24`, rsync только `procure*.php`, без `--delete`). **Существующий код `shef.purchase` не трогаем.**
 
 ---
 
