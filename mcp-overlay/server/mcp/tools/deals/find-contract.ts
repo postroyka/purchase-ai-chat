@@ -13,7 +13,7 @@ interface ContractResult {
 /**
  * Find an active procurement contract for a supplier.
  *
- * Calls `shef.purchase.api.procurecontract.find` over the webhook (callV2). The
+ * Calls `shef:purchase.api.procurecontract.find` over the webhook (callV2). The
  * controller queries the "Договора" iblock list (id 32): CLIENT = CO_<id>,
  * ACTIVE=Y, STATUS != Брак, TYPE ∈ {Закупки, Закупки-Комиссионный}, optionally
  * narrowed by NUMBER/DATE (exact), returning the minimum-id match. `number` /
@@ -36,7 +36,7 @@ export default defineMcpTool({
 
     const result = await callV2<ContractResult>(
       b24,
-      'shef.purchase.api.procurecontract.find',
+      'shef:purchase.api.procurecontract.find',
       params,
       'Failed to find contract for supplier',
     )

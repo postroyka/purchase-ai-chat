@@ -15,7 +15,7 @@
     'restIntegration' => ['enabled' => true],
 ]]
 ```
-→ REST-метод формируется как `shef.purchase.api.<controller>.<action>`.
+→ REST-метод формируется как `shef:purchase.api.<controller>.<action>`.
 
 Паттерн контроллера (из `returning.php`, `returningreport.php`):
 - `extends \Bitrix\Main\Engine\Controller`

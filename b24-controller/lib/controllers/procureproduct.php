@@ -8,7 +8,7 @@ use Shef\Purchase\Config;
 
 /**
  * Поиск товара по артикулу поставщика для procure-ai.
- * REST: shef.purchase.api.procureproduct.findByVendorCode
+ * REST: shef:purchase.api.procureproduct.findByVendorCode
  */
 class ProcureProduct
 	extends Engine\Controller

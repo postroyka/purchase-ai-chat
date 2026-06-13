@@ -37,43 +37,43 @@ FAKE_B64=$(printf '%s' '%PDF-1.4 1 0 obj<</Type/Catalog>>endobj' | base64 -w0 2>
 # ── 1. procuresupplier.findbyunp ──────────────────────────────────────────────
 echo_sep "1a. findByUnp — реальный УНП (задайте SUPPLIER_UNP или отредактируйте)"
 UNP="${SUPPLIER_UNP:-100059180}"
-b24 "shef.purchase.api.procuresupplier.findbyunp" "{\"unp\":\"${UNP}\"}"
+b24 "shef:purchase.api.procuresupplier.findbyunp" "{\"unp\":\"${UNP}\"}"
 
 echo_sep "1b. findByUnp — несуществующий УНП (ожидаем result.id=null)"
-b24 "shef.purchase.api.procuresupplier.findbyunp" '{"unp":"000000001"}'
+b24 "shef:purchase.api.procuresupplier.findbyunp" '{"unp":"000000001"}'
 
 echo_sep "1c. findByUnp — пустой УНП (ожидаем error)"
-b24 "shef.purchase.api.procuresupplier.findbyunp" '{"unp":""}' || echo "(ожидается ошибка)"
+b24 "shef:purchase.api.procuresupplier.findbyunp" '{"unp":""}' || echo "(ожидается ошибка)"
 
 echo_sep "1d. findByUnp — слишком длинный УНП (ожидаем error sup:011)"
-b24 "shef.purchase.api.procuresupplier.findbyunp" '{"unp":"000000000000000000000000000000000000"}' || echo "(ожидается ошибка)"
+b24 "shef:purchase.api.procuresupplier.findbyunp" '{"unp":"000000000000000000000000000000000000"}' || echo "(ожидается ошибка)"
 
 # ── 2. procurecontract.find ───────────────────────────────────────────────────
 echo_sep "2a. find contract — только supplierId"
-b24 "shef.purchase.api.procurecontract.find" "{\"supplierId\":${SUPPLIER_ID}}"
+b24 "shef:purchase.api.procurecontract.find" "{\"supplierId\":${SUPPLIER_ID}}"
 
 echo_sep "2b. find contract — с number и date"
-b24 "shef.purchase.api.procurecontract.find" \
+b24 "shef:purchase.api.procurecontract.find" \
   "{\"supplierId\":${SUPPLIER_ID},\"number\":\"ДОГ-2024/001\",\"date\":\"01.01.2024\"}"
 
 echo_sep "2c. find contract — несуществующий поставщик (ожидаем result.id=null)"
-b24 "shef.purchase.api.procurecontract.find" '{"supplierId":999999}'
+b24 "shef:purchase.api.procurecontract.find" '{"supplierId":999999}'
 
 echo_sep "2d. find contract — supplierId=0 (ожидаем error con:010)"
-b24 "shef.purchase.api.procurecontract.find" '{"supplierId":0}' || echo "(ожидается ошибка)"
+b24 "shef:purchase.api.procurecontract.find" '{"supplierId":0}' || echo "(ожидается ошибка)"
 
 # ── 3. procureproduct.findbyvendorcode ────────────────────────────────────────
 echo_sep "3a. findByVendorCode — реальный артикул"
-b24 "shef.purchase.api.procureproduct.findbyvendorcode" "{\"vendorCode\":\"${VENDOR_CODE}\"}"
+b24 "shef:purchase.api.procureproduct.findbyvendorcode" "{\"vendorCode\":\"${VENDOR_CODE}\"}"
 
 echo_sep "3b. findByVendorCode — несуществующий артикул (ожидаем result.id=null)"
-b24 "shef.purchase.api.procureproduct.findbyvendorcode" '{"vendorCode":"NONEXISTENT-ZZZZZ-99999"}'
+b24 "shef:purchase.api.procureproduct.findbyvendorcode" '{"vendorCode":"NONEXISTENT-ZZZZZ-99999"}'
 
 echo_sep "3c. findByVendorCode — пустой артикул (ожидаем error prd:010)"
-b24 "shef.purchase.api.procureproduct.findbyvendorcode" '{"vendorCode":""}' || echo "(ожидается ошибка)"
+b24 "shef:purchase.api.procureproduct.findbyvendorcode" '{"vendorCode":""}' || echo "(ожидается ошибка)"
 
 echo_sep "3d. findByVendorCode — слишком длинный артикул (ожидаем error prd:011)"
-b24 "shef.purchase.api.procureproduct.findbyvendorcode" \
+b24 "shef:purchase.api.procureproduct.findbyvendorcode" \
   '{"vendorCode":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}' \
   || echo "(ожидается ошибка)"
 
@@ -89,7 +89,7 @@ print(json.dumps({
   'processingLog': 'Smoke-test 4a — автоматический тест',
   'items': [{'name': 'Болт М8', 'priceExclVat': 1.5, 'quantity': 100}]
 }))")
-b24 "shef.purchase.api.procuredeal.create" "${BODY}"
+b24 "shef:purchase.api.procuredeal.create" "${BODY}"
 
 echo_sep "4b. create deal — с contractId"
 BODY=$(python3 -c "
@@ -106,15 +106,15 @@ print(json.dumps({
     {'name': 'Гайка М8 (без артикула)', 'priceExclVat': 0.5, 'quantity': 50}
   ]
 }))")
-b24 "shef.purchase.api.procuredeal.create" "${BODY}"
+b24 "shef:purchase.api.procuredeal.create" "${BODY}"
 
 echo_sep "4c. create deal — supplierId=0 (ожидаем error deal:010)"
-b24 "shef.purchase.api.procuredeal.create" \
+b24 "shef:purchase.api.procuredeal.create" \
   '{"supplierId":0,"responsibleUserId":1,"fileName":"x.pdf","fileContent":"dGVzdA==","processingLog":"","items":[{"name":"x","priceExclVat":1,"quantity":1}]}' \
   || echo "(ожидается ошибка)"
 
 echo_sep "4d. create deal — пустой items[] (ожидаем error deal:020)"
-b24 "shef.purchase.api.procuredeal.create" \
+b24 "shef:purchase.api.procuredeal.create" \
   "{\"supplierId\":${SUPPLIER_ID},\"responsibleUserId\":${RESPONSIBLE_USER_ID},\"fileName\":\"x.pdf\",\"fileContent\":\"dGVzdA==\",\"processingLog\":\"\",\"items\":[]}" \
   || echo "(ожидается ошибка)"
 

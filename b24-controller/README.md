@@ -18,8 +18,14 @@ REST-контроллеры для procure-ai, размещаемые внутр
 ]]
 ```
 
-Любой `Engine\Controller` в этом namespace автоматически доступен по REST как
-`shef.purchase.api.<controller>.<action>`. Отдельный модуль/инсталлятор не нужен.
+Любой `Engine\Controller` в этом namespace автоматически доступен по REST.
+
+> **Важно: формат имени метода для кастомного модуля**
+> Bitrix24 использует двоеточие как разделитель между именем модуля и prefix-scope:
+> `shef:purchase.api.<controller>.<action>`
+> (не точку, как у стандартных модулей). Это специфика коробочных кастомных модулей.
+
+Отдельный модуль/инсталлятор не нужен.
 
 ## Контроллеры
 
@@ -28,10 +34,10 @@ REST-контроллеры для procure-ai, размещаемые внутр
 
 | REST-метод (lowercase) | PHP-экшен | Файл | Статус |
 |---|---|---|---|
-| `shef.purchase.api.procuresupplier.findbyunp` | `findByUnpAction` | `procuresupplier.php` | ✅ реализован (B1) |
-| `shef.purchase.api.procureproduct.findbyvendorcode` | `findByVendorCodeAction` | `procureproduct.php` | ✅ реализован (B4–B5) |
-| `shef.purchase.api.procurecontract.find` | `findAction` | `procurecontract.php` | ✅ реализован (B3a–B3e) |
-| `shef.purchase.api.procuredeal.create` | `createAction` | `procuredeal.php` | ✅ реализован (B6–B8) |
+| `shef:purchase.api.procuresupplier.findbyunp` | `findByUnpAction` | `procuresupplier.php` | ✅ реализован (B1) |
+| `shef:purchase.api.procureproduct.findbyvendorcode` | `findByVendorCodeAction` | `procureproduct.php` | ✅ реализован (B4–B5) |
+| `shef:purchase.api.procurecontract.find` | `findAction` | `procurecontract.php` | ✅ реализован (B3a–B3e) |
+| `shef:purchase.api.procuredeal.create` | `createAction` | `procuredeal.php` | ✅ реализован (B6–B8) |
 
 Подробности структур Б24 — в [`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md).
 

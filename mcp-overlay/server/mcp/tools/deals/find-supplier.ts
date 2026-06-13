@@ -12,7 +12,7 @@ interface SupplierResult {
 /**
  * Find a Belarusian supplier company by УНП (taxpayer number).
  *
- * Calls the custom controller `shef.purchase.api.procuresupplier.findByUnp`
+ * Calls the custom controller `shef:purchase.api.procuresupplier.findByUnp`
  * over the standard webhook (callV2). The controller matches the company
  * requisite field `RQ_INN` (exact, country = BY) and returns the minimum-id
  * company when several share one УНП. Russian suppliers (INN+KPP without УНП)
@@ -29,7 +29,7 @@ export default defineMcpTool({
     const b24 = useBitrix24()
     const result = await callV2<SupplierResult>(
       b24,
-      'shef.purchase.api.procuresupplier.findbyunp',
+      'shef:purchase.api.procuresupplier.findbyunp',
       { unp },
       'Failed to find supplier by UNP',
     )

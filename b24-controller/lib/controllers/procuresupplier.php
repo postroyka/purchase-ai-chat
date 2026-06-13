@@ -7,7 +7,7 @@ use Shef\Options\TraitList;
 
 /**
  * Поиск поставщика по УНП для procure-ai.
- * REST: shef.purchase.api.procuresupplier.findByUnp
+ * REST: shef:purchase.api.procuresupplier.findByUnp
  */
 class ProcureSupplier
 	extends Engine\Controller

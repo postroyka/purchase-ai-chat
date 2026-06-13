@@ -8,7 +8,7 @@ use Shef\IBlock\Lists\Dogovor;
 
 /**
  * Поиск договора закупки для procure-ai.
- * REST: shef.purchase.api.procurecontract.find
+ * REST: shef:purchase.api.procurecontract.find
  *
  * Инфоблок-список IBLOCK_ID=32 (Shef\IBlock\Lists\Dogovor\Entity).
  * Фильтр: CLIENT=CO_<supplierId>, ACTIVE=Y, STATUS != TO_DELETE,

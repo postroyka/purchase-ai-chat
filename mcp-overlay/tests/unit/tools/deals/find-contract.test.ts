@@ -24,7 +24,7 @@ describe('b24_pst_crm_find_contract', () => {
     const payload = JSON.parse(result.content[0].text)
 
     expect(fake.v2Call).toHaveBeenCalledWith({
-      method: 'shef.purchase.api.procurecontract.find',
+      method: 'shef:purchase.api.procurecontract.find',
       params: { supplierId: '42' },
     })
     expect(payload).toMatchObject({ id: 77, number: '2025/12' })
@@ -36,7 +36,7 @@ describe('b24_pst_crm_find_contract', () => {
     await (tool as any).handler({ supplierId: '42', number: '2025/12', date: '01.03.2025' })
 
     expect(fake.v2Call).toHaveBeenCalledWith({
-      method: 'shef.purchase.api.procurecontract.find',
+      method: 'shef:purchase.api.procurecontract.find',
       params: { supplierId: '42', number: '2025/12', date: '01.03.2025' },
     })
   })

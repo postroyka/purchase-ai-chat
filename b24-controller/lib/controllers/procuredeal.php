@@ -8,7 +8,7 @@ use Shef\Purchase\Config;
 
 /**
  * Создание сделки закупки для procure-ai.
- * REST: shef.purchase.api.procuredeal.create
+ * REST: shef:purchase.api.procuredeal.create
  *
  * Бизнес-правила (бриф, не менять без согласования):
  *   CATEGORY_ID = 1 («Закупки»)

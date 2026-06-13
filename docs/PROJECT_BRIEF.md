@@ -30,7 +30,7 @@
 
 Деление обусловлено архитектурным принципом изоляции: `app` не имеет прямого доступа к Б24 API — только через `mcp`.
 
-**Интеграция с Bitrix24 (Week 2+).** MCP-инструменты (`b24_pst_crm_*`) вызывают **REST-контроллеры `shef.purchase.api.procure*`**, добавленные в живой модуль коробки `shef.purchase` (через его `restIntegration`). Транспорт — стандартный REST-вебхук (`NUXT_BITRIX24_WEBHOOK_URL`); отдельного URL контроллера нет. `B24_CONTRACTS_API_URL` убран — не нужен. Исходники — `b24-controller/`, деплой полуручной (`make deploy-b24`, rsync только `procure*.php`, без `--delete`). **Существующий код `shef.purchase` не трогаем.**
+**Интеграция с Bitrix24 (Week 2+).** MCP-инструменты (`b24_pst_crm_*`) вызывают **REST-контроллеры `shef:purchase.api.procure*`**, добавленные в живой модуль коробки `shef.purchase` (через его `restIntegration`). Транспорт — стандартный REST-вебхук (`NUXT_BITRIX24_WEBHOOK_URL`); отдельного URL контроллера нет. `B24_CONTRACTS_API_URL` убран — не нужен. Исходники — `b24-controller/`, деплой полуручной (`make deploy-b24`, rsync только `procure*.php`, без `--delete`). **Существующий код `shef.purchase` не трогаем.**
 
 ---
 
@@ -74,7 +74,7 @@ procure-ai/
 │   └── doc_to_text.py              #   xlsx/xls/docx → текст (openpyxl/xlrd/python-docx)
 ├── mcp/                            # MCP-сервер: find_supplier / find_contract / find_product / create_deal
 ├── mcp-overlay/                    # PST-инструменты (b24_pst_crm_*), накладываются поверх mcp/ при сборке
-├── b24-controller/                 # PHP REST-контроллеры shef.purchase.api.procure* (деплой make deploy-b24)
+├── b24-controller/                 # PHP REST-контроллеры shef:purchase.api.procure* (деплой make deploy-b24)
 ├── ui/                             # templates-dashboard + UI Kit: загрузка + пофайловый отчёт
 ├── docs/
 │   ├── PROJECT_BRIEF.md            # этот файл

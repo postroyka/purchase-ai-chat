@@ -12,7 +12,7 @@ interface ProductResult {
 /**
  * Find an active parent product in the catalog by vendor code.
  *
- * Calls `shef.purchase.api.procureproduct.findByVendorCode` over the webhook
+ * Calls `shef:purchase.api.procureproduct.findByVendorCode` over the webhook
  * (callV2). The controller matches `PURCHASE_ARTICLE` exactly on active parent
  * products (empty PURCHASE_69_PARENT_PRODUCT) and returns the minimum-id match.
  * Matching by name is intentionally NOT supported — vendor code only (B5).
@@ -28,7 +28,7 @@ export default defineMcpTool({
     const b24 = useBitrix24()
     const result = await callV2<ProductResult>(
       b24,
-      'shef.purchase.api.procureproduct.findbyvendorcode',
+      'shef:purchase.api.procureproduct.findbyvendorcode',
       { vendorCode },
       'Failed to find product by vendor code',
     )

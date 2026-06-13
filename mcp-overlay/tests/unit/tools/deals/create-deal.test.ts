@@ -45,7 +45,7 @@ describe('b24_pst_crm_create_deal', () => {
     const payload = JSON.parse(result.content[0].text)
 
     expect(fake.v2Call).toHaveBeenCalledWith({
-      method: 'shef.purchase.api.procuredeal.create',
+      method: 'shef:purchase.api.procuredeal.create',
       params: expect.objectContaining({
         supplierId: '10',
         responsibleUserId: '1',

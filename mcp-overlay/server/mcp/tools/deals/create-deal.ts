@@ -119,7 +119,7 @@ export default defineMcpTool({
 
     const result = await callV2<DealResult>(
       b24,
-      'shef.purchase.api.procuredeal.create',
+      'shef:purchase.api.procuredeal.create',
       params,
       'Failed to create procurement deal',
     )
