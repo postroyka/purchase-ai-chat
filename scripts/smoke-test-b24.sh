@@ -29,6 +29,11 @@ B24="${B24%/}"
 SUPPLIER_ID="${SUPPLIER_ID:-42}"
 VENDOR_CODE="${VENDOR_CODE:-ART-12345}"
 RESPONSIBLE_USER_ID="${RESPONSIBLE_USER_ID:-1}"
+# Реальные номер и дата договора, который существует у SUPPLIER_ID
+# (например из вывода 2a). Нужны для проверки фильтра по номеру/дате (кейсы 2b–2d).
+# Если пусто — кейсы 2b–2d пропускаются.
+CONTRACT_NUMBER="${CONTRACT_NUMBER:-}"
+CONTRACT_DATE="${CONTRACT_DATE:-}"
 # ----------------------------------
 
 echo_sep() { echo ""; echo "===== $1 ====="; }
@@ -67,17 +72,34 @@ echo_sep "1d. findByUnp — слишком длинный УНП (ожидаем
 b24 "shef:purchase.api.procuresupplier.findbyunp" '{"unp":"000000000000000000000000000000000000"}' || echo "(ожидается ошибка)"
 
 # ── 2. procurecontract.find ───────────────────────────────────────────────────
-echo_sep "2a. find contract — только supplierId"
+# Контроллер фильтрует по номеру И дате как ТОЧНОЕ совпадение (логическое И):
+# верны оба → договор найден; ошибка хотя бы в одном → result.id=null.
+WRONG_NUMBER="НЕТ-ТАКОГО-НОМЕРА-XYZ"
+WRONG_DATE="01.01.1990"
+
+echo_sep "2a. find contract — только supplierId (минимальный id договора поставщика)"
 b24 "shef:purchase.api.procurecontract.find" "{\"supplierId\":${SUPPLIER_ID}}"
 
-echo_sep "2b. find contract — с number и date"
-b24 "shef:purchase.api.procurecontract.find" \
-  "{\"supplierId\":${SUPPLIER_ID},\"number\":\"ДОГ-2024/001\",\"date\":\"01.01.2024\"}"
+if [ -n "${CONTRACT_NUMBER}" ] && [ -n "${CONTRACT_DATE}" ]; then
+  echo_sep "2b. number + date ОБА верные (ожидаем найденный договор, id != null)"
+  b24 "shef:purchase.api.procurecontract.find" \
+    "{\"supplierId\":${SUPPLIER_ID},\"number\":\"${CONTRACT_NUMBER}\",\"date\":\"${CONTRACT_DATE}\"}"
 
-echo_sep "2c. find contract — несуществующий поставщик (ожидаем result.id=null)"
+  echo_sep "2c. number верный, date НЕВЕРНАЯ (ожидаем result.id=null)"
+  b24 "shef:purchase.api.procurecontract.find" \
+    "{\"supplierId\":${SUPPLIER_ID},\"number\":\"${CONTRACT_NUMBER}\",\"date\":\"${WRONG_DATE}\"}"
+
+  echo_sep "2d. number НЕВЕРНЫЙ, date верная (ожидаем result.id=null)"
+  b24 "shef:purchase.api.procurecontract.find" \
+    "{\"supplierId\":${SUPPLIER_ID},\"number\":\"${WRONG_NUMBER}\",\"date\":\"${CONTRACT_DATE}\"}"
+else
+  echo_sep "2b–2d. ПРОПУЩЕНЫ — задайте CONTRACT_NUMBER и CONTRACT_DATE в scripts/.env.deploy"
+fi
+
+echo_sep "2e. find contract — несуществующий поставщик (ожидаем result.id=null)"
 b24 "shef:purchase.api.procurecontract.find" '{"supplierId":999999}'
 
-echo_sep "2d. find contract — supplierId=0 (ожидаем error con:010)"
+echo_sep "2f. find contract — supplierId=0 (ожидаем error con:010)"
 b24 "shef:purchase.api.procurecontract.find" '{"supplierId":0}' || echo "(ожидается ошибка)"
 
 # ── 3. procureproduct.findbyvendorcode ────────────────────────────────────────
