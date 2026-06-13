@@ -31,6 +31,17 @@ const UPLOADS_DIR = process.env.NUXT_UPLOADS_DIR || '/app/uploads'
 const MAX_ATTACH_BYTES = (Number(process.env.NUXT_MAX_ATTACH_MB) || 25) * 1024 * 1024
 
 /**
+ * realpath(UPLOADS_DIR), resolved once and cached: the uploads dir is deployment
+ * config and does not change at runtime, so there is no need to call realpath on
+ * every handler invocation. Lazy (not at module load) so import does not throw if
+ * the directory is not present yet.
+ */
+let _uploadsBase: string | undefined
+async function uploadsBase(): Promise<string> {
+  return (_uploadsBase ??= await realpath(resolve(UPLOADS_DIR)))
+}
+
+/**
  * Resolve `filePath`, assert it stays inside UPLOADS_DIR, and reject symlinks
  * that escape it. The path comes (indirectly) from a document-driven agent, so
  * a crafted value like `../../etc/passwd` — or a symlink planted in uploads
@@ -42,7 +53,7 @@ const MAX_ATTACH_BYTES = (Number(process.env.NUXT_MAX_ATTACH_MB) || 25) * 1024 *
  * symlink can't smuggle the read target outside the base.
  */
 async function resolveWithinUploads(filePath: string): Promise<string> {
-  const base = await realpath(resolve(UPLOADS_DIR))
+  const base = await uploadsBase()
   const lexical = resolve(base, filePath)
   if (lexical !== base && !lexical.startsWith(base + sep)) {
     // Do NOT echo filePath back — avoid confirming host path structure to a
@@ -126,7 +137,7 @@ export default defineMcpTool({
       processingLog,
       items,
     }
-    if (contractId) params.contractId = contractId
+    params.contractId = contractId // mandatory per schema (min(1)) — always present
 
     const result = await callV2<DealResult>(
       b24,

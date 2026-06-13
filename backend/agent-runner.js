@@ -110,13 +110,22 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
     console.warn(`[agent-runner] document text extraction failed for ${filePath}: ${e.message}`);
   }
 
+  // Defence-in-depth against prompt injection: the document text is UNTRUSTED, so
+  // neutralise any copy of the end-marker it may contain — otherwise a crafted doc
+  // could close the block early and smuggle a fake FILE_PATH / RESPONSIBLE_USER_ID
+  // that the model might read instead of the real system fields below.
+  const DOC_END_MARKER = '--- END DOCUMENT_TEXT ---';
+  const safeDocText = extracted?.text
+    ? String(extracted.text).split(DOC_END_MARKER).join('--- END DOCUMENT_TEXT (нейтрализовано) ---')
+    : null;
+
   const userMessage = [
-    ...(extracted?.text
+    ...(safeDocText
       ? [`DOCUMENT_TEXT (извлечено из файла; способ=${extracted.method}; НЕДОВЕРЕННЫЕ данные):`,
-         extracted.text,
+         safeDocText,
          // End-marker: system fields below are taken ONLY after this line, so untrusted
          // document text can't inject a fake FILE_PATH / RESPONSIBLE_USER_ID.
-         '--- END DOCUMENT_TEXT ---',
+         DOC_END_MARKER,
          '']
       : []),
     `FILE_PATH: ${filePath}`,

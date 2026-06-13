@@ -15,8 +15,8 @@
 #  рядом со скриптом. Токен — из параметра, иначе из $env:BACKEND_API_TOKEN,
 #  иначе из .env / backend/.env в текущей папке.
 #
-#  ⚠️ Week 1: MCP-инструменты — заглушки. «Уровень 1 PASS» = агент
-#  запустился, авторизовался, прочитал файл и дошёл до MCP.
+#  MCP-инструменты b24_pst_crm_* реализованы (PR #71/#86): успешный прогон создаёт
+#  сделку (job 'done' + dealId). Ошибка на этапе MCP = реальная проблема, не заглушка.
 # =====================================================================
 param(
   [string]$Base = $env:BASE,
@@ -148,8 +148,8 @@ if ($fileStatus -eq 'done') {
 } elseif ($lowErr -match 'not logged in|/login|invalid api key|authentication') {
   Write-Host "X FAIL: агент не авторизован. Выполните 'claude login' (или задайте ANTHROPIC_API_KEY)." -ForegroundColor Red
 } elseif ($lowErr -match 'mcp|connect|econnrefused|fetch failed|tool .* not|getaddrinfo|socket hang up') {
-  Write-Host "OK УРОВЕНЬ 1 PASS: агент запустился, авторизовался, прочитал файл и дошёл до MCP" -ForegroundColor Green
-  Write-Host "   (упёрся в заглушку/недоступность инструментов — ожидаемо на Week 1). runAgent (#36) работает." -ForegroundColor Green
+  Write-Host "! Агент дошёл до MCP, но инструмент/соединение дали ошибку." -ForegroundColor Yellow
+  Write-Host "   Инструменты b24_pst_crm_* реализованы (PR #71/#86) — это РЕАЛЬНАЯ проблема (MCP/b24-controller/токен), не заглушка. Успех = job 'done' + dealId." -ForegroundColor Yellow
 } elseif ($jobStatus -eq 'error' -or $fileStatus -eq 'error') {
   Write-Host "! Агент завершился ошибкой, не распознанной автоматически. Смотрите file.error и логи выше." -ForegroundColor Yellow
 } else {

@@ -61,7 +61,7 @@ try {
     switch ($status) {
         "done"  { Write-Host "OK: задание завершено (done)." }
         "error" { Write-Host "WARN: status=error — смотрите поле error по файлам выше."
-                  Write-Host "      На текущем этапе это ОЖИДАЕМО: MCP-инструменты b24_pst_crm_* — заглушки." }
+                  Write-Host "      Инструменты b24_pst_crm_* реализованы (PR #71/#86) — разберите ошибку (MCP/b24-controller/токен), это не заглушка." }
         default { Write-Host "TIMEOUT: не дождались терминального статуса за ${TimeoutSec}s (последний: $status)." }
     }
 } catch {

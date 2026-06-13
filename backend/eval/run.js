@@ -12,7 +12,7 @@
 // Запуск:  make eval        (или: node backend/eval/run.js)
 // Переменные: EVAL_SAMPLES_DIR, EVAL_RESPONSIBLE_ID, AGENT_TIMEOUT_MS, MCP_SERVER_URL, …
 
-import { readdir, readFile } from 'node:fs/promises';
+import { access, readdir, readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAgent } from '../agent-runner.js';
@@ -38,6 +38,17 @@ async function main() {
     const fixturePath = join(SAMPLES_DIR, expected.fixture);
     const want = `${expected.expect}${expected.error ? ' ' + expected.error : ''}`;
     console.log(`▶ ${expected.fixture}  (ожидаем: ${want})`);
+
+    // Явная проверка существования фикстуры — иначе runAgent упадёт и в отчёте будет
+    // невнятный eval_run_failed вместо «файл фикстуры не найден».
+    try {
+      await access(fixturePath);
+    } catch {
+      console.log(`   ❌ фикстура не найдена: ${fixturePath}\n   → FAIL\n`);
+      results.push({ fixture: expected.fixture, pass: false,
+        checks: [{ name: 'фикстура существует', ok: false, detail: `не найден: ${fixturePath}` }] });
+      continue;
+    }
 
     let actual;
     try {

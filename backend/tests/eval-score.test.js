@@ -22,11 +22,32 @@ describe('checkVatDirection (ловушка НДС из #58)', () => {
     expect(checkVatDirection(100, null)).toBeNull();
     expect(checkVatDirection(null, 120)).toBeNull();
   });
+
+  it('ровно посередине (÷1.2 и ×0.8 равноудалены) → ok (ничья в пользу ÷1.2 по <=)', () => {
+    // correct=100, wrong=96, середина=98: dCorrect == dWrong → ok:true (контракт оператора <=)
+    const r = checkVatDirection(98, 120);
+    expect(r.ok).toBe(true);
+    expect(r.gotCloserTo).toBe('divide_by_1.2');
+  });
 });
 
 describe('normName', () => {
   it('игнорирует регистр, кавычки и лишние пробелы', () => {
     expect(normName('  Клей "Wellton",  10 кг ')).toBe('клей wellton 10 кг');
+  });
+
+  it('дефис/тире приравнивается к пробелу', () => {
+    expect(normName('Wellton-45')).toBe(normName('Wellton 45'));
+    expect(normName('Клей—Момент')).toBe('клей момент');
+  });
+
+  it('русские «ёлочки» убираются', () => {
+    expect(normName('Грунтовка «Бетоноконтакт»')).toBe('грунтовка бетоноконтакт');
+  });
+
+  it('null/undefined → пустая строка (без throw)', () => {
+    expect(normName(null)).toBe('');
+    expect(normName(undefined)).toBe('');
   });
 });
 
@@ -104,6 +125,41 @@ describe('scoreResult — deal-путь (happy-path BYN)', () => {
 
   it('неожиданный error на deal-фикстуре → fail', () => {
     const r = scoreResult({ error: 'tool_unavailable' }, expected);
+    expect(r.pass).toBe(false);
+  });
+});
+
+describe('scoreResult — multi-item (позиционная сверка)', () => {
+  const expected = {
+    fixture: 'multi.pdf', expect: 'deal', currency: 'BYN',
+    items: [
+      { name: 'Цемент М500', priceExclVat: 100, quantity: 10 },
+      { name: 'Песок строительный', priceExclVat: 20, quantity: 50 },
+    ],
+  };
+  const base = { currency: 'BYN', deal: { dealId: 'd-1' } };
+
+  it('обе позиции в верном порядке → pass', () => {
+    const actual = { ...base, items: [
+      { name: 'Цемент М500 (мешок)', priceExclVat: 100, quantity: 10 },
+      { name: 'Песок строительный', priceExclVat: 20, quantity: 50 },
+    ] };
+    expect(scoreResult(actual, expected).pass).toBe(true);
+  });
+
+  it('позиции переставлены местами → fail (сверка позиционная)', () => {
+    const actual = { ...base, items: [
+      { name: 'Песок строительный', priceExclVat: 20, quantity: 50 },
+      { name: 'Цемент М500', priceExclVat: 100, quantity: 10 },
+    ] };
+    expect(scoreResult(actual, expected).pass).toBe(false);
+  });
+});
+
+describe('scoreResult — падение прогона (runner)', () => {
+  it('eval_run_failed на deal-фикстуре → fail (ошибка прогона не маскируется)', () => {
+    const expected = { fixture: 'byn-ok.pdf', expect: 'deal', currency: 'BYN' };
+    const r = scoreResult({ error: 'eval_run_failed', message: 'spawn claude ENOENT' }, expected);
     expect(r.pass).toBe(false);
   });
 });

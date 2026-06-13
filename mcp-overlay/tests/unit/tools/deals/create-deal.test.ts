@@ -59,20 +59,12 @@ describe('b24_pst_crm_create_deal', () => {
     expect(fake.v3Call).not.toHaveBeenCalled()
   })
 
-  it('includes contractId when provided', async () => {
+  it('always forwards contractId (mandatory per schema — a deal must reference a contract)', async () => {
     fake.v2Call.mockResolvedValue(fakeOk({ dealId: 1 }))
 
     await (tool as any).handler({ ...baseInput, filePath: pdfPath, contractId: '77' })
 
     expect((fake.v2Call.mock.calls[0]![0] as any).params.contractId).toBe('77')
-  })
-
-  it('omits contractId when not provided', async () => {
-    fake.v2Call.mockResolvedValue(fakeOk({ dealId: 1 }))
-
-    await (tool as any).handler({ ...baseInput, filePath: pdfPath })
-
-    expect((fake.v2Call.mock.calls[0]![0] as any).params).not.toHaveProperty('contractId')
   })
 
   it('returns file_read_failed and does NOT call B24 on path traversal', async () => {

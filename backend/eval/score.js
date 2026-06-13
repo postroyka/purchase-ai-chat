@@ -16,6 +16,7 @@ export function normName(s) {
   return String(s ?? '')
     .toLowerCase()
     .replace(/["'«».,]/g, '')
+    .replace(/[-–—]/g, ' ') // дефис/тире → пробел: «Wellton-45» ≈ «Wellton 45»
     .replace(/\s+/g, ' ')
     .trim();
 }
