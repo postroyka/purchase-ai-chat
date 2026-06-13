@@ -11,12 +11,16 @@
 #    - rsync БЕЗ --delete — чужие файлы не трогаются и не удаляются;
 #    - по умолчанию dry-run; реальная выкладка только при APPLY=1.
 #
-# Настройки (env или scripts/.env.deploy):
+# Настройки (env или scripts/.env.deploy). Каждую можно задать и с префиксом
+# PAI_ (procure-ai namespace) — напр. PAI_B24_SSH_HOST:
 #   B24_SSH_HOST          — хост сервера Bitrix24 (обязательно)
 #   B24_SSH_USER          — пользователь SSH (обязательно)
 #   B24_SSH_PORT          — порт SSH (по умолчанию 22)
 #   B24_CONTROLLERS_PATH  — абсолютный путь до .../shef.purchase/lib/controllers
 #                           (обязательно)
+#   B24_SSH_PASS          — пароль SSH (опц.; нужен пакет sshpass). Если не задан —
+#                           используется SSH-ключ/agent. Пароль передаётся через
+#                           SSHPASS (sshpass -e), не светится в списке процессов.
 #
 # Использование:
 #   ./scripts/deploy-b24-controller.sh            # dry-run (ничего не меняет)
@@ -35,9 +39,16 @@ if [ -f "$SCRIPT_DIR/.env.deploy" ]; then
   set -a; . "$SCRIPT_DIR/.env.deploy"; set +a
 fi
 
-: "${B24_SSH_HOST:?B24_SSH_HOST не задан (env или scripts/.env.deploy)}"
-: "${B24_SSH_USER:?B24_SSH_USER не задан}"
-: "${B24_CONTROLLERS_PATH:?B24_CONTROLLERS_PATH не задан}"
+# Алиасы с префиксом PAI_ (procure-ai namespace), если базовые имена не заданы.
+B24_SSH_HOST="${B24_SSH_HOST:-${PAI_B24_SSH_HOST:-}}"
+B24_SSH_USER="${B24_SSH_USER:-${PAI_B24_SSH_USER:-}}"
+B24_SSH_PORT="${B24_SSH_PORT:-${PAI_B24_SSH_PORT:-}}"
+B24_CONTROLLERS_PATH="${B24_CONTROLLERS_PATH:-${PAI_B24_CONTROLLERS_PATH:-}}"
+B24_SSH_PASS="${B24_SSH_PASS:-${PAI_B24_SSH_PASS:-}}"
+
+: "${B24_SSH_HOST:?B24_SSH_HOST/PAI_B24_SSH_HOST не задан (env или scripts/.env.deploy)}"
+: "${B24_SSH_USER:?B24_SSH_USER/PAI_B24_SSH_USER не задан}"
+: "${B24_CONTROLLERS_PATH:?B24_CONTROLLERS_PATH/PAI_B24_CONTROLLERS_PATH не задан}"
 B24_SSH_PORT="${B24_SSH_PORT:-22}"
 
 if [ ! -d "$SRC_DIR" ]; then
@@ -65,8 +76,19 @@ echo "Назначение: ${B24_SSH_USER}@${B24_SSH_HOST} (порт ${B24_SSH_
 echo "  controllers → ${B24_CONTROLLERS_PATH}/"
 echo "  config.php  → ${B24_LIB_PATH}/"
 
+# Транспорт SSH. С паролем — через sshpass -e (пароль из env SSHPASS, не в argv).
+SSH_CMD="ssh -p ${B24_SSH_PORT}"
+if [ -n "${B24_SSH_PASS:-}" ]; then
+  if ! command -v sshpass >/dev/null 2>&1; then
+    echo "Задан B24_SSH_PASS, но нет sshpass. Установите sshpass или используйте SSH-ключ." >&2
+    exit 1
+  fi
+  export SSHPASS="$B24_SSH_PASS"
+  SSH_CMD="sshpass -e ssh -p ${B24_SSH_PORT}"
+fi
+
 # rsync БЕЗ --delete — чужие файлы не трогаются.
-RSYNC_BASE=(-avz --no-perms --omit-dir-times -e "ssh -p ${B24_SSH_PORT}")
+RSYNC_BASE=(-avz --no-perms --omit-dir-times -e "$SSH_CMD")
 
 if [ "${APPLY:-0}" = "1" ]; then
   echo ">>> APPLY=1 — реальная выкладка"
