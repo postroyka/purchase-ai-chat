@@ -28,7 +28,14 @@ if (Test-Path $envFile) {
         $t = $line.Trim()
         if ($t -and -not $t.StartsWith('#') -and $t.Contains('=')) {
             $k, $v = $t.Split('=', 2)
-            $FileEnv[$k.Trim()] = $v.Trim()
+            $val = $v.Trim()
+            # Снимаем обрамляющие кавычки (значения с пробелами в bash требуют
+            # кавычек при source; здесь убираем их, чтобы файл был совместим с обоими).
+            if ($val.Length -ge 2 -and
+                (($val[0] -eq '"' -and $val[-1] -eq '"') -or ($val[0] -eq "'" -and $val[-1] -eq "'"))) {
+                $val = $val.Substring(1, $val.Length - 2)
+            }
+            $FileEnv[$k.Trim()] = $val
         }
     }
 }
