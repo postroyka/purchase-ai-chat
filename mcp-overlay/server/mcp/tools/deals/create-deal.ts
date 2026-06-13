@@ -58,6 +58,17 @@ async function resolveWithinUploads(filePath: string): Promise<string> {
   return real
 }
 
+/**
+ * Create a procurement deal in Bitrix24 from an extracted document.
+ *
+ * Calls `shef.purchase.api.procuredeal.create` over the webhook (callV2): funnel
+ * «Закупки» (category 1), stage C1:NEW, currency BYN; line items written with
+ * TAX_RATE=20 and TAX_INCLUDED=Y (the per-unit document price is excl. VAT — see
+ * docs/PROJECT_BRIEF.md, intentional). Reads `filePath` from the read-only uploads
+ * volume and base64-encodes it for the deal attachment (so the binary never enters
+ * the LLM context), and writes `processingLog` to the deal. No duplicate check —
+ * a deal is always created.
+ */
 export default defineMcpTool({
   name: 'b24_pst_crm_create_deal',
   description:
