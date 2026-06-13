@@ -89,6 +89,7 @@ export default defineMcpTool({
     contractId: z.string().min(1).describe('Bitrix24 contract id — required: a procurement deal must reference a contract (агент в шаге 3 останавливается, если договор не найден)'),
     responsibleUserId: z.string().min(1).describe('Bitrix24 user id to assign the deal to'),
     filePath: z.string().min(1).describe('Absolute path to the source document (FILE_PATH) — must reside inside the uploads directory. The MCP server reads it and base64-encodes it for attachment.'),
+    documentDate: z.string().optional().describe('Дата документа (счёта) в формате d.m.Y (напр. "15.03.2025") — ставится как дата начала сделки (BEGINDATE) на 09:00. Если не указана — текущая дата-время.'),
     processingLog: z.string().describe('Processing log text — written to deal COMMENTS field and posted as a timeline comment'),
     items: z.array(z.object({
       productId: z.string().optional().describe('Bitrix24 product id if matched'),
@@ -102,7 +103,7 @@ export default defineMcpTool({
       quantity: z.number().int().positive().describe('Quantity from document (integer — unit is always шт)'),
     })).min(1).describe('Line items. Unit is always шт regardless of document.'),
   },
-  handler: async ({ supplierId, contractId, responsibleUserId, filePath, processingLog, items }) => {
+  handler: async ({ supplierId, contractId, responsibleUserId, filePath, documentDate, processingLog, items }) => {
     let fileContent: string
     try {
       const safePath = await resolveWithinUploads(filePath)
@@ -138,10 +139,11 @@ export default defineMcpTool({
       items,
     }
     params.contractId = contractId // mandatory per schema (min(1)) — always present
+    if (documentDate) params.documentDate = documentDate
 
     const result = await callV2<DealResult>(
       b24,
-      'shef.purchase.api.procuredeal.create',
+      'shef:purchase.api.procuredeal.create',
       params,
       'Failed to create procurement deal',
     )

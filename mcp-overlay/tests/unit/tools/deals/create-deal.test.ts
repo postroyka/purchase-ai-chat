@@ -45,7 +45,7 @@ describe('b24_pst_crm_create_deal', () => {
     const payload = JSON.parse(result.content[0].text)
 
     expect(fake.v2Call).toHaveBeenCalledWith({
-      method: 'shef.purchase.api.procuredeal.create',
+      method: 'shef:purchase.api.procuredeal.create',
       params: expect.objectContaining({
         supplierId: '10',
         responsibleUserId: '1',
@@ -67,6 +67,21 @@ describe('b24_pst_crm_create_deal', () => {
     expect((fake.v2Call.mock.calls[0]![0] as any).params.contractId).toBe('77')
   })
 
+  it('includes documentDate when provided', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ dealId: 1 }))
+
+    await (tool as any).handler({ ...baseInput, filePath: pdfPath, documentDate: '15.03.2025' })
+
+    expect((fake.v2Call.mock.calls[0]![0] as any).params.documentDate).toBe('15.03.2025')
+  })
+
+  it('omits documentDate when not provided', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ dealId: 1 }))
+
+    await (tool as any).handler({ ...baseInput, filePath: pdfPath })
+
+    expect((fake.v2Call.mock.calls[0]![0] as any).params).not.toHaveProperty('documentDate')
+  })
   it('returns file_read_failed and does NOT call B24 on path traversal', async () => {
     const result = await (tool as any).handler({ ...baseInput, filePath: join(uploadsDir, '../../etc/passwd') })
     const payload = JSON.parse(result.content[0].text)

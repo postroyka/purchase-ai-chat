@@ -24,7 +24,7 @@ describe('b24_pst_crm_find_product', () => {
     const payload = JSON.parse(result.content[0].text)
 
     expect(fake.v2Call).toHaveBeenCalledWith({
-      method: 'shef.purchase.api.procureproduct.findbyvendorcode',
+      method: 'shef:purchase.api.procureproduct.findbyvendorcode',
       params: { vendorCode: 'SKU-001' },
     })
     expect(payload).toMatchObject({ id: 15, name: 'Болт М8х20' })
