@@ -44,7 +44,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `NUXT_PUBLIC_BACKEND_TOKEN` | app | ✅ | Токен, которым UI зовёт бэкенд из браузера — **должен совпадать с `BACKEND_API_TOKEN`** |
 | `REDIS_PASSWORD` | app/redis | ✅ | Пароль Redis (тот же подставляется в `REDIS_URL` в compose) |
 | `NUXT_MCP_AUTH_TOKEN` | mcp | ✅ | Bearer-токен для `/mcp` endpoint |
-| `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Вебхук Bitrix24: вызывает контроллеры `shef.purchase.api.procure*` + стандартные `crm.*` |
+| `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Вебхук Bitrix24: вызывает контроллеры `shef:purchase.api.procure*` + стандартные `crm.*` |
 | `PUBLIC_PAGE_BASIC_AUTH_PASS` | app | ✅ | Пароль публичной страницы |
 | `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | app | ✅¹ | Домен приложения для nginx-proxy + acme |
 | `LETSENCRYPT_EMAIL` | acme | ✅¹ | E-mail для Let's Encrypt (глобально в acme-companion) |
@@ -86,7 +86,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 >
 > **Интеграция с Bitrix24** реализована REST-контроллерами в живом модуле коробки `shef.purchase`
 > (исходники — папка `b24-controller/`, деплой `make deploy-b24`). Методы доступны как
-> `shef.purchase.api.procure*`; MCP-сервер вызывает их через стандартный вебхук
+> `shef:purchase.api.procure*`; MCP-сервер вызывает их через стандартный вебхук
 > `NUXT_BITRIX24_WEBHOOK_URL` — никакого отдельного URL контроллера не нужно.
 
 ## Мониторинг задач (API)
@@ -230,11 +230,9 @@ cd ui      && pnpm install && pnpm dev               # :3001 (проксируе
 ## Тесты
 
 ```bash
-cd backend && pnpm test           # vitest — upload, auth, jobs-store, agent-runner
+cd backend && pnpm test           # vitest — upload, auth, jobs-store
 cd mcp     && pnpm test           # vitest — инструменты, mcp-auth, naming
 cd ui      && pnpm lint && pnpm build
-make ui-smoke                     # ESLint + nuxt typecheck фронта без полной сборки
-make check-agent-stdin            # регрессия #58: claude --print читает промпт из stdin
 ```
 
 ## Деплой
@@ -369,4 +367,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-13 (PR #86 — раздел «Тесты»: `make ui-smoke` + `check-agent-stdin` (регресс #58); PR #85 — упрощение сайдбара (убраны поиск, внешние ссылки, нижнее меню), переключатель темы в хедере, guard ухода со страницы при активной загрузке; PR #82 — `make deploy-images` (ручной деплой образов в GHCR без Actions); PR #81 — `workflow_dispatch` для Deploy; PR #79 — переезд дашборда `/metrics` на Nuxt/b24ui + живой курс USD→BYN из НБРБ (фолбэк `USD_BYN_RATE`); PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef.purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
+*Last reviewed: 2026-06-13 (PR #89 — рабочая REST-интеграция закупок: `shef:purchase.api.*` separator, by-ref `CCrmDeal::Update`/таймлайн, `BEGINDATE`/`documentDate`, гомоглиф-устойчивый и быстрый 1-в-1 поиск артикула/договора, кроссплатформенный smoke + эталонный счёт; PR #82 — `make deploy-images` (ручной деплой образов в GHCR без Actions); PR #81 — `workflow_dispatch` для Deploy; PR #79 — переезд дашборда `/metrics` на Nuxt/b24ui + живой курс USD→BYN из НБРБ (фолбэк `USD_BYN_RATE`); PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef:purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
