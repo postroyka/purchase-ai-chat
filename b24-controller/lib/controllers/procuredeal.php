@@ -194,7 +194,11 @@ class ProcureDeal
 			$fileArray = \CRestUtil::saveFile([$fileName, $fileContent]);
 			if(is_array($fileArray))
 			{
-				if(!$deal->Update($dealId, ['UF_CRM_DEAL_SH_PRCHS_AI_FILE' => $fileArray]))
+				// CCrmDeal::Update() принимает $arFields ПО ССЫЛКЕ (array &$arFields) —
+				// нельзя передать литерал массива, только переменную (иначе фатальная
+				// ошибка «Cannot pass parameter 2 by reference»).
+				$fileFields = ['UF_CRM_DEAL_SH_PRCHS_AI_FILE' => $fileArray];
+				if(!$deal->Update($dealId, $fileFields))
 				{
 					// Файл — не критичная часть сделки: фиксируем как warning.
 					$warnings[] = 'file_attach_failed';
