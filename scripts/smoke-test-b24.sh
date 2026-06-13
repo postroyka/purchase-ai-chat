@@ -2,18 +2,30 @@
 #
 # Smoke-тест PHP REST-контроллеров procure-ai на живой коробке Bitrix24.
 #
-# Использование:
-#   WEBHOOK_URL=https://your-b24.domain/rest/1/TOKEN/ bash scripts/smoke-test-b24.sh
+# Использование (вариант 1 — заполнить scripts/.env.deploy один раз):
+#   cp scripts/.env.deploy.example scripts/.env.deploy   # затем заполнить
+#   bash scripts/smoke-test-b24.sh
 #
-# Для настройки конкретных ID отредактируйте переменные SUPPLIER_ID / VENDOR_CODE ниже
-# или передайте их как env: SUPPLIER_ID=42 WEBHOOK_URL=... bash smoke-test-b24.sh
+# Использование (вариант 2 — через env прямо в команде):
+#   WEBHOOK_URL=https://your-b24/rest/1/TOKEN/ SUPPLIER_UNP=100059180 \
+#     SUPPLIER_ID=42 VENDOR_CODE=ART-12345 bash scripts/smoke-test-b24.sh
 #
 set -euo pipefail
 
-B24="${WEBHOOK_URL:?Задайте WEBHOOK_URL=https://your-portal/rest/1/TOKEN/}"
+# Подхватываем scripts/.env.deploy, если он есть (там WEBHOOK_URL, SUPPLIER_*,
+# VENDOR_CODE и т.д.) — чтобы не набирать длинную команду с env каждый раз.
+# Значения из файла применяются как есть; для разового переопределения
+# отредактируйте файл (он gitignored).
+_ENV_FILE="$(dirname "$0")/.env.deploy"
+if [ -f "$_ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  set -a; . "$_ENV_FILE"; set +a
+fi
+
+B24="${WEBHOOK_URL:?Задайте WEBHOOK_URL (в scripts/.env.deploy или env): https://your-portal/rest/1/TOKEN/}"
 B24="${B24%/}"
 
-# --- Параметры под вашу коробку ---
+# --- Параметры под вашу коробку (дефолты, если не заданы в env/.env.deploy) ---
 SUPPLIER_ID="${SUPPLIER_ID:-42}"
 VENDOR_CODE="${VENDOR_CODE:-ART-12345}"
 RESPONSIBLE_USER_ID="${RESPONSIBLE_USER_ID:-1}"
@@ -32,7 +44,9 @@ b24() {
   http="${resp##*$'\n'}"      # последняя строка — код
   payload="${resp%$'\n'*}"    # всё до неё — тело
   echo "HTTP ${http}"
-  echo "${payload}" | python3 -m json.tool 2>/dev/null || echo "${payload}"
+  # ensure_ascii=False — чтобы кириллица из Bitrix печаталась как текст,
+  # а не \uXXXX (json.tool по умолчанию это экранирует).
+  echo "${payload}" | python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin), ensure_ascii=False, indent=2))' 2>/dev/null || echo "${payload}"
   echo ""
 }
 

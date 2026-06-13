@@ -1,22 +1,59 @@
 # Smoke-тест PHP REST-контроллеров procure-ai на живой коробке Bitrix24.
 #
-# Использование:
-#   $env:WEBHOOK_URL = "https://your-b24.domain/rest/1/TOKEN/"
-#   .\scripts\smoke-test-b24.ps1
+# Использование (вариант 1 — заполнить scripts/.env.deploy один раз):
+#   Copy-Item scripts/.env.deploy.example scripts/.env.deploy   # затем заполнить
+#   ./scripts/smoke-test-b24.ps1
 #
-# Или с параметрами:
-#   .\scripts\smoke-test-b24.ps1 -WebhookUrl "https://..." -SupplierId 42
+# Использование (вариант 2 — через env / параметры):
+#   $env:WEBHOOK_URL = "https://your-b24/rest/1/TOKEN/"; ./scripts/smoke-test-b24.ps1
+#   ./scripts/smoke-test-b24.ps1 -WebhookUrl "https://..." -SupplierId 42
+#
+# Приоритет значений: параметр командной строки → $env: → scripts/.env.deploy → дефолт.
 
 param(
-    [string]$WebhookUrl      = $env:WEBHOOK_URL,
-    [int]   $SupplierId      = $(if ($env:SUPPLIER_ID) { [int]$env:SUPPLIER_ID } else { 42 }),
-    [string]$VendorCode      = $(if ($env:VENDOR_CODE) { $env:VENDOR_CODE } else { "ART-12345" }),
-    [int]   $ResponsibleUser = $(if ($env:RESPONSIBLE_USER_ID) { [int]$env:RESPONSIBLE_USER_ID } else { 1 }),
-    [string]$SupplierUnp     = $(if ($env:SUPPLIER_UNP) { $env:SUPPLIER_UNP } else { "100059180" })
+    [string]$WebhookUrl,
+    [int]   $SupplierId,
+    [string]$VendorCode,
+    [int]   $ResponsibleUser,
+    [string]$SupplierUnp
 )
 
+# Читаем scripts/.env.deploy (KEY=VALUE), если есть, в хэш-таблицу $FileEnv.
+$FileEnv = @{}
+$envFile = Join-Path $PSScriptRoot '.env.deploy'
+if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+        $t = $line.Trim()
+        if ($t -and -not $t.StartsWith('#') -and $t.Contains('=')) {
+            $k, $v = $t.Split('=', 2)
+            $FileEnv[$k.Trim()] = $v.Trim()
+        }
+    }
+}
+
+# Резолв одного значения: параметр → $env: → .env.deploy → дефолт.
+function Resolve-Val($paramVal, $envName, $default) {
+    if ($paramVal) { return $paramVal }
+    $envVal = [Environment]::GetEnvironmentVariable($envName)
+    if ($envVal)                         { return $envVal }
+    if ($FileEnv.ContainsKey($envName))  { return $FileEnv[$envName] }
+    return $default
+}
+
+# Bitrix отдаёт JSON с \uXXXX-экранированием кириллицы; ConvertTo-Json и тело
+# ошибки тоже бывают в \uXXXX. Раскодируем в читаемый текст.
+function Show-Readable($s) {
+    [regex]::Replace($s, '\\u([0-9a-fA-F]{4})', { param($m) [char][int]('0x' + $m.Groups[1].Value) })
+}
+
+$WebhookUrl      = Resolve-Val $WebhookUrl      'WEBHOOK_URL'         $null
+$SupplierId      = [int](Resolve-Val $SupplierId      'SUPPLIER_ID'         42)
+$VendorCode      =      Resolve-Val $VendorCode      'VENDOR_CODE'         'ART-12345'
+$ResponsibleUser = [int](Resolve-Val $ResponsibleUser 'RESPONSIBLE_USER_ID' 1)
+$SupplierUnp     =      Resolve-Val $SupplierUnp     'SUPPLIER_UNP'        '100059180'
+
 if (-not $WebhookUrl) {
-    throw "Задайте WEBHOOK_URL: `$env:WEBHOOK_URL = 'https://your-portal/rest/1/TOKEN/'"
+    throw "Задайте WEBHOOK_URL (в scripts/.env.deploy, env или -WebhookUrl): https://your-portal/rest/1/TOKEN/"
 }
 $B24 = $WebhookUrl.TrimEnd('/')
 
@@ -32,7 +69,7 @@ function Invoke-B24 {
     try {
         $resp = Invoke-RestMethod -Uri "$B24/$Method" -Method POST `
             -ContentType "application/json" -Body $json
-        $resp | ConvertTo-Json -Depth 10
+        Show-Readable ($resp | ConvertTo-Json -Depth 10)
     }
     catch {
         # Bitrix отдаёт ошибки валидации как HTTP 4xx с JSON-телом
@@ -42,7 +79,7 @@ function Invoke-B24 {
         $color   = if ($ExpectError) { 'DarkYellow' } else { 'Red' }
         $label   = if ($ExpectError) { '(Ожидаемая ошибка)' } else { 'HTTP Error' }
         if ($errBody) {
-            Write-Host "$label`: $errBody" -ForegroundColor $color
+            Write-Host "$label`: $(Show-Readable $errBody)" -ForegroundColor $color
         }
         else {
             Write-Host "$label`: $_" -ForegroundColor $color
