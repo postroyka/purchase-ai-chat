@@ -35,11 +35,17 @@ function Invoke-B24 {
         $resp | ConvertTo-Json -Depth 10
     }
     catch {
-        if ($ExpectError) {
-            Write-Host "(Ожидаемая ошибка: $_)" -ForegroundColor DarkYellow
+        # Bitrix отдаёт ошибки валидации как HTTP 4xx с JSON-телом
+        # ({"error":"sup:011",...}). В PowerShell это тело лежит в
+        # $_.ErrorDetails.Message — показываем его, а не только текст исключения.
+        $errBody = $_.ErrorDetails.Message
+        $color   = if ($ExpectError) { 'DarkYellow' } else { 'Red' }
+        $label   = if ($ExpectError) { '(Ожидаемая ошибка)' } else { 'HTTP Error' }
+        if ($errBody) {
+            Write-Host "$label`: $errBody" -ForegroundColor $color
         }
         else {
-            Write-Host "HTTP Error: $_" -ForegroundColor Red
+            Write-Host "$label`: $_" -ForegroundColor $color
         }
     }
 }

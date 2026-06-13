@@ -22,13 +22,17 @@ RESPONSIBLE_USER_ID="${RESPONSIBLE_USER_ID:-1}"
 echo_sep() { echo ""; echo "===== $1 ====="; }
 
 b24() {
-  local method="$1" body="$2"
-  curl -sf -X POST "${B24}/${method}" \
+  local method="$1" body="$2" resp http payload
+  # Без -f: Bitrix отдаёт ошибки валидации как HTTP 4xx с JSON-телом
+  # ({"error":"sup:011",...}); -f это тело выбросил бы, и негативные кейсы
+  # ничего не показывали бы. -w добавляет HTTP-код последней строкой.
+  resp=$(curl -s -w $'\n%{http_code}' -X POST "${B24}/${method}" \
     -H "Content-Type: application/json" \
-    -d "${body}" | python3 -m json.tool 2>/dev/null || \
-    curl -sf -X POST "${B24}/${method}" \
-      -H "Content-Type: application/json" \
-      -d "${body}"
+    -d "${body}")
+  http="${resp##*$'\n'}"      # последняя строка — код
+  payload="${resp%$'\n'*}"    # всё до неё — тело
+  echo "HTTP ${http}"
+  echo "${payload}" | python3 -m json.tool 2>/dev/null || echo "${payload}"
   echo ""
 }
 
