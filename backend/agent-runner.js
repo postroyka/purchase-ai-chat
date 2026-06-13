@@ -313,7 +313,12 @@ function spawnClaude({
       '--dangerously-skip-permissions',
     ];
     if (model) args.push('--model', model);
-    args.push(userMessage);
+    // NB: userMessage (incl. DOCUMENT_TEXT — up to ~100k chars) is intentionally NOT pushed as
+    // an argv argument. A single Cyrillic-heavy value (UTF-8 ≈ 2 bytes/char) can exceed the
+    // Linux per-argument limit MAX_ARG_STRLEN (128 KiB) and crash the spawn with E2BIG on the
+    // very target scenario (large RU document). It is written to the child's stdin below
+    // (`claude --print` reads the prompt from stdin when no positional prompt is given). Bonus:
+    // the untrusted document text no longer appears in `ps aux`.
 
     // On Windows, claude is a .cmd shim that node can't spawn directly — resolve
     // the real JS entrypoint and run it via node. No-op on Linux/macOS.
@@ -323,8 +328,15 @@ function spawnClaude({
     const spawnOpts = { env: buildAgentEnv(), stdio: ['pipe', 'pipe', 'pipe'] };
     if (cwd) spawnOpts.cwd = cwd;
     const proc = spawnFn(command, [...prefixArgs, ...args], spawnOpts);
-    // claude CLI 2.x waits ~3s for stdin when not attached to a TTY, then exits with code 1.
-    // Closing stdin immediately signals EOF so the CLI proceeds without waiting.
+    // Feed the prompt via stdin, then EOF. (Without any input the CLI waits ~3s for stdin on a
+    // non-TTY before proceeding; here we hand it the prompt and close.) Explicit 'utf8' documents
+    // intent and guards a future non-string userMessage from a silent Latin-1 default.
+    proc.stdin.on('error', (err) => {
+      // EPIPE is expected if the CLI exits before draining stdin (its exit code is handled in the
+      // close handler). Surface anything else instead of swallowing it silently.
+      if (err.code !== 'EPIPE') console.warn(`${tag} stdin error: ${err.code || err.message}`);
+    });
+    proc.stdin.write(userMessage, 'utf8');
     proc.stdin.end();
 
     let stdout = '';

@@ -139,6 +139,10 @@ describe('b24_pst_crm_create_deal', () => {
     expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 0 }]).success).toBe(false)
   })
 
+  it('rejects fractional quantity via Zod schema (unit is always шт → integer)', () => {
+    expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 2.5 }]).success).toBe(false)
+  })
+
   it('rejects empty supplierId via Zod schema', () => {
     expect((tool as any).inputSchema.supplierId.safeParse('').success).toBe(false)
   })
@@ -147,11 +151,12 @@ describe('b24_pst_crm_create_deal', () => {
     expect((tool as any).inputSchema.responsibleUserId.safeParse('').success).toBe(false)
   })
 
-  it('rejects empty filePath via Zod schema', () => {
-    expect((tool as any).inputSchema.filePath.safeParse('').success).toBe(false)
+  it('rejects missing/empty contractId via Zod schema (contract is mandatory — see prompt step 3)', () => {
+    expect((tool as any).inputSchema.contractId.safeParse(undefined).success).toBe(false)
+    expect((tool as any).inputSchema.contractId.safeParse('').success).toBe(false)
   })
 
-  it('accepts contractId being omitted (optional) via Zod schema', () => {
-    expect((tool as any).inputSchema.contractId.safeParse(undefined).success).toBe(true)
+  it('rejects empty filePath via Zod schema', () => {
+    expect((tool as any).inputSchema.filePath.safeParse('').success).toBe(false)
   })
 })

@@ -230,9 +230,11 @@ cd ui      && pnpm install && pnpm dev               # :3001 (проксируе
 ## Тесты
 
 ```bash
-cd backend && pnpm test           # vitest — upload, auth, jobs-store
+cd backend && pnpm test           # vitest — upload, auth, jobs-store, agent-runner
 cd mcp     && pnpm test           # vitest — инструменты, mcp-auth, naming
 cd ui      && pnpm lint && pnpm build
+make ui-smoke                     # ESLint + nuxt typecheck фронта без полной сборки
+make check-agent-stdin            # регрессия #58: claude --print читает промпт из stdin
 ```
 
 ## Деплой
@@ -367,4 +369,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-12 (PR #85 — упрощение сайдбара (убраны поиск, внешние ссылки, нижнее меню), переключатель темы в хедере, guard ухода со страницы при активной загрузке; PR #82 — `make deploy-images` (ручной деплой образов в GHCR без Actions); PR #81 — `workflow_dispatch` для Deploy; PR #79 — переезд дашборда `/metrics` на Nuxt/b24ui + живой курс USD→BYN из НБРБ (фолбэк `USD_BYN_RATE`); PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef.purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
+*Last reviewed: 2026-06-13 (PR #86 — раздел «Тесты»: `make ui-smoke` + `check-agent-stdin` (регресс #58); PR #85 — упрощение сайдбара (убраны поиск, внешние ссылки, нижнее меню), переключатель темы в хедере, guard ухода со страницы при активной загрузке; PR #82 — `make deploy-images` (ручной деплой образов в GHCR без Actions); PR #81 — `workflow_dispatch` для Deploy; PR #79 — переезд дашборда `/metrics` на Nuxt/b24ui + живой курс USD→BYN из НБРБ (фолбэк `USD_BYN_RATE`); PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef.purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*

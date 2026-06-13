@@ -3,13 +3,25 @@ import { EventEmitter } from 'node:events';
 import { runAgent, buildMcpConfig, extractJson, resolveClaudeSpawn } from '../agent-runner.js';
 import { platform } from 'node:os';
 
+// claude reads the user prompt from STDIN (not argv). A capturing mock stdin lets tests assert
+// the prompt content; `promptOf` reads back what was written to the spawned process's stdin.
+function mockStdin() {
+  // `on` is a stub: production registers an 'error' handler (EPIPE guard) we don't emit in unit
+  // tests, so we only need to accept the registration. `write` captures the prompt into _data.
+  const stdin = { _data: '', end: vi.fn(), on: vi.fn() };
+  stdin.write = vi.fn((chunk) => { stdin._data += String(chunk); return true; });
+  return stdin;
+}
+// Last spawn call's captured stdin (.at(-1) — robust if a test ever spawns more than once).
+const promptOf = (spawnFn) => spawnFn.mock.results.at(-1).value.stdin._data;
+
 // Helper: create a mock spawn function that simulates a child process.
 function makeMockSpawn({ stdout = '', stderr = '', exitCode = 0, errorCode = null } = {}) {
   return vi.fn(() => {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
-    proc.stdin = { end: vi.fn() };
+    proc.stdin = mockStdin();
     proc.kill = vi.fn((signal) => {
       setImmediate(() => proc.emit('close', null));
     });
@@ -64,17 +76,16 @@ describe('runAgent', () => {
   it('passes file path and responsible user in the user message', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await runAgent('/uploads/invoice.pdf', '42', { ...BASE_CONFIG, spawnFn });
-    const [_bin, args] = spawnFn.mock.calls[0];
-    const promptArg = args[args.length - 1];
-    expect(promptArg).toContain('FILE_PATH: /uploads/invoice.pdf');
-    expect(promptArg).toContain('RESPONSIBLE_USER_ID: 42');
+    const prompt = promptOf(spawnFn);
+    expect(prompt).toContain('FILE_PATH: /uploads/invoice.pdf');
+    expect(prompt).toContain('RESPONSIBLE_USER_ID: 42');
   });
 
   it('injects DOCUMENT_TEXT when server-side extraction returns text', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     const extractFn = async () => ({ text: 'СЧЁТ № 5\nПоставщик: ООО Ромашка, УНП 123456789', method: 'ocr' });
     await runAgent('/uploads/scan.pdf', '42', { ...BASE_CONFIG, spawnFn, extractFn });
-    const prompt = spawnFn.mock.calls[0][1].at(-1);
+    const prompt = promptOf(spawnFn);
     expect(prompt).toContain('DOCUMENT_TEXT');
     expect(prompt).toContain('ООО Ромашка');
     expect(prompt).toContain('FILE_PATH: /uploads/scan.pdf'); // FILE_PATH остаётся для вложения в сделку
@@ -86,7 +97,7 @@ describe('runAgent', () => {
   it('omits DOCUMENT_TEXT when extraction returns null (agent reads FILE_PATH)', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await runAgent('/uploads/x.pdf', '42', { ...BASE_CONFIG, spawnFn }); // BASE_CONFIG.extractFn → null
-    const prompt = spawnFn.mock.calls[0][1].at(-1);
+    const prompt = promptOf(spawnFn);
     expect(prompt).not.toContain('DOCUMENT_TEXT');
     expect(prompt).toContain('FILE_PATH: /uploads/x.pdf');
   });
@@ -96,7 +107,7 @@ describe('runAgent', () => {
     const extractFn = async () => { throw new Error('pdftotext boom'); };
     const result = await runAgent('/uploads/x.pdf', '42', { ...BASE_CONFIG, spawnFn, extractFn });
     expect(result).toMatchObject({ deal: { dealId: 'd-7' } });
-    expect(spawnFn.mock.calls[0][1].at(-1)).toContain('FILE_PATH: /uploads/x.pdf');
+    expect(promptOf(spawnFn)).toContain('FILE_PATH: /uploads/x.pdf');
   });
 
   it('includes --bare, --print, --output-format json, --dangerously-skip-permissions flags', async () => {
@@ -110,15 +121,18 @@ describe('runAgent', () => {
     expect(args).toContain('--dangerously-skip-permissions');
   });
 
-  it('denies dangerous tools via --disallowedTools and keeps the prompt last', async () => {
+  it('denies dangerous tools via --disallowedTools; prompt travels via stdin (not argv)', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
     const [_bin, args] = spawnFn.mock.calls[0];
     const idx = args.indexOf('--disallowedTools');
     expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toContain('Bash');             // single comma-separated value
-    expect(args[idx + 2]).toMatch(/^--/);                // followed by a flag, not the prompt
-    expect(args[args.length - 1]).toContain('FILE_PATH:'); // prompt stays the final positional arg
+    expect(args[idx + 1]).toContain('Bash'); // single comma-separated value
+    expect(args[idx + 2]).toMatch(/^--/);    // followed by a flag
+    // The prompt is fed via stdin now — the user message must NOT appear in argv. (The system
+    // prompt arg legitimately mentions the bare token "FILE_PATH:", so assert on the value.)
+    expect(args.join(' ')).not.toContain('FILE_PATH: /f.pdf');
+    expect(promptOf(spawnFn)).toContain('FILE_PATH: /f.pdf');
   });
 
   it('passes --model when model is configured', async () => {
@@ -188,15 +202,25 @@ describe('runAgent', () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
-  it('closes stdin immediately after spawn', async () => {
-    let capturedProc;
-    const spawnFn = vi.fn((...args) => {
-      const base = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) })(...args);
-      capturedProc = base;
-      return base;
-    });
-    await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
-    expect(capturedProc.stdin.end).toHaveBeenCalled();
+  it('writes the prompt to stdin and closes it (not via argv)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await runAgent('/uploads/f.pdf', '7', { ...BASE_CONFIG, spawnFn });
+    const proc = spawnFn.mock.results[0].value;
+    expect(proc.stdin.write).toHaveBeenCalled();
+    expect(proc.stdin.end).toHaveBeenCalled();
+    expect(proc.stdin._data).toContain('FILE_PATH: /uploads/f.pdf');
+  });
+
+  it('passes a very large DOCUMENT_TEXT via stdin, never as an argv argument (E2BIG guard)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    // ~150k Cyrillic chars ≈ 300 KB UTF-8 — would blow past Linux MAX_ARG_STRLEN (128 KiB)
+    // if passed as a single argv argument (the bug this fixes).
+    const big = 'я'.repeat(150_000);
+    const extractFn = async () => ({ text: big, method: 'ocr' });
+    await runAgent('/uploads/big.pdf', '7', { ...BASE_CONFIG, spawnFn, extractFn });
+    const [, args] = spawnFn.mock.calls[0];
+    expect(args.join(' ')).not.toContain(big); // not smuggled into any arg
+    expect(promptOf(spawnFn).includes(big)).toBe(true); // it went to stdin (Cyrillic intact)
   });
 
   it('does not pass NUXT_MCP_AUTH_TOKEN in process args (uses temp file)', async () => {
@@ -213,7 +237,7 @@ describe('runAgent', () => {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
-    proc.stdin = { end: vi.fn() };
+    proc.stdin = mockStdin();
     proc.kill = vi.fn((signal) => {
       if (signal === 'SIGTERM') setImmediate(() => proc.emit('close', null));
     });
@@ -234,7 +258,7 @@ describe('runAgent', () => {
       const proc = new EventEmitter();
       proc.stdout = new EventEmitter();
       proc.stderr = new EventEmitter();
-      proc.stdin = { end: vi.fn() };
+      proc.stdin = mockStdin();
       // Ignore SIGTERM; only exit once force-killed.
       proc.kill = vi.fn((signal) => {
         if (signal === 'SIGKILL') queueMicrotask(() => proc.emit('close', null));

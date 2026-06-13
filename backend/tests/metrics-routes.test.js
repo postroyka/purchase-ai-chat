@@ -61,7 +61,7 @@ function makeAgentSpawn({ result = { status: 'stub' }, cost = 0.05 } = {}) {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
-    proc.stdin = { end: vi.fn() };
+    proc.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
     proc.kill = vi.fn();
     setImmediate(() => {
       proc.stdout.emit('data', JSON.stringify({
@@ -174,7 +174,7 @@ function makeProcMock(emit) {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
-    proc.stdin = { end: vi.fn() };
+    proc.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
     proc.kill = vi.fn();
     setImmediate(() => emit(proc));
     return proc;

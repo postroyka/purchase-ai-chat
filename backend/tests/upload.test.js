@@ -24,7 +24,7 @@ function makeMockAgentSpawn() {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
-    proc.stdin = { end: vi.fn() };
+    proc.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
     proc.kill = vi.fn();
     setImmediate(() => {
       proc.stdout.emit('data', JSON.stringify({
@@ -43,7 +43,7 @@ function makeFailingAgentSpawn() {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
-    proc.stdin = { end: vi.fn() };
+    proc.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
     proc.kill = vi.fn();
     setImmediate(() => {
       proc.stderr.emit('data', 'agent boom');
@@ -61,7 +61,7 @@ function makeSequencedAgentSpawn(outcomes) {
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
-    proc.stdin = { end: vi.fn() };
+    proc.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
     proc.kill = vi.fn();
     setImmediate(() => {
       if (ok) {

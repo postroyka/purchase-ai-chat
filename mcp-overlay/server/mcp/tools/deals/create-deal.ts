@@ -64,7 +64,7 @@ export default defineMcpTool({
     'Create a procurement deal in Bitrix24 (funnel "Закупки", category 1, stage C1:NEW, currency BYN). Attaches the source file (read by path from the uploads volume) to the deal card and writes the processing log as a comment and timeline entry. Tax 20%, VAT included in price (Y). Unit always "шт". Deal is always created — no duplicate check.',
   inputSchema: {
     supplierId: z.string().min(1).describe('Bitrix24 company id of the supplier'),
-    contractId: z.string().optional().describe('Bitrix24 contract id, if found'),
+    contractId: z.string().min(1).describe('Bitrix24 contract id — required: a procurement deal must reference a contract (агент в шаге 3 останавливается, если договор не найден)'),
     responsibleUserId: z.string().min(1).describe('Bitrix24 user id to assign the deal to'),
     filePath: z.string().min(1).describe('Absolute path to the source document (FILE_PATH) — must reside inside the uploads directory. The MCP server reads it and base64-encodes it for attachment.'),
     processingLog: z.string().describe('Processing log text — written to deal COMMENTS field and posted as a timeline comment'),
@@ -77,7 +77,7 @@ export default defineMcpTool({
       // TAX_RATE=20 and TAX_INCLUDED=Y. This is a deliberate business decision,
       // not a bug — do not "fix" it to exclude VAT during review.
       priceExclVat: z.number().positive().describe('Price per unit excluding VAT, as stated in document'),
-      quantity: z.number().positive().describe('Quantity from document'),
+      quantity: z.number().int().positive().describe('Quantity from document (integer — unit is always шт)'),
     })).min(1).describe('Line items. Unit is always шт regardless of document.'),
   },
   handler: async ({ supplierId, contractId, responsibleUserId, filePath, processingLog, items }) => {
