@@ -116,7 +116,7 @@ export default defineMcpTool({
       processingLog,
       items,
     }
-    if (contractId) params.contractId = contractId
+    params.contractId = contractId // обязателен (z.string().min(1)) — guard не нужен
     if (documentDate) params.documentDate = documentDate
 
     const result = await callV2<DealResult>(

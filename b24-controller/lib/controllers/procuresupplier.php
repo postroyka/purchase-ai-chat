@@ -50,7 +50,7 @@ class ProcureSupplier
 		// Нормализация «грязного» ввода от OCR: убираем пробелы и дефисы (УНП РБ —
 		// 9 цифр подряд). Согласовано с MCP-инструментом find-supplier (#102), где
 		// та же нормализация выполняется перед валидацией.
-		$unp = (string)preg_replace('/[\s\-]+/u', '', $unp);
+		$unp = (string)preg_replace('/[\s\x{A0}\-]+/u', '', $unp);
 		if($unp === '')
 		{
 			$this->addError(new Error('Пустой УНП', 'sup:010'));
