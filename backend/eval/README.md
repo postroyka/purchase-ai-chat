@@ -1,4 +1,4 @@
-`Last reviewed: 2026-06-13`
+`Last reviewed: 2026-06-14`
 
 # Eval-набор агента (#93)
 
