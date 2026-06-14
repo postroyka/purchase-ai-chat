@@ -13,6 +13,14 @@ RUN pnpm install --frozen-lockfile
 COPY mcp/ .
 COPY mcp-overlay/server/ ./server/
 
+# Security (#57): the procurement agent only needs the b24_pst_crm_* tools. The vendored
+# upstream toolkit also ships tasks/users/meta (~32 tools); drop them before the build so
+# the MCP server never registers them. Shrinks the agent's blast radius (a prompt-injection
+# can't reach tasks.*/users.* in the live Bitrix24 webhook scope) and trims tool-schema
+# bloat in every model call. Tools are auto-discovered from this dir — no static imports
+# reference these, so removal is safe (the CI "Validate Docker builds" job verifies).
+RUN rm -rf ./server/mcp/tools/tasks ./server/mcp/tools/users ./server/mcp/tools/meta
+
 RUN pnpm build
 
 FROM node:22.16.0-alpine3.22 AS runtime
