@@ -279,7 +279,7 @@ jobs:
             'b24-controller/lib/controllers/procure*.php' \
             'b24-controller/lib/config.php' || true)
           if [ -n "$changed" ]; then
-            echo "::warning title=PHP-контроллеры — проверьте деплой::Изменены b24-controller. После мержа в main workflow «Deploy b24-controller» выложит их на STAGING (tstb24) автоматически; на PROD (b24) запустите его вручную (workflow_dispatch → environment=production, по аппруву). Docker/Watchtower эти файлы НЕ деплоит. См. b24-controller/README.md."
+            echo "::warning title=PHP-контроллеры — проверьте деплой::Изменены b24-controller. После мержа в main их выложит workflow «Deploy b24-controller» (авто; коробка задаётся repo-secrets). Docker/Watchtower эти файлы НЕ деплоит. См. b24-controller/README.md."
             echo "Изменённые файлы b24-controller:"
             echo "$changed" | sed 's/^/  - /'
           else
