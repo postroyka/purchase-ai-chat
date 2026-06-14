@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto'
 import { createError, defineEventHandler, getHeader, getRequestURL } from 'h3'
 
 export default defineEventHandler((event) => {
@@ -22,6 +22,16 @@ export default defineEventHandler((event) => {
     })
   }
 
+  // Reject a too-short (brute-forceable) token as misconfiguration (#105): the contract is
+  // `openssl rand -hex 32` (64 hex chars). Fail closed rather than guard /mcp with a weak
+  // secret. Same opaque 503 — never reveal token specifics to anonymous callers.
+  if (expected.length < 32) {
+    throw createError({
+      statusCode: 503,
+      statusMessage: 'MCP endpoint is not available',
+    })
+  }
+
   const header = getHeader(event, 'authorization')
   if (!header) {
     throw createError({ statusCode: 401, statusMessage: 'Missing Authorization header' })
@@ -36,9 +46,13 @@ export default defineEventHandler((event) => {
 })
 
 function timingSafeEqual(a: string, b: string): boolean {
-  // crypto.timingSafeEqual throws if the buffers differ in length, so length
-  // is checked first. Length leak is acceptable: our tokens are fixed-length
-  // hex from `openssl rand -hex 32`.
-  if (a.length !== b.length) return false
-  return cryptoTimingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))
+  // Hash both sides to a fixed 32-byte digest so comparison is constant-time with no
+  // length leak (#105) — avoids both crypto.timingSafeEqual's equal-length throw and the
+  // old early length short-circuit. SHA-256 collision resistance ⇒ equal digests mean
+  // equal tokens for auth.
+  return cryptoTimingSafeEqual(sha256(a), sha256(b))
+}
+
+function sha256(s: string): Buffer {
+  return createHash('sha256').update(Buffer.from(s, 'utf8')).digest()
 }

@@ -26,6 +26,10 @@ interface FakeEvent {
 const runtimeConfig: { mcpAuthToken: string } = { mcpAuthToken: '' }
 vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
 
+// Realistic token: 64 hex chars from `openssl rand -hex 32`. Must be ≥32 chars to pass the
+// min-length gate (#105) — a short configured token now fails closed with 503.
+const VALID_TOKEN = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+
 // h3's defineEventHandler wraps the inner function with markers (__is_event__
 // etc.), so the default export's static type is EventHandler. Our mocked
 // version (above) is the identity function — at runtime it IS our handler —
@@ -39,7 +43,7 @@ function callMiddleware(url: string, headers: Record<string, string> = {}) {
 
 describe('mcp-auth middleware', () => {
   beforeEach(() => {
-    runtimeConfig.mcpAuthToken = 'secret-token'
+    runtimeConfig.mcpAuthToken = VALID_TOKEN
   })
 
   it('skips paths outside /mcp', () => {
@@ -99,21 +103,30 @@ describe('mcp-auth middleware', () => {
     )
   })
 
-  it('rejects a token of wrong length', () => {
-    expect(callMiddleware('/mcp', { authorization: 'Bearer secret-token-extra' })).toThrow(
+  it('rejects a token that differs from the configured one', () => {
+    // Hash-based constant-time compare (#105): length no longer matters — any non-matching
+    // token is 401 (no length oracle).
+    expect(callMiddleware('/mcp', { authorization: `Bearer ${VALID_TOKEN}extra` })).toThrow(
       expect.objectContaining({ statusCode: 401 }),
     )
   })
 
+  it('returns 503 when the configured token is too short to be secure (#105)', () => {
+    runtimeConfig.mcpAuthToken = 'short-token' // < 32 chars → fail closed
+    expect(callMiddleware('/mcp', { authorization: 'Bearer short-token' })).toThrow(
+      expect.objectContaining({ statusCode: 503 }),
+    )
+  })
+
   it('accepts the correct bearer token', () => {
-    expect(callMiddleware('/mcp', { authorization: 'Bearer secret-token' })()).toBeUndefined()
+    expect(callMiddleware('/mcp', { authorization: `Bearer ${VALID_TOKEN}` })()).toBeUndefined()
   })
 
   it('accepts case-insensitive Bearer scheme', () => {
-    expect(callMiddleware('/mcp', { authorization: 'bearer secret-token' })()).toBeUndefined()
+    expect(callMiddleware('/mcp', { authorization: `bearer ${VALID_TOKEN}` })()).toBeUndefined()
   })
 
   it('trims surrounding whitespace from the token', () => {
-    expect(callMiddleware('/mcp', { authorization: 'Bearer   secret-token  ' })()).toBeUndefined()
+    expect(callMiddleware('/mcp', { authorization: `Bearer   ${VALID_TOKEN}  ` })()).toBeUndefined()
   })
 })

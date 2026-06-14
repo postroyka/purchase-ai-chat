@@ -678,6 +678,15 @@ describe('Security headers', () => {
     expect(res.headers['referrer-policy']).toBe('no-referrer');
     expect(res.headers['x-powered-by']).toBeUndefined();
   });
+
+  it('sets CSP and HSTS (#105)', async () => {
+    const res = await request(app).get('/health');
+    const csp = res.headers['content-security-policy'];
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("connect-src 'self'");   // anti-exfil lever
+    expect(csp).toContain("object-src 'none'");
+    expect(res.headers['strict-transport-security']).toContain('max-age=63072000');
+  });
 });
 
 // ── processJob error handling ─────────────────────────────────────────────────

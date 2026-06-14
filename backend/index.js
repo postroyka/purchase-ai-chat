@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, createHash } from 'node:crypto';
 import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
 import { createMetrics } from './metrics.js';
@@ -55,14 +55,13 @@ const MIME_SNIFF_BYTES = 4100;
 const MAX_RESULT_BYTES = 100_000;
 const MAX_ERROR_CHARS = 300;
 
-// Constant-time string comparison. Length mismatch short-circuits before timingSafeEqual
-// to avoid the "buffers must have the same length" throw; the length leak is acceptable
-// for fixed-length bearer tokens.
+// Constant-time string comparison with no length leak (#41). Hash both sides to a fixed
+// 32-byte digest first: this sidesteps timingSafeEqual's equal-length requirement WITHOUT
+// the old early `length !== length` short-circuit (which leaked token length via timing).
+// SHA-256 is collision-resistant, so equal digests ⇒ equal inputs for our auth use.
 function safeCompare(a, b) {
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
+  const digest = (s) => createHash('sha256').update(Buffer.from(String(s), 'utf8')).digest();
+  return timingSafeEqual(digest(a), digest(b));
 }
 
 // Best-effort removal of multer's temp files. Used on every early-return error
@@ -169,14 +168,34 @@ export function createApp(config = {}) {
   const app = express();
 
   // Baseline security headers (helmet-equivalent subset). Kept dependency-free so the
-  // prod image still builds with `pnpm install --frozen-lockfile --prod`; can be swapped
-  // for the `helmet` package in the dedicated security PR.
+  // prod image still builds with `pnpm install --frozen-lockfile --prod`.
+  //
+  // CSP (#105): pragmatic, not maximal. 'unsafe-inline' is retained for script/style because
+  // the Nuxt production bundle emits inline hydration/styles — a strict nonce-based policy is
+  // a follow-up. The lever that still bites here is `connect-src 'self'`: it blocks an XSS
+  // payload from POSTing the (currently client-visible) backend token to an attacker origin.
+  // object-src/base-uri/frame-ancestors close clickjacking and base-tag injection.
+  // HSTS (#105): force HTTPS for 2y incl. subdomains (the TLS-terminating proxy must serve it).
+  // NOTE: after deploy, smoke-check that the dashboard still renders under this CSP.
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'self'",
+  ].join('; ');
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-DNS-Prefetch-Control', 'off');
+    res.setHeader('Content-Security-Policy', csp);
+    res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
     next();
   });
 
