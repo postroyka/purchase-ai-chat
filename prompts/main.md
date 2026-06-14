@@ -164,7 +164,7 @@
 
 **Важно**: не вызывай `b24_pst_crm_create_deal`, если любой из предыдущих обязательных шагов завершился ошибкой.
 
-Если инструмент вернул системную ошибку (например, "not implemented" или недоступен) — немедленно останови обработку и верни:
+Если инструмент вернул системную ошибку (например, недоступен, таймаут или `QUERY_AUTH_ERROR`) — немедленно останови обработку и верни:
 ```json
 { "error": "tool_unavailable", "tool": "<имя инструмента>", "message": "<текст ошибки>" }
 ```
@@ -172,4 +172,4 @@
 
 ---
 
-*Last reviewed: 2026-06-13 (PR #86 — корректность пайплайна (issue #58): E2BIG-фикс (промпт через stdin); явная формула НДС (`/1.2`, не `×0.8`); направление округления количества; `missing_responsible`; уточнение «цена без НДС» ↔ правило 2; таблица error-кодов; схема create_deal — `contractId` обязателен, `quantity` целое; PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров; PR #71 — create_deal принимает `filePath` + `processingLog`, warnings[] обработка; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*
+*Last reviewed: 2026-06-14 (issue #98 — пример системной ошибки без устаревшего «not implemented»; PR #86 — корректность пайплайна (issue #58): E2BIG-фикс (промпт через stdin); явная формула НДС (`/1.2`, не `×0.8`); направление округления количества; `missing_responsible`; уточнение «цена без НДС» ↔ правило 2; таблица error-кодов; схема create_deal — `contractId` обязателен, `quantity` целое; PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров; PR #71 — create_deal принимает `filePath` + `processingLog`, warnings[] обработка; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*
