@@ -21,10 +21,19 @@
 #   B24_SSH_PASS          — пароль SSH (опц.; нужен пакет sshpass). Если не задан —
 #                           используется SSH-ключ/agent. Пароль передаётся через
 #                           SSHPASS (sshpass -e), не светится в списке процессов.
+#   WEBHOOK_URL / PAI_WEBHOOK_URL — (опц.) REST-вебхук для пост-деплой health-чека
+#                           после APPLY: read-only проверка, что все 4 контроллера
+#                           зарегистрированы (негативные кейсы; сделки НЕ создаются).
+#
+# Поведение:
+#   - dry-run по умолчанию: rsync СРАВНИВАЕТ с сервером по SSH и печатает список
+#     изменений, но НА ДИСК СЕРВЕРА НИЧЕГО НЕ ПИШЕТ;
+#   - APPLY=1: реальная выкладка + бэкап прежних версий (мгновенный откат) +
+#     пост-деплой health-чек (если задан вебхук).
 #
 # Использование:
-#   ./scripts/deploy-b24-controller.sh            # dry-run (ничего не меняет)
-#   APPLY=1 ./scripts/deploy-b24-controller.sh    # реальная выкладка
+#   ./scripts/deploy-b24-controller.sh            # СИМУЛЯЦИЯ — на сервер не пишет
+#   APPLY=1 ./scripts/deploy-b24-controller.sh    # реальная выкладка (+бэкап +health)
 #
 set -euo pipefail
 
@@ -87,14 +96,43 @@ if [ -n "${B24_SSH_PASS:-}" ]; then
   SSH_CMD="sshpass -e ssh -p ${B24_SSH_PORT}"
 fi
 
+# Пост-деплой health: read-only проверка, что все 4 контроллера зарегистрированы.
+# Дёргаем негативные кейсы — ждём коды валидации (sup:010/con:010/prd:010/deal:010),
+# а НЕ ERROR_METHOD_NOT_FOUND/500. Сделки и любые данные НЕ создаются — безопасно
+# в т.ч. на боевой коробке. Запускается после APPLY, если задан вебхук.
+postdeploy_health() {
+  local hook="${1%/}" fail=0 resp
+  _hc() {
+    resp=$(curl -s -m 20 -X POST "${hook}/$1" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || true)
+    if printf '%s' "$resp" | grep -q "$3"; then
+      echo "    OK   $1 → $3"
+    else
+      echo "    FAIL $1 → ожидали $3, получили: $(printf '%s' "$resp" | tr -d '\n' | head -c 160)"
+      fail=1
+    fi
+  }
+  _hc "shef:purchase.api.procuresupplier.findbyunp"       '{"unp":""}'        'sup:010'
+  _hc "shef:purchase.api.procurecontract.find"            '{"supplierId":0}'  'con:010'
+  _hc "shef:purchase.api.procureproduct.findbyvendorcode" '{"vendorCode":""}' 'prd:010'
+  _hc "shef:purchase.api.procuredeal.create"              '{"supplierId":0,"responsibleUserId":1,"fileName":"x","fileContent":"","processingLog":"","items":[{"name":"x","priceExclVat":1,"quantity":1}]}' 'deal:010'
+  return $fail
+}
+
 # rsync БЕЗ --delete — чужие файлы не трогаются.
 RSYNC_BASE=(-avz --no-perms --omit-dir-times -e "$SSH_CMD")
 
+BACKUP_DIR=""
 if [ "${APPLY:-0}" = "1" ]; then
   echo ">>> APPLY=1 — реальная выкладка"
+  # Бэкап заменяемых файлов на сервере → мгновенный откат. rsync --backup кладёт
+  # ПРЕЖНИЕ версии перезаписываемых файлов в backup-dir (только реально изменённые).
+  BACKUP_DIR="${B24_LIB_PATH}/.deploy-backup/$(date +%Y%m%d-%H%M%S)"
+  RSYNC_BASE+=(--backup --backup-dir="$BACKUP_DIR")
+  echo "    бэкап прежних версий → ${BACKUP_DIR}/ (на сервере)"
 else
-  echo ">>> dry-run (APPLY=1 для реальной выкладки)"
-  RSYNC_BASE+=(--dry-run)
+  echo ">>> РЕЖИМ СИМУЛЯЦИИ (rsync --dry-run): идёт сравнение с сервером по SSH,"
+  echo "    но НИ ОДИН файл не записывается. Для реальной выкладки: APPLY=1"
+  RSYNC_BASE+=(--dry-run --itemize-changes)
 fi
 
 # 1) Контроллеры: только procure*.php в lib/controllers/.
@@ -106,5 +144,28 @@ rsync "${RSYNC_BASE[@]}" --include='procure*.php' --exclude='*' \
 rsync "${RSYNC_BASE[@]}" --include='config.php' --exclude='*' \
   "$LIB_DIR"/ \
   "${B24_SSH_USER}@${B24_SSH_HOST}:${B24_LIB_PATH}/"
+
+if [ "${APPLY:-0}" != "1" ]; then
+  echo "Симуляция завершена — на сервер НИЧЕГО не записано (см. список изменений выше)."
+  exit 0
+fi
+
+echo "Файлы выложены."
+
+# Пост-деплой health-чек (read-only). Вебхук — из WEBHOOK_URL/PAI_WEBHOOK_URL.
+HOOK="${WEBHOOK_URL:-${PAI_WEBHOOK_URL:-}}"
+if [ -n "$HOOK" ]; then
+  echo ">>> Пост-деплой health-чек (read-only, сделки не создаются):"
+  if postdeploy_health "$HOOK"; then
+    echo "Health OK — все 4 контроллера зарегистрированы и отвечают."
+  else
+    echo "" >&2
+    echo "❌ Health-чек не прошёл: контроллер не зарегистрирован или ошибка ядра." >&2
+    echo "   Откат: на сервере верните файлы из ${BACKUP_DIR}/" >&2
+    exit 1
+  fi
+else
+  echo "(health-чек пропущен — задайте WEBHOOK_URL или PAI_WEBHOOK_URL для авто-проверки)"
+fi
 
 echo "Готово."

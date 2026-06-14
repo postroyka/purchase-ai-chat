@@ -78,14 +78,33 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
 ```
 
 Параметры берутся из окружения (или `scripts/.env.deploy`, см. `scripts/.env.deploy.example`):
-`B24_SSH_HOST`, `B24_SSH_USER`, `B24_SSH_PORT`, `B24_CONTROLLERS_PATH`.
+`B24_SSH_HOST`, `B24_SSH_USER`, `B24_SSH_PORT`, `B24_CONTROLLERS_PATH`. Каждый можно
+задать и с префиксом `PAI_` (procure-ai namespace). Парольная аутентификация —
+`B24_SSH_PASS` (нужен пакет `sshpass`); иначе используется SSH-ключ/agent.
 
 Скрипт ([`scripts/deploy-b24-controller.sh`](../scripts/deploy-b24-controller.sh)):
 - копирует **только** `procure*.php` в `lib/controllers/` и `config.php` в `lib/`;
 - `rsync` **без** `--delete` — чужие файлы модуля `shef.purchase` не затрагиваются;
-- по умолчанию делает dry-run; реальная выкладка — `make deploy-b24 APPLY=1`.
+- **dry-run по умолчанию**: сравнивает с сервером по SSH и печатает список изменений,
+  но **на диск сервера ничего не пишет** (показать реальную дельту, ничего не меняя);
+- **`APPLY=1`** — реальная выкладка + **бэкап** прежних версий на сервере
+  (`lib/.deploy-backup/<дата>/` → мгновенный откат) + **пост-деплой health-чек**
+  (read-only: все 4 контроллера отвечают кодами валидации; задайте
+  `WEBHOOK_URL`/`PAI_WEBHOOK_URL`, сделки при проверке не создаются).
 
 Папка исключена из Docker-образов (`.dockerignore`).
+
+### Рекомендуемый порядок: staging → prod
+
+Две коробки: **`tstb24.postroyka.by`** (тест/dev) и **`b24.postroyka.by`** (боевая).
+Безопасный цикл выкатки:
+
+1. Выложить и проверить на **tstb24** (`.env.deploy` → tstb24): `make deploy-b24 APPLY=1`
+   (health-чек пройдёт автоматически), затем полный `bash scripts/smoke-test-b24.sh`
+   (включая создание сделок 4a/4b — это тестовая коробка).
+2. Только после зелёного — выложить на **b24** (`.env.deploy` → b24): `make deploy-b24 APPLY=1`.
+   На боевой полный smoke с созданием сделок не гоняем — достаточно автоматического
+   read-only health-чека.
 
 ### Предусловия первого деплоя
 
