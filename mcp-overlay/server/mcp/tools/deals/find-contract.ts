@@ -26,8 +26,8 @@ export default defineMcpTool({
     'Find an active procurement contract for a supplier in Bitrix24. Filters by supplier (CLIENT), active status, TYPE in {Закупки, Закупки-Комиссионный}, STATUS != Брак. Optionally narrows by contract number (homoglyph-tolerant Latin/Cyrillic) and date (exact d.m.Y). Returns contract id if found.',
   inputSchema: {
     supplierId: z.string().min(1).describe('Bitrix24 company id of the supplier'),
-    number: z.string().optional().describe('Contract number from the document — pass verbatim (Latin/Cyrillic letters are matched interchangeably server-side, e.g. "243Э20")'),
-    date: z.string().optional().describe('Contract date from the document, format d.m.Y (e.g. "15.03.2025") — exact match'),
+    number: z.string().max(64).optional().describe('Contract number from the document — pass verbatim (Latin/Cyrillic letters are matched interchangeably server-side, e.g. "243Э20")'),
+    date: z.string().max(10).optional().describe('Contract date from the document, format d.m.Y (e.g. "15.03.2025") — exact match'),
   },
   handler: async ({ supplierId, number, date }) => {
     const b24 = useBitrix24()

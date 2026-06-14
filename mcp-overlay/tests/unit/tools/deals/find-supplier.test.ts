@@ -72,4 +72,10 @@ describe('b24_pst_crm_find_supplier', () => {
   it('accepts valid 9-digit UNP via Zod schema', () => {
     expect((tool as any).inputSchema.unp.safeParse('123456789').success).toBe(true)
   })
+
+  it('strips spaces/dashes from a "dirty" OCR UNP and normalizes it (#102)', () => {
+    const r = (tool as any).inputSchema.unp.safeParse('123 456-789')
+    expect(r.success).toBe(true)
+    expect(r.data).toBe('123456789')
+  })
 })

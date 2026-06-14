@@ -23,7 +23,13 @@ export default defineMcpTool({
   description:
     'Find a supplier (company) in Bitrix24 by UNP (9-digit Belarusian taxpayer number). Returns company id and name if found. Russian suppliers (INN+KPP without UNP) are not searched.',
   inputSchema: {
-    unp: z.string().length(9).regex(/^\d{9}$/).describe('UNP — 9-digit Belarusian taxpayer number (digits only)'),
+    // УНП нормализуется (пробелы/дефисы из OCR убираются) ПЕРЕД валидацией —
+    // согласовано с PHP-контроллером, который тоже терпит «грязный» ввод (#102).
+    // Раньше строгий .length(9) молча отбрасывал «123 456 789» ещё до PHP.
+    unp: z.string()
+      .transform((s) => s.replace(/[\s-]/g, ''))
+      .pipe(z.string().regex(/^\d{9}$/, 'UNP must be 9 digits after stripping spaces/dashes'))
+      .describe('UNP — 9-digit Belarusian taxpayer number (spaces/dashes are tolerated and stripped)'),
   },
   handler: async ({ unp }) => {
     const b24 = useBitrix24()

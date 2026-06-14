@@ -109,6 +109,7 @@ class ProcureDeal
 		// Если передана дата документа (счёта) — ставим её на 09:00 (считаем, что
 		// документ оформлен утром); иначе — текущие дата-время.
 		$beginTs = null;
+		$documentDateUnparsed = false;
 		if($documentDate !== '')
 		{
 			// Дата документа приходит в формате d.m.Y (как и дата договора в
@@ -118,6 +119,12 @@ class ProcureDeal
 			if($docTs)
 			{
 				$beginTs = mktime(9, 0, 0, (int)date('n', $docTs), (int)date('j', $docTs), (int)date('Y', $docTs));
+			}
+			else
+			{
+				// documentDate передан, но непарсибелен → подставим now(), но
+				// просигналим в warnings: раньше подмена была незаметной (#102).
+				$documentDateUnparsed = true;
 			}
 		}
 		if($beginTs === null)
@@ -156,6 +163,10 @@ class ProcureDeal
 		// Некритичные проблемы после создания сделки: не валят вызов (агент должен
 		// получить dealId), но возвращаются в payload, чтобы попасть в отчёт.
 		$warnings = [];
+		if($documentDateUnparsed)
+		{
+			$warnings[] = 'document_date_unparsed';
+		}
 
 		// --- 2) Товарные позиции (TAX_RATE=20, TAX_INCLUDED=Y — бизнес-решение) ---
 		$productRows = [];
