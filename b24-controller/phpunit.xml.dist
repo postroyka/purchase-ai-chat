@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         failOnWarning="true"
+         failOnNotice="true"
+         cacheDirectory=".phpunit.cache">
+    <!--
+      failOnWarning + failOnNotice: помимо общей гигиены это GUARD на регрессию
+      by-ref (#99). Передача литерала массива в by-ref параметр (CCrmDeal::Update /
+      CommentController::onCreate) порождает notice «Only variables should be
+      passed by reference» → тест падает. Текущий (корректный) код передаёт
+      переменные, поэтому проходит.
+    -->
+    <testsuites>
+        <testsuite name="unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>

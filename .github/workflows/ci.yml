@@ -121,6 +121,37 @@ jobs:
 
       - run: pnpm exec vitest run tests/overlay
 
+  b24-php:
+    name: b24 PHP controllers tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: b24-controller
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # PHP и Composer предустановлены на ubuntu-latest (как python3 в backend-джобе),
+      # поэтому отдельный setup-action не нужен.
+      - name: PHP & Composer versions
+        run: php --version && composer --version
+
+      # php -l ловит синтаксические ошибки контроллеров до деплоя. На коробке это
+      # делает deploy-скрипт, но в CI эти файлы раньше не линтовались.
+      - name: Lint controllers & config (php -l)
+        run: |
+          for f in lib/controllers/procure*.php lib/config.php; do
+            php -l "$f"
+          done
+
+      # Lock-файл не коммитим (dev-only harness) → update резолвит phpunit по
+      # ^11.5 из composer.json. Тесты не деплоятся (rsync шлёт только procure*.php).
+      - name: Install dev dependencies (PHPUnit)
+        run: composer update --no-interaction --no-progress --prefer-dist
+
+      # memory_limit поднят: тест лимита размера файла (deal:022) аллоцирует ~34 МБ.
+      - name: PHPUnit
+        run: php -d memory_limit=512M vendor/bin/phpunit
+
   changes:
     name: Detect Docker-relevant changes
     runs-on: ubuntu-latest

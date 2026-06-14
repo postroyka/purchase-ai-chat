@@ -1,0 +1,21 @@
+{
+    "name": "shef/purchase-controller-tests",
+    "description": "Dev-only PHPUnit harness for the shef.purchase procure-ai REST controllers. NOT deployed — the deploy rsync ships only lib/controllers/procure*.php and lib/config.php.",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.2"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.5"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Shef\\Purchase\\Tests\\Unit\\": "tests/Unit/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}

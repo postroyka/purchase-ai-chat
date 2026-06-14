@@ -13,6 +13,10 @@ mcp/.claude/
 # Claude Code local session settings — must not be committed (machine-specific perms)
 .claude/settings.local.json
 ui/.nuxt/
+# b24-controller PHP-тесты (dev-only, не деплоятся): зависимости и кэш PHPUnit
+b24-controller/vendor/
+b24-controller/.phpunit.cache/
+b24-controller/composer.lock
 backend/uploads-test/
 backend/tests/fixtures/
 backend/tests/fixtures*/
