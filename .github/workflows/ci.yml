@@ -258,9 +258,10 @@ jobs:
   b24-deploy-reminder:
     name: b24 deploy reminder
     runs-on: ubuntu-latest
-    # Только для PR: если затронуты PHP-контроллеры / config модуля shef.purchase,
-    # они НЕ деплоятся CI/Watchtower — нужна ручная выкладка make deploy-b24 после
-    # мержа. Шаг лишь предупреждает, никогда не падает (issue #73).
+    # Только для PR: если затронуты PHP-контроллеры / config модуля shef.purchase —
+    # после мержа в main они выкладываются на STAGING автоматически (workflow «Deploy
+    # b24-controller»), на PROD — вручную через workflow_dispatch с аппрувом. Docker/
+    # Watchtower их НЕ деплоит. Шаг лишь предупреждает, никогда не падает (issue #73).
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -278,7 +279,7 @@ jobs:
             'b24-controller/lib/controllers/procure*.php' \
             'b24-controller/lib/config.php' || true)
           if [ -n "$changed" ]; then
-            echo "::warning title=Deploy PHP controllers manually::Изменены файлы b24-controller — после мержа выполните 'make deploy-b24 APPLY=1' (Docker/Watchtower их НЕ деплоит). См. b24-controller/README.md → «Деплой при изменении контракта MCP ↔ PHP»."
+            echo "::warning title=PHP-контроллеры — проверьте деплой::Изменены b24-controller. После мержа в main их выложит workflow «Deploy b24-controller» (авто; коробка задаётся repo-secrets). Docker/Watchtower эти файлы НЕ деплоит. См. b24-controller/README.md."
             echo "Изменённые файлы b24-controller:"
             echo "$changed" | sed 's/^/  - /'
           else

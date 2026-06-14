@@ -1,0 +1,135 @@
+name: Deploy b24-controller
+
+# Авто-выкладка PHP-контроллеров shef.purchase на коробку Bitrix24 (ОДНА цель).
+#
+#   - push в main → после ЗЕЛЁНОГО CI, если менялись b24-controller/**, деплой
+#     автоматически;
+#   - workflow_dispatch → ручной запуск; можно включить dry_run (симуляция, без
+#     записи на сервер).
+#
+# Цель задаётся через Repository secrets — это упрощённый вариант (одно окружение),
+# чтобы настроить без admin-доступа к Environments. Полноценное разделение на 2
+# окружения (staging + production по approval) — issue #112.
+#
+# Бэкап, php -l, авто-rollback при провале и read-only health-чек встроены в
+# scripts/deploy-b24-controller.sh (#100/#110). Здесь — только транспорт.
+#
+# ⚠️ СЕТЕВОЙ ДОСТУП: GitHub-hosted раннеры ходят с динамических облачных IP. Если
+#    SSH-порт коробки закрыт файрволом/по IP — деплой не дойдёт. Тогда используйте
+#    self-hosted runner: замените `runs-on: ubuntu-latest` на ваш label.
+#
+# ── Настройка (Settings → Secrets and variables → Actions → Repository secrets) ──
+#   B24_SSH_HOST, B24_SSH_USER, B24_SSH_PORT, B24_CONTROLLERS_PATH,
+#   WEBHOOK_URL (вебхук ТОЙ ЖЕ коробки),
+#   и ОДНО из: B24_SSH_PASS (пароль) ИЛИ deploy-key, настроенный на хосте.
+#   Опц. (рекомендуется): B24_SSH_HOST_KEY — строка known_hosts сервера (пиннинг).
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Симуляция (не писать на сервер)
+        type: boolean
+        default: false
+
+# Один деплой за раз; параллельные — в очередь (не отменять идущий).
+concurrency:
+  group: deploy-b24
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Нужен ли деплой
+    runs-on: ubuntu-latest
+    # workflow_dispatch — всегда; workflow_run — только при успешном CI И из ЭТОГО
+    # репозитория (не из форка — иначе чужой PR мог бы инициировать деплой).
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository) }}
+    outputs:
+      changed: ${{ steps.f.outputs.changed }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - id: f
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # Ручной запуск — деплоим всегда.
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Ручной запуск → деплой."
+            exit 0
+          fi
+          # Авто после CI — только если менялись наши PHP-файлы. Без '|| true':
+          # сбой git diff должен валить detect, а не тихо пропускать деплой.
+          # Первый коммит репо (нет HEAD~1) → считаем, что менялось всё.
+          if git rev-parse --verify -q "${HEAD_SHA}~1" >/dev/null; then
+            changed=$(git diff --name-only "${HEAD_SHA}~1" "${HEAD_SHA}" -- \
+              'b24-controller/lib/controllers/procure*.php' \
+              'b24-controller/lib/config.php')
+          else
+            changed="initial-commit"
+          fi
+          if [ -n "$changed" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Изменены b24-controller — деплой:"; echo "$changed" | sed 's/^/  - /'
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "b24-controller не менялся — деплой не нужен."
+          fi
+
+  deploy:
+    name: Деплой b24-controller
+    needs: detect
+    # Только если detect успешна И есть изменения (сбой detect ≠ молчаливый skip).
+    if: ${{ needs.detect.result == 'success' && needs.detect.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest   # коробка за firewall → замените на self-hosted (см. шапку)
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 1
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Установить sshpass
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+
+      - name: Подготовить known_hosts
+        env:
+          HK: ${{ secrets.B24_SSH_HOST_KEY }}
+          H: ${{ secrets.B24_SSH_HOST }}
+          P: ${{ secrets.B24_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          if [ -n "${HK:-}" ]; then
+            printf '%s\n' "$HK" >> ~/.ssh/known_hosts
+            echo "host-key из secret B24_SSH_HOST_KEY (пиннинг)."
+          else
+            echo "::warning title=Host-key TOFU::B24_SSH_HOST_KEY не задан — ключ сервера принимается через ssh-keyscan без верификации (MitM-вектор на раннере). Задайте B24_SSH_HOST_KEY для пиннинга."
+            ssh-keyscan -p "${P:-22}" "$H" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Деплой + бэкап + health
+        env:
+          B24_SSH_HOST: ${{ secrets.B24_SSH_HOST }}
+          B24_SSH_USER: ${{ secrets.B24_SSH_USER }}
+          B24_SSH_PORT: ${{ secrets.B24_SSH_PORT }}
+          B24_SSH_PASS: ${{ secrets.B24_SSH_PASS }}
+          B24_CONTROLLERS_PATH: ${{ secrets.B24_CONTROLLERS_PATH }}
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          # dry_run (только из workflow_dispatch) → APPLY=0 (симуляция); иначе APPLY=1.
+          APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '0' || '1' }}
+        run: bash scripts/deploy-b24-controller.sh
