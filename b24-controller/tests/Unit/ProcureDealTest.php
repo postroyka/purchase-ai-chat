@@ -88,7 +88,7 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame('Y', $row['TAX_INCLUDED']);
 		$this->assertSame('шт', $row['MEASURE_NAME']);
 		$this->assertSame(100.0, $row['PRICE']);
-		$this->assertSame(2, $row['QUANTITY']); // целое (единица «шт»)
+		$this->assertSame(2.0, $row['QUANTITY']); // целое значение, тип float (Bitrix QUANTITY = double)
 		$this->assertSame(7, $row['PRODUCT_ID']);
 
 		// Базовые поля сделки.
@@ -124,7 +124,23 @@ final class ProcureDealTest extends TestCase
 
 		$row = \CCrmDeal::$lastProductRows[0];
 		$this->assertSame(12.99, $row['PRICE']);  // round(12.991, 2)
-		$this->assertSame(2, $row['QUANTITY']);    // (int)round(1.5)
+		$this->assertSame(2.0, $row['QUANTITY']);  // round(1.5) — целое значение, тип float
+	}
+
+	public function testHalfKopeckRoundsHalfUpAndZeroDotFourQuantityClampsToOne(): void
+	{
+		// Краевые случаи прямого REST: PHP round() — HALF_UP (12.995 → 13.00, как
+		// бумажный счёт). MCP-граница (Math.round(12.995*100)/100) даёт тот же 13 —
+		// расхождения на этой границе нет. Кол-во 0.4 → round=0 → clamp 1.0.
+		$items = [
+			['name' => 'Штука', 'priceExclVat' => 12.995, 'quantity' => 0.4, 'productId' => '7'],
+		];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
+
+		$row = \CCrmDeal::$lastProductRows[0];
+		$this->assertSame(13.0, $row['PRICE']);   // round(12.995, 2) HALF_UP
+		$this->assertSame(1.0, $row['QUANTITY']);  // round(0.4)=0 → clamp 1.0
 	}
 
 	public function testContractIdBoundWhenPositive(): void

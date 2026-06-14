@@ -91,17 +91,21 @@ describe('b24_pst_crm_create_deal', () => {
     expect((fake.v2Call.mock.calls[0]![0] as any).params).not.toHaveProperty('documentDate')
   })
 
-  it('rounds priceExclVat to 2 decimals at the MCP boundary (#101)', async () => {
+  it('rounds priceExclVat to 2 decimals for EVERY item at the MCP boundary (#101)', async () => {
     fake.v2Call.mockResolvedValue(fakeOk({ dealId: 1 }))
 
     await (tool as any).handler({
       ...baseInput,
       filePath: pdfPath,
-      items: [{ name: 'Кабель', priceExclVat: 12.991, quantity: 3 }],
+      items: [
+        { name: 'Кабель', priceExclVat: 12.991, quantity: 3 },  // вниз
+        { name: 'Болт', priceExclVat: 5.999, quantity: 2 },     // вверх (→6.00)
+        { name: 'Гайка', priceExclVat: 12.995, quantity: 1 },   // граница x.005 → 13 (как и PHP round)
+      ],
     })
 
     const sent = (fake.v2Call.mock.calls[0]![0] as any).params.items
-    expect(sent[0].priceExclVat).toBe(12.99) // round(12.991, 2) — защита суммы сделки
+    expect(sent.map((i: any) => i.priceExclVat)).toEqual([12.99, 6, 13]) // map применён ко ВСЕМ
   })
 
   it('passes through controller warnings, e.g. document_date_unparsed (#102)', async () => {
@@ -174,6 +178,10 @@ describe('b24_pst_crm_create_deal', () => {
 
   it('rejects negative priceExclVat via Zod schema', () => {
     expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: -1, quantity: 1 }]).success).toBe(false)
+  })
+
+  it('rejects astronomically large priceExclVat via Zod .max (#101 overflow guard)', () => {
+    expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1e12, quantity: 1 }]).success).toBe(false)
   })
 
   it('rejects zero quantity via Zod schema', () => {
