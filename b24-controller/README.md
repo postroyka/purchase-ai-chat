@@ -262,24 +262,28 @@ PHP — полуручным `make deploy-b24 APPLY=1`, а Docker-образ MCP
 - PHP-фильтрацию договора по номеру (устойчиво к раскладке) и дате, выбор min-ID;
 - нормализацию УНП и краевой trim артикула (#102/#68);
 - бизнес-правила позиций сделки (`TAX_RATE=20`, `TAX_INCLUDED=Y`, «шт»);
-- все `warnings` (`product_rows_failed`, `*_file`, `file_attach_failed`,
-  `timeline_comment_failed`, `document_date_unparsed`);
+- все `warnings` (`product_rows_failed`, `invalid_base64_file`,
+  `file_attach_failed`, `timeline_comment_failed`, `document_date_unparsed`);
 - **регрессии:** by-ref в `CCrmDeal::Update`/`CommentController::onCreate` (#99,
-  страхует от фатала «Cannot pass parameter 2 by reference») и непарсибельную
-  дату документа (#113).
+  страхует от фатала PHP 8 «Argument #N could not be passed by reference») и
+  непарсибельную дату документа (#113).
 
 Запуск локально (нужен PHP ≥ 8.2 + Composer):
 
 ```bash
 cd b24-controller
-composer install      # первый раз; затем composer update при смене версий
+composer install      # ставит locked-версии из committed composer.lock
 vendor/bin/phpunit
 ```
+
+> `composer.lock` закоммичен → и локально, и в CI ставятся одни и те же версии
+> (`composer install`). Обновлять PHPUnit — осознанно: `composer update` + коммит
+> нового lock.
 
 > `composer.json`, `phpunit.xml.dist`, `tests/`, `vendor/` — **dev-only**: деплой
 > (rsync `--include`) выкладывает на коробку только `procure*.php` + `config.php`.
 
-**2. Смок на живой коробке** (`scripts/smoke-test-b24.sh`) — проверяет реальные
+**2. Смок на живой коробке** (`scripts/smoke-test-b24.sh`, в корне репозитория) — проверяет реальные
 вызовы CRM/iblock (поиск по реквизиту, реальная выборка инфоблока договоров,
 создание сделки), что заглушками не воспроизвести: юнит-тесты мокают
 `Dogovor\Entity::getList()`, а смок гоняет настоящий SQL. Покрытие со стороны

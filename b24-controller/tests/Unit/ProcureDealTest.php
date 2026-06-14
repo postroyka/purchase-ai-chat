@@ -26,10 +26,19 @@ final class ProcureDealTest extends TestCase
 		];
 	}
 
-	public function testInvalidIdsReturnDeal010(): void
+	public function testInvalidSupplierIdReturnsDeal010(): void
 	{
 		$c = new ProcureDeal();
 		$this->assertNull($c->createAction(0, 1, 'f.pdf', '', 'log', $this->items()));
+		$this->assertSame(['deal:010'], $c->errorCodes());
+	}
+
+	public function testInvalidResponsibleUserIdReturnsDeal010(): void
+	{
+		// Правая ветка условия (responsibleUserId < 1) — отдельно, чтобы случайная
+		// замена OR→AND в guard'е не осталась незамеченной.
+		$c = new ProcureDeal();
+		$this->assertNull($c->createAction(1, 0, 'f.pdf', '', 'log', $this->items()));
 		$this->assertSame(['deal:010'], $c->errorCodes());
 	}
 
@@ -122,8 +131,8 @@ final class ProcureDealTest extends TestCase
 		$res = $c->createAction(1, 2, 'f.pdf', '', 'log', $this->items(), 0, '15.03.2025');
 
 		$this->assertArrayNotHasKey('warnings', $res);
-		// BEGINDATE собрана из даты документа на 09:00.
-		$this->assertStringContainsString('15.03.2025', \CCrmDeal::$lastAddFields['BEGINDATE']);
+		// BEGINDATE собрана из даты документа РОВНО на 09:00 (бизнес-правило).
+		$this->assertSame('15.03.2025 09:00:00', \CCrmDeal::$lastAddFields['BEGINDATE']);
 	}
 
 	/** Регрессия #113: непарсибельная/некалендарная дата → warning, не молчаливый now(). */

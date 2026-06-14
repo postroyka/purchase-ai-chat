@@ -7,11 +7,14 @@
          failOnNotice="true"
          cacheDirectory=".phpunit.cache">
     <!--
-      failOnWarning + failOnNotice: помимо общей гигиены это GUARD на регрессию
-      by-ref (#99). Передача литерала массива в by-ref параметр (CCrmDeal::Update /
-      CommentController::onCreate) порождает notice «Only variables should be
-      passed by reference» → тест падает. Текущий (корректный) код передаёт
-      переменные, поэтому проходит.
+      failOnWarning + failOnNotice — общая гигиена: любой E_WARNING/E_NOTICE из
+      кода во время теста валит прогон.
+
+      Регрессию by-ref (#99) ловит не это, а сам PHP: на PHP 8 передача литерала
+      массива в by-ref параметр (CCrmDeal::Update / CommentController::onCreate)
+      даёт Fatal Error «Argument #N could not be passed by reference», который
+      PHPUnit фиксирует как ERROR теста. Текущий (корректный) код передаёт
+      переменные, поэтому проходит. См. tests/Unit/ProcureDealTest.php.
     -->
     <testsuites>
         <testsuite name="unit">

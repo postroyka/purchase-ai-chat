@@ -123,15 +123,18 @@ jobs:
 
   b24-php:
     name: b24 PHP controllers tests
-    runs-on: ubuntu-latest
+    # Пин конкретного образа (а не плавающего ubuntu-latest): фиксирует версию PHP
+    # (24.04 → PHP 8.3), чтобы тесты не начали незаметно гоняться под другой версией
+    # при обновлении раннера. PHP и Composer предустановлены в образе (как python3
+    # в backend-джобе) — сторонний setup-action не нужен, лишней supply-chain-
+    # поверхности в CI не добавляем (репо намеренно минимизирует экшены и права).
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: b24-controller
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      # PHP и Composer предустановлены на ubuntu-latest (как python3 в backend-джобе),
-      # поэтому отдельный setup-action не нужен.
       - name: PHP & Composer versions
         run: php --version && composer --version
 
@@ -143,10 +146,11 @@ jobs:
             php -l "$f"
           done
 
-      # Lock-файл не коммитим (dev-only harness) → update резолвит phpunit по
-      # ^11.5 из composer.json. Тесты не деплоятся (rsync шлёт только procure*.php).
+      # composer.lock закоммичен → install ставит ровно locked-версии (детерминизм
+      # CI + защита от supply-chain дрейфа транзитивных зависимостей). Тесты не
+      # деплоятся (rsync шлёт на коробку только procure*.php + config.php).
       - name: Install dev dependencies (PHPUnit)
-        run: composer update --no-interaction --no-progress --prefer-dist
+        run: composer install --no-interaction --no-progress
 
       # memory_limit поднят: тест лимита размера файла (deal:022) аллоцирует ~34 МБ.
       - name: PHPUnit

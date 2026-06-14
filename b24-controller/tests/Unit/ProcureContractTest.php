@@ -61,6 +61,14 @@ final class ProcureContractTest extends TestCase
 		$c = new ProcureContract();
 		$res = $c->findAction(5);
 		$this->assertSame(10, $res['id']); // первый (order ID ASC) = минимальный
+
+		// Стаб getList() игнорирует $params — поэтому отдельно проверяем, что сам
+		// контроллер собрал правильный SQL-фильтр (иначе сдвиг фильтрации на БД
+		// остался бы незамеченным, #99 ревью). CLIENT=300, ACTIVE, TYPE=500.
+		$filter = DogovorEntity::$lastGetListArgs['filter'];
+		$this->assertSame('CO_5', $filter['PROPERTY_300']);
+		$this->assertSame('Y', $filter['ACTIVE']);
+		$this->assertArrayHasKey('PROPERTY_500', $filter); // фильтр по TYPE присутствует
 	}
 
 	public function testNumberMatchIsHomoglyphTolerant(): void

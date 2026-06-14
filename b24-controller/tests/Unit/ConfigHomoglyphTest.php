@@ -22,11 +22,21 @@ final class ConfigHomoglyphTest extends TestCase
 		);
 	}
 
-	public function testFoldIsCaseInsensitiveAndTrims(): void
+	public function testFoldTrimsEdges(): void
 	{
 		$this->assertSame(
-			Config::foldHomoglyphs('  abc  '),
-			Config::foldHomoglyphs('ABC')
+			Config::foldHomoglyphs('ABC'),
+			Config::foldHomoglyphs('  ABC  '),
+			'foldHomoglyphs должен срезать краевые пробелы'
+		);
+	}
+
+	public function testFoldIsCaseInsensitive(): void
+	{
+		$this->assertSame(
+			Config::foldHomoglyphs('ABC'),
+			Config::foldHomoglyphs('abc'),
+			'foldHomoglyphs должен приводить к верхнему регистру'
 		);
 	}
 
@@ -65,6 +75,14 @@ final class ConfigHomoglyphTest extends TestCase
 	public function testVariantsForEmptyStringIsSingleEmpty(): void
 	{
 		$this->assertSame([''], Config::homoglyphVariants(''));
+	}
+
+	public function testVariantsAtExactCapAreNotCollapsed(): void
+	{
+		// 6 «спорных» букв → 2^6 = 64 = дефолтный $cap. Условие схлопывания строгое
+		// (> $cap), поэтому ровно 64 варианта ДОЛЖНЫ остаться. Фиксирует границу:
+		// если кто-то поменяет «>» на «>=», тест упадёт.
+		$this->assertCount(64, Config::homoglyphVariants('ABEKMO'));
 	}
 
 	public function testVariantsCollapseToOriginalWhenExceedingDefaultCap(): void

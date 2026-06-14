@@ -9,13 +9,15 @@
  * lib/controllers/procure*.php и lib/config.php — не более.
  *
  * Поведение заглушек управляется через статические поля (очереди результатов,
- * коды возврата) и сбрасывается между тестами через Shef\Purchase\Tests\Stub::reset().
+ * коды возврата); эти статические поля сбрасываются между тестами через
+ * Shef\Purchase\Tests\Stub::reset() (в setUp() каждого теста).
  *
  * ВАЖНО (регрессия by-ref, #99): сигнатуры CCrmDeal::Update() и
  * CommentController::onCreate() объявлены со ВТОРЫМ параметром ПО ССЫЛКЕ
  * (array &$fields) — как в реальном Bitrix. Если кто-то вернёт в контроллер
- * передачу литерала массива (а не переменной), PHP выдаст «Only variables
- * should be passed by reference», и тест упадёт (phpunit.xml: failOnNotice/Warning).
+ * передачу литерала массива (а не переменной), на PHP 8 это Fatal Error
+ * «Argument #N could not be passed by reference» (ровно тот баг, что чинили), и
+ * PHPUnit зафиксирует его как ERROR теста.
  */
 
 // ---------------------------------------------------------------------------
@@ -171,9 +173,11 @@ namespace Shef\Purchase\Tests {
 			\Bitrix\Crm\Timeline\CommentEntry::$lastCreate = null;
 			\Bitrix\Crm\Timeline\CommentEntry::$throwOnCreate = false;
 			\Bitrix\Crm\Timeline\CommentController::$lastOnCreate = null;
+			\Bitrix\Crm\Timeline\CommentController::$instance = null;
 
 			\Shef\IBlock\Lists\Dogovor\Entity::$rows = [];
 			\Shef\IBlock\Lists\Dogovor\Entity::$lastGetListArgs = null;
+			\Shef\IBlock\Lists\Dogovor\Entity::$instance = null;
 
 			\Bitrix\Main\Config\Option::$values = [];
 		}
@@ -204,7 +208,7 @@ namespace Bitrix\Crm\Timeline {
 
 	class CommentController
 	{
-		private static ?CommentController $instance = null;
+		public static ?CommentController $instance = null;
 		public static ?array $lastOnCreate = null;
 
 		public static function getInstance(): self
@@ -229,7 +233,7 @@ namespace Bitrix\Crm\Timeline {
 namespace Shef\IBlock\Lists\Dogovor {
 	class Entity
 	{
-		private static ?Entity $instance = null;
+		public static ?Entity $instance = null;
 		/** @var array<int,array> строки, которые вернёт getList() */
 		public static array $rows = [];
 		public static ?array $lastGetListArgs = null;
@@ -384,7 +388,10 @@ namespace {
 		function ConvertTimeStamp($timestamp = false, $type = 'SHORT', $site = false)
 		{
 			$timestamp = $timestamp ?: time();
-			return date('d.m.Y H:i:s', $timestamp);
+			// Реальный Bitrix: 'FULL' → d.m.Y H:i:s, 'SHORT' → d.m.Y.
+			return $type === 'FULL'
+				? date('d.m.Y H:i:s', $timestamp)
+				: date('d.m.Y', $timestamp);
 		}
 	}
 }

@@ -40,6 +40,24 @@ final class ProcureSupplierTest extends TestCase
 		$this->assertSame([], $c->errorCodes());
 	}
 
+	public function testEightDigitUnpReturnsIdNullWithoutError(): void
+	{
+		// Граница: 8 цифр — не 9 → молчаливое «не найдено» (поиск не запускаем).
+		$c = new ProcureSupplier();
+		$this->assertSame(['id' => null], $c->findByUnpAction('12345678'));
+		$this->assertSame([], $c->errorCodes());
+		$this->assertSame([], \CCrmCompany::$calls); // до поиска не дошли
+	}
+
+	public function testTenDigitUnpReturnsIdNullWithoutError(): void
+	{
+		// Граница: 10 цифр — не 9 → молчаливое «не найдено».
+		$c = new ProcureSupplier();
+		$this->assertSame(['id' => null], $c->findByUnpAction('1234567890'));
+		$this->assertSame([], $c->errorCodes());
+		$this->assertSame([], \CCrmCompany::$calls);
+	}
+
 	public function testDirtyUnpIsNormalisedBeforeLookup(): void
 	{
 		// OCR «123 456-789» → нормализуется к «123456789» и уходит в фильтр RQ_INN.
