@@ -78,14 +78,50 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
 ```
 
 Параметры берутся из окружения (или `scripts/.env.deploy`, см. `scripts/.env.deploy.example`):
-`B24_SSH_HOST`, `B24_SSH_USER`, `B24_SSH_PORT`, `B24_CONTROLLERS_PATH`.
+`B24_SSH_HOST`, `B24_SSH_USER`, `B24_SSH_PORT`, `B24_CONTROLLERS_PATH`. Каждый можно
+задать и с префиксом `PAI_` (procure-ai namespace). Парольная аутентификация —
+`B24_SSH_PASS` (нужен пакет `sshpass`); иначе используется SSH-ключ/agent.
 
 Скрипт ([`scripts/deploy-b24-controller.sh`](../scripts/deploy-b24-controller.sh)):
 - копирует **только** `procure*.php` в `lib/controllers/` и `config.php` в `lib/`;
 - `rsync` **без** `--delete` — чужие файлы модуля `shef.purchase` не затрагиваются;
-- по умолчанию делает dry-run; реальная выкладка — `make deploy-b24 APPLY=1`.
+- **dry-run по умолчанию**: сравнивает с сервером по SSH и печатает список изменений,
+  но **на диск сервера ничего не пишет** (показать реальную дельту, ничего не меняя);
+- **`APPLY=1`** — бэкап текущих файлов на сервере **вне web-root**
+  (`~/.procure-ai-deploy-backup/<дата>/`, ротация 10 последних → мгновенный откат) →
+  выкладка → `php -l` config.php **на сервере** → **пост-деплой health-чек** (read-only:
+  контроллеры зарегистрированы + БД жива; сделки не создаются). Вебхук **обязателен**
+  при `APPLY` (`WEBHOOK_URL`/`PAI_WEBHOOK_URL`) либо явный `SKIP_HEALTH=1`. Каждый
+  `APPLY` дописывает строку в `scripts/deploy.log` (gitignored): дата, env, git-коммит,
+  путь бэкапа, статус health.
 
 Папка исключена из Docker-образов (`.dockerignore`).
+
+### Рекомендуемый порядок: staging → prod
+
+Две коробки: **`tstb24.postroyka.by`** (тест/dev) и **`b24.postroyka.by`** (боевая).
+Безопасный цикл выкатки:
+
+1. Выложить и проверить на **tstb24** (`.env.deploy` → tstb24): `make deploy-b24 APPLY=1`
+   (health-чек пройдёт автоматически), затем полный `bash scripts/smoke-test-b24.sh`
+   (включая создание сделок 4a/4b — это тестовая коробка).
+2. Только после зелёного — выложить на **b24** (`.env.deploy` → b24): `make deploy-b24 APPLY=1`.
+   На боевой полный smoke с созданием сделок не гоняем — достаточно автоматического
+   read-only health-чека.
+
+**Откат** (точный путь бэкапа печатает скрипт при деплое). Зайдите на сервер и
+скопируйте сохранённые версии обратно — `~` раскроется на сервере:
+
+```bash
+ssh bitrix@<host>
+DST=/home/bitrix/www/bitrix/modules/shef.purchase/lib
+cp -p ~/.procure-ai-deploy-backup/<дата>/procure*.php "$DST"/controllers/
+cp -p ~/.procure-ai-deploy-backup/<дата>/config.php   "$DST"/
+```
+
+> Бэкап — снимок файлов, существовавших ДО деплоя (их список в `.filelist`).
+> Перезаписанные файлы откат вернёт; **файлы, добавленные этим деплоем** (новые
+> контроллеры) откат не удаляет — при необходимости удалите их вручную.
 
 ### Предусловия первого деплоя
 
@@ -99,6 +135,11 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
    rsync не создаёт вложенные директории — если путь не существует, выполните `mkdir -p` вручную.
 3. **Права на запись** у `B24_SSH_USER` в целевой директории.
 4. **`scripts/.env.deploy`** заполнен по примеру `scripts/.env.deploy.example`.
+5. **Host-key зафиксирован.** Скрипт использует `StrictHostKeyChecking=accept-new`;
+   чтобы исключить MitM при первом подключении, добавьте ключ сервера заранее:
+   ```
+   ssh-keyscan -p <порт> <host> >> ~/.ssh/known_hosts
+   ```
 
 ### Деплой при изменении контракта MCP ↔ PHP
 
