@@ -10,6 +10,10 @@
 #   WEBHOOK_URL=https://your-b24/rest/1/TOKEN/ SUPPLIER_UNP=100059180 \
 #     SUPPLIER_ID=42 VENDOR_CODE=ART-12345 bash scripts/smoke-test-b24.sh
 #
+# Для ПОЛНОГО покрытия задайте все фикстуры: WEBHOOK_URL, SUPPLIER_UNP, SUPPLIER_ID,
+# VENDOR_CODE, RESPONSIBLE_USER_ID, а также CONTRACT_NUMBER + CONTRACT_DATE — иначе
+# кейсы 2b–2d (фильтр договора по номеру/дате) молча пропускаются.
+#
 set -euo pipefail
 
 # Подхватываем scripts/.env.deploy, если он есть (там WEBHOOK_URL, SUPPLIER_*,

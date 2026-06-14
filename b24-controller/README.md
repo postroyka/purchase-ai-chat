@@ -89,9 +89,11 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
   но **на диск сервера ничего не пишет** (показать реальную дельту, ничего не меняя);
 - **`APPLY=1`** — бэкап текущих файлов на сервере **вне web-root**
   (`~/.procure-ai-deploy-backup/<дата>/`, ротация 10 последних → мгновенный откат) →
-  выкладка → `php -l config.php` → **пост-деплой health-чек** (read-only: контроллеры
-  зарегистрированы + БД жива; сделки не создаются). Вебхук **обязателен** при `APPLY`
-  (`WEBHOOK_URL`/`PAI_WEBHOOK_URL`) либо явный `SKIP_HEALTH=1`.
+  выкладка → `php -l` config.php **на сервере** → **пост-деплой health-чек** (read-only:
+  контроллеры зарегистрированы + БД жива; сделки не создаются). Вебхук **обязателен**
+  при `APPLY` (`WEBHOOK_URL`/`PAI_WEBHOOK_URL`) либо явный `SKIP_HEALTH=1`. Каждый
+  `APPLY` дописывает строку в `scripts/deploy.log` (gitignored): дата, env, git-коммит,
+  путь бэкапа, статус health.
 
 Папка исключена из Docker-образов (`.dockerignore`).
 
@@ -107,13 +109,19 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
    На боевой полный smoke с созданием сделок не гоняем — достаточно автоматического
    read-only health-чека.
 
-**Откат** (конкретный путь бэкапа печатается скриптом при деплое):
+**Откат** (точный путь бэкапа печатает скрипт при деплое). Зайдите на сервер и
+скопируйте сохранённые версии обратно — `~` раскроется на сервере:
 
 ```bash
+ssh bitrix@<host>
 DST=/home/bitrix/www/bitrix/modules/shef.purchase/lib
-BK=~/.procure-ai-deploy-backup/<дата>     # из вывода деплоя
-ssh bitrix@<host> "cp -p $BK/procure*.php $DST/controllers/ && cp -p $BK/config.php $DST/"
+cp -p ~/.procure-ai-deploy-backup/<дата>/procure*.php "$DST"/controllers/
+cp -p ~/.procure-ai-deploy-backup/<дата>/config.php   "$DST"/
 ```
+
+> Бэкап — снимок файлов, существовавших ДО деплоя (их список в `.filelist`).
+> Перезаписанные файлы откат вернёт; **файлы, добавленные этим деплоем** (новые
+> контроллеры) откат не удаляет — при необходимости удалите их вручную.
 
 ### Предусловия первого деплоя
 
@@ -127,6 +135,11 @@ ssh bitrix@<host> "cp -p $BK/procure*.php $DST/controllers/ && cp -p $BK/config.
    rsync не создаёт вложенные директории — если путь не существует, выполните `mkdir -p` вручную.
 3. **Права на запись** у `B24_SSH_USER` в целевой директории.
 4. **`scripts/.env.deploy`** заполнен по примеру `scripts/.env.deploy.example`.
+5. **Host-key зафиксирован.** Скрипт использует `StrictHostKeyChecking=accept-new`;
+   чтобы исключить MitM при первом подключении, добавьте ключ сервера заранее:
+   ```
+   ssh-keyscan -p <порт> <host> >> ~/.ssh/known_hosts
+   ```
 
 ### Деплой при изменении контракта MCP ↔ PHP
 

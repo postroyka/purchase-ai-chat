@@ -17,13 +17,17 @@
 #   B24_SSH_USER          — пользователь SSH (обязательно)
 #   B24_SSH_PORT          — порт SSH (по умолчанию 22)
 #   B24_CONTROLLERS_PATH  — абсолютный путь до .../shef.purchase/lib/controllers
-#                           (обязательно)
+#                           (обязательно; только [A-Za-z0-9._/-])
 #   B24_SSH_PASS          — пароль SSH (опц.; нужен пакет sshpass). Если не задан —
 #                           используется SSH-ключ/agent. Пароль передаётся через
 #                           SSHPASS (sshpass -e), не светится в списке процессов.
 #   WEBHOOK_URL / PAI_WEBHOOK_URL — REST-вебхук для пост-деплой health-чека.
 #                           При APPLY=1 обязателен (или явный SKIP_HEALTH=1).
 #   SKIP_HEALTH=1         — осознанно пропустить health-чек при APPLY.
+#
+# ⚠️ Перед ПЕРВЫМ деплоем на новый хост зафиксируйте его SSH-ключ, чтобы
+#    accept-new не принял подменённый ключ при MitM на первом подключении:
+#      ssh-keyscan -p <port> <host> >> ~/.ssh/known_hosts
 #
 # Поведение:
 #   - dry-run по умолчанию: rsync СРАВНИВАЕТ с сервером по SSH и печатает список
@@ -67,6 +71,13 @@ if ! [[ "$B24_SSH_PORT" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+# Путь к контроллерам подставляется в удалённые ssh-команды — запрещаем кавычки и
+# прочие спецсимволы, чтобы исключить shell-инъекцию через .env.deploy/окружение.
+if ! [[ "$B24_CONTROLLERS_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+  echo "B24_CONTROLLERS_PATH должен быть абсолютным путём из [A-Za-z0-9._/-], получено: '$B24_CONTROLLERS_PATH'" >&2
+  exit 1
+fi
+
 if [ ! -d "$SRC_DIR" ]; then
   echo "Нет каталога с контроллерами: $SRC_DIR" >&2
   exit 1
@@ -85,18 +96,23 @@ fi
 # Срезаем возможный trailing slash, иначе dirname вернёт сам каталог controllers.
 B24_LIB_PATH="$(dirname "${B24_CONTROLLERS_PATH%/}")"
 
+# Окружение для журнала: tst* / *test* → staging, иначе prod.
+case "$B24_SSH_HOST" in
+  tst*|*test*) DEPLOY_ENV="staging" ;;
+  *)           DEPLOY_ENV="prod" ;;
+esac
+
 echo "Файлы к выкладке:"
 for f in "${files[@]}"; do echo "  - controllers/$(basename "$f")"; done
 [ -f "$LIB_DIR/config.php" ] && echo "  - config.php"
-echo "Назначение: ${B24_SSH_USER}@${B24_SSH_HOST} (порт ${B24_SSH_PORT})"
+echo "Назначение: ${B24_SSH_USER}@${B24_SSH_HOST} (порт ${B24_SSH_PORT}, env=${DEPLOY_ENV})"
 echo "  controllers → ${B24_CONTROLLERS_PATH}/"
 echo "  config.php  → ${B24_LIB_PATH}/"
 
 # Транспорт SSH. BatchMode — не зависать на промптах; accept-new — не падать на
-# первом подключении, но и не отключать проверку host key полностью.
+# первом подключении (зафиксируйте ключ заранее ssh-keyscan, см. шапку).
 # С паролем — через sshpass -e (пароль из env SSHPASS, не в argv).
-SSH_OPTS="-p ${B24_SSH_PORT} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
-SSH_CMD="ssh ${SSH_OPTS}"
+SSH_CMD="ssh -p ${B24_SSH_PORT} -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20"
 if [ -n "${B24_SSH_PASS:-}" ]; then
   if ! command -v sshpass >/dev/null 2>&1; then
     echo "Задан B24_SSH_PASS, но нет sshpass. Установите sshpass или используйте SSH-ключ." >&2
@@ -111,9 +127,14 @@ fi
 # без пробелов внутри значений).
 remote() { $SSH_CMD "${B24_SSH_USER}@${B24_SSH_HOST}" "$1"; }
 
+# Запись в журнал деплоев (локальный, gitignored через *.log). $1 = статус health.
+write_deploy_log() {
+  echo "$(date -u +%FT%TZ) APPLY env=${DEPLOY_ENV} host=${B24_SSH_HOST} git=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') user=$(whoami) backup=${BACKUP_REL:-?} health=$1" >> "$SCRIPT_DIR/deploy.log"
+}
+
 # Пост-деплой health: read-only проверка контроллеров. Семантика 3 уровней:
-#   OK   — вернулся ожидаемый код/ключ (метод зарегистрирован, валидация/БД живы);
-#   FAIL — ERROR_METHOD_NOT_FOUND или пустой ответ (метод не загружен / сервер лёг);
+#   FAIL — пустой ответ или ERROR_METHOD_NOT_FOUND (сервер лёг / метод не загружен);
+#   OK   — вернулся ожидаемый код/ключ (метод зарегистрирован, валидация отработала);
 #   WARN — ответил иначе (метод жив, но напр. includeModules/БД дали свою ошибку) —
 #          деплой НЕ валим, но просим проверить вручную.
 # Негативные кейсы (код deal:010 и т.п.) НЕ создают данных — безопасно на боевой.
@@ -123,14 +144,15 @@ postdeploy_health() {
   local hook="${1%/}" fail=0 resp
   _hc() {  # $1 метод, $2 тело, $3 ожидаемая подстрока (код ошибки или ключ)
     resp=$(curl -s -m 10 -X POST "${hook}/$1" -H 'Content-Type: application/json' -d "$2" 2>/dev/null || true)
+    # FAIL-условия проверяем ПЕРЕД OK (приоритет «не зарегистрирован/лёг»).
     if [ -z "$resp" ]; then
       echo "    FAIL $1 → пустой ответ (сервер недоступен?)"; fail=1; return
     fi
-    if printf '%s' "$resp" | grep -qF "\"$3\""; then
-      echo "    OK   $1 → $3"; return
-    fi
     if printf '%s' "$resp" | grep -qiF 'ERROR_METHOD_NOT_FOUND'; then
       echo "    FAIL $1 → ERROR_METHOD_NOT_FOUND (контроллер не зарегистрирован)"; fail=1; return
+    fi
+    if printf '%s' "$resp" | grep -qF "\"$3\""; then
+      echo "    OK   $1 → $3"; return
     fi
     # Ответил, но не тем — усекаем до 80 символов, чтобы не светить стек/пути в логе.
     echo "    WARN $1 → ждали \"$3\", иной ответ (контроллер жив, проверьте): $(printf '%s' "$resp" | tr -d '\n' | head -c 80)"
@@ -140,9 +162,10 @@ postdeploy_health() {
   _hc "shef:purchase.api.procurecontract.find"            '{"supplierId":0}'  'con:010'
   _hc "shef:purchase.api.procureproduct.findbyvendorcode" '{"vendorCode":""}' 'prd:010'
   _hc "shef:purchase.api.procuredeal.create"              '{"supplierId":0,"responsibleUserId":1,"fileName":"x","fileContent":"","processingLog":"","items":[{"name":"x","priceExclVat":1,"quantity":1}]}' 'deal:010'
-  # Позитивный read-only — валидный несуществующий УНП проходит ВАЛИДАЦИЮ и идёт в
-  # БД; ответ с ключом "result" подтверждает, что CRM-модуль и БД живы (не только
-  # маршрут). Сделка/запись не создаётся.
+  # Позитивный read-only — валидный (9 цифр) несуществующий УНП проходит ВАЛИДАЦИЮ
+  # и идёт в БД. Ключ "result" (даже с id:null) подтверждает, что маршрут жив и БД
+  # ответила. Если CRM-модуль не подключился → ответ без "result" → уйдёт в WARN
+  # (не FAIL): это сигнал «проверить вручную», а не блокер. Запись не создаётся.
   _hc "shef:purchase.api.procuresupplier.findbyunp"       '{"unp":"000000001"}' 'result'
   return $fail
 }
@@ -150,20 +173,26 @@ postdeploy_health() {
 # rsync БЕЗ --delete — чужие файлы не трогаются.
 RSYNC_BASE=(-avz --no-perms --omit-dir-times -e "$SSH_CMD")
 
+BACKUP_REL=""
 if [ "${APPLY:-0}" = "1" ]; then
-  echo ">>> APPLY=1 — реальная выкладка"
+  echo ">>> APPLY=1 — реальная выкладка (env=${DEPLOY_ENV})"
   # Бэкап текущих целевых файлов ВНЕ web-root (~ = home SSH-юзера, www обычно ~/www),
   # чтобы старые .php не попадали в дерево сайта. Снимок ВСЕХ целевых файлов (а не
-  # только изменённых) + список → полноценный откат. Ротация: 10 последних.
+  # только изменённых) + список → откат перезаписанных. Ротация: 10 последних.
+  # Путь относительный — ssh логинится в $HOME, поэтому раскрывается на сервере.
   BACKUP_REL=".procure-ai-deploy-backup/$(date +%Y%m%d-%H%M%S)"
   echo "    бэкап текущих файлов → ~/${BACKUP_REL}/ (на сервере, вне web-root)"
+  # \$HOME раскрывается на СЕРВЕРЕ (не зависит от CWD ssh-сессии). Пути модуля — в
+  # одинарных кавычках (валидированы выше: без кавычек/спецсимволов).
   remote "
     set -e
-    mkdir -p '${BACKUP_REL}'
-    cp -p '${B24_CONTROLLERS_PATH}'/procure*.php '${BACKUP_REL}/' 2>/dev/null || true
-    cp -p '${B24_LIB_PATH}/config.php' '${BACKUP_REL}/' 2>/dev/null || true
-    ls -1 '${B24_CONTROLLERS_PATH}'/procure*.php '${B24_LIB_PATH}/config.php' > '${BACKUP_REL}/.filelist' 2>/dev/null || true
-    ls -1dt .procure-ai-deploy-backup/*/ 2>/dev/null | tail -n +11 | xargs -r rm -rf || true
+    BK=\"\$HOME/${BACKUP_REL}\"
+    mkdir -p \"\$BK\"
+    chmod 700 \"\$HOME/.procure-ai-deploy-backup\" \"\$BK\" 2>/dev/null || true
+    cp -p '${B24_CONTROLLERS_PATH}'/procure*.php \"\$BK/\" 2>/dev/null || true
+    cp -p '${B24_LIB_PATH}/config.php' \"\$BK/\" 2>/dev/null || true
+    ls -1 '${B24_CONTROLLERS_PATH}'/procure*.php '${B24_LIB_PATH}/config.php' > \"\$BK/.filelist\" 2>/dev/null || true
+    ls -1dt \"\$HOME/.procure-ai-deploy-backup\"/*/ 2>/dev/null | tail -n +11 | xargs -r rm -rf || true
   " || { echo "Не удалось создать бэкап на сервере — выкладка отменена." >&2; exit 1; }
 else
   echo ">>> РЕЖИМ СИМУЛЯЦИИ (rsync --dry-run): идёт сравнение с сервером по SSH,"
@@ -194,7 +223,8 @@ if remote "command -v php >/dev/null 2>&1"; then
   if remote "php -l '${B24_LIB_PATH}/config.php'"; then
     echo "config.php — синтаксис OK."
   else
-    echo "❌ config.php не проходит php -l. Откат: на сервере ~/${BACKUP_REL}/" >&2
+    echo "❌ config.php не проходит php -l. Откат из ~/${BACKUP_REL}/ (см. ниже)." >&2
+    write_deploy_log "config-lint-fail"
     exit 1
   fi
 else
@@ -210,10 +240,13 @@ if [ -n "$HOOK" ]; then
     echo "Health OK — контроллеры зарегистрированы и отвечают."
     health_status="ok"
   else
+    health_status="fail"
+    write_deploy_log "$health_status"
     echo "" >&2
     echo "❌ Health-чек не прошёл (см. FAIL выше)." >&2
-    echo "   Откат: на сервере верните файлы из ~/${BACKUP_REL}/ , например:" >&2
-    echo "     ${SSH_CMD} ${B24_SSH_USER}@${B24_SSH_HOST} \"cp -p ~/${BACKUP_REL}/procure*.php '${B24_CONTROLLERS_PATH}/' && cp -p ~/${BACKUP_REL}/config.php '${B24_LIB_PATH}/'\"" >&2
+    echo "   Откат — зайдите на сервер (ssh ${B24_SSH_USER}@${B24_SSH_HOST}) и выполните:" >&2
+    echo "     cp -p ~/${BACKUP_REL}/procure*.php ${B24_CONTROLLERS_PATH}/" >&2
+    echo "     cp -p ~/${BACKUP_REL}/config.php ${B24_LIB_PATH}/" >&2
     exit 1
   fi
 elif [ "${SKIP_HEALTH:-0}" = "1" ]; then
@@ -224,7 +257,5 @@ else
   exit 1
 fi
 
-# Журнал деплоев (локальный, gitignored) — кто/когда/какой коммит/итог.
-echo "$(date -u +%FT%TZ) APPLY host=${B24_SSH_HOST} git=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') user=$(whoami) backup=~/${BACKUP_REL} health=${health_status}" >> "$SCRIPT_DIR/deploy.log"
-
+write_deploy_log "$health_status"
 echo "Готово. Бэкап прежних версий: ~/${BACKUP_REL}/ (на сервере)."
