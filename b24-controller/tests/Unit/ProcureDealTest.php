@@ -88,7 +88,7 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame('Y', $row['TAX_INCLUDED']);
 		$this->assertSame('шт', $row['MEASURE_NAME']);
 		$this->assertSame(100.0, $row['PRICE']);
-		$this->assertSame(2.0, $row['QUANTITY']);
+		$this->assertSame(2, $row['QUANTITY']); // целое (единица «шт»)
 		$this->assertSame(7, $row['PRODUCT_ID']);
 
 		// Базовые поля сделки.
@@ -109,6 +109,22 @@ final class ProcureDealTest extends TestCase
 		// Кол-во <=0 → 1 (контроллер присваивает int-литерал; тип не важен — Bitrix
 		// принимает оба, поэтому сверяем значение, а не тип).
 		$this->assertEquals(1, $row['QUANTITY']);
+	}
+
+	public function testPriceRoundedToKopecksAndQuantityToInteger(): void
+	{
+		// Прямой REST в обход Zod: float-погрешность цены (>2 знаков) и дробное кол-во.
+		// #101 — цена округляется до копеек, кол-во до целого («шт»), иначе сумма
+		// сделки в Б24 разойдётся с бумажным счётом.
+		$items = [
+			['name' => 'Кабель', 'priceExclVat' => 12.991, 'quantity' => 1.5, 'productId' => '7'],
+		];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
+
+		$row = \CCrmDeal::$lastProductRows[0];
+		$this->assertSame(12.99, $row['PRICE']);  // round(12.991, 2)
+		$this->assertSame(2, $row['QUANTITY']);    // (int)round(1.5)
 	}
 
 	public function testContractIdBoundWhenPositive(): void

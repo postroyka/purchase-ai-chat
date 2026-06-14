@@ -91,6 +91,19 @@ describe('b24_pst_crm_create_deal', () => {
     expect((fake.v2Call.mock.calls[0]![0] as any).params).not.toHaveProperty('documentDate')
   })
 
+  it('rounds priceExclVat to 2 decimals at the MCP boundary (#101)', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ dealId: 1 }))
+
+    await (tool as any).handler({
+      ...baseInput,
+      filePath: pdfPath,
+      items: [{ name: 'Кабель', priceExclVat: 12.991, quantity: 3 }],
+    })
+
+    const sent = (fake.v2Call.mock.calls[0]![0] as any).params.items
+    expect(sent[0].priceExclVat).toBe(12.99) // round(12.991, 2) — защита суммы сделки
+  })
+
   it('passes through controller warnings, e.g. document_date_unparsed (#102)', async () => {
     fake.v2Call.mockResolvedValue(fakeOk({ dealId: 7, warnings: ['document_date_unparsed'] }))
 

@@ -114,7 +114,9 @@ export default defineMcpTool({
       fileName: basename(filePath),
       fileContent,
       processingLog,
-      items,
+      // Округляем цену до копеек на MCP-границе (#101): защита от float-погрешности
+      // OCR/LLM (напр. 12.991) ещё до REST-контроллера. quantity уже целое по Zod (.int()).
+      items: items.map((it) => ({ ...it, priceExclVat: Math.round(it.priceExclVat * 100) / 100 })),
     }
     // contractId обязателен по схеме (z.string().min(1)), но guard оставляем:
     // юнит-тест вызывает handler напрямую (минуя Zod) и проверяет, что при

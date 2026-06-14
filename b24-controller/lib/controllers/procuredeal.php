@@ -175,10 +175,14 @@ class ProcureDeal
 		$productRows = [];
 		foreach($items as $item)
 		{
-			// Серверная страховка: цена/кол-во не отрицательные (Zod на стороне
-			// MCP уже это проверяет, но прямой REST-вызов мог бы обойти).
-			$price    = max(0.0, (float)($item['priceExclVat'] ?? 0));
-			$quantity = (float)($item['quantity'] ?? 1);
+			// Серверная страховка (Zod на стороне MCP уже это проверяет, но прямой
+			// REST-вызов мог бы обойти):
+			// - цена не отрицательная и ОКРУГЛЕНА до 2 знаков (#101) — иначе float-
+			//   погрешность OCR/LLM (напр. 12.991) уедет в PRICE, и сумма сделки
+			//   разойдётся с бумажным счётом;
+			// - количество — целое (единица всегда «шт», правило 4 промпта).
+			$price    = round(max(0.0, (float)($item['priceExclVat'] ?? 0)), 2);
+			$quantity = (int)round((float)($item['quantity'] ?? 1));
 			if($quantity <= 0)
 			{
 				$quantity = 1;
