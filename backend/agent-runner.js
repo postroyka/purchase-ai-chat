@@ -29,6 +29,19 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_MS = 1_000;
 const DEFAULT_RETRY_MAX_MS = 15_000;
 
+/**
+ * Resolve a numeric setting: explicit config (tests) wins, then env var, else the default.
+ * Non-finite inputs (missing env, "", "abc") fall back to the default — callers still clamp
+ * the result (Math.max/trunc) so a stray 0 / negative / fractional value can't break backoff.
+ * @param {number|undefined} configVal @param {string|undefined} envVal @param {number} dflt
+ * @returns {number}
+ */
+function toNum(configVal, envVal, dflt) {
+  if (configVal != null) return Number.isFinite(configVal) ? configVal : dflt;
+  const n = parseInt(envVal ?? '', 10);
+  return Number.isFinite(n) ? n : dflt;
+}
+
 // Env vars that claude CLI needs — subset of process.env (principle of least privilege).
 const AGENT_ENV_KEYS = [
   'PATH', 'HOME', 'USER', 'TMPDIR', 'TEMP', 'TMP',
@@ -92,13 +105,11 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const model = config.model ?? process.env.CLAUDE_MODEL ?? null;
   const timeoutMs = config.timeoutMs
     ?? parseInt(process.env.AGENT_TIMEOUT_MS ?? String(DEFAULT_TIMEOUT_MS), 10);
-  // Retry knobs (transient-only). At least 1 attempt; 1 disables retry.
-  const maxAttempts = Math.max(1, config.maxAttempts
-    ?? (parseInt(process.env.AGENT_MAX_ATTEMPTS ?? String(DEFAULT_MAX_ATTEMPTS), 10) || DEFAULT_MAX_ATTEMPTS));
-  const retryBaseMs = config.retryBaseMs
-    ?? (parseInt(process.env.AGENT_RETRY_BASE_MS ?? '', 10) || DEFAULT_RETRY_BASE_MS);
-  const retryMaxMs = config.retryMaxMs
-    ?? (parseInt(process.env.AGENT_RETRY_MAX_MS ?? '', 10) || DEFAULT_RETRY_MAX_MS);
+  // Retry knobs (transient-only), clamped to sane bounds: ≥1 attempt (1 disables retry),
+  // base ≥ 0, and retryMaxMs held ≥ retryBaseMs so the backoff cap can't invert.
+  const maxAttempts = Math.max(1, Math.trunc(toNum(config.maxAttempts, process.env.AGENT_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS)));
+  const retryBaseMs = Math.max(0, toNum(config.retryBaseMs, process.env.AGENT_RETRY_BASE_MS, DEFAULT_RETRY_BASE_MS));
+  const retryMaxMs = Math.max(retryBaseMs, toNum(config.retryMaxMs, process.env.AGENT_RETRY_MAX_MS, DEFAULT_RETRY_MAX_MS));
   const jobId = config.jobId ?? null;
   const spawnFn = config.spawnFn ?? spawn;
   const extractFn = config.extractFn ?? extractDocumentText;
@@ -201,9 +212,10 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
         // classify it). Only transient provider/network failures are worth a retry.
         if (attempt >= maxAttempts || !isTransientAgentError(err)) throw err;
         // Exponential backoff with partial jitter (50–100% of the window) so concurrent
-        // jobs don't retry in lockstep against an already-stressed provider.
-        const window = Math.min(retryMaxMs, retryBaseMs * 2 ** (attempt - 1));
-        const delay = Math.round(window * (0.5 + randomFn() * 0.5));
+        // jobs don't retry in lockstep against an already-stressed provider. (Named
+        // backoffWindow, not `window`, to avoid shadowing the global of that name.)
+        const backoffWindow = Math.min(retryMaxMs, retryBaseMs * 2 ** (attempt - 1));
+        const delay = Math.round(backoffWindow * (0.5 + randomFn() * 0.5));
         console.warn(
           `${tag} attempt ${attempt}/${maxAttempts} failed (transient), retrying in ${delay}ms: `
           + redactToken(err.message),
@@ -269,7 +281,10 @@ export function isTransientAgentError(err) {
   if (/CLI not found|ENOENT|path traversal|Invalid filePath|Invalid responsibleUserId|not valid JSON|no JSON/i.test(msg)) {
     return false;
   }
-  return /\b(429|5\d\d|overloaded|rate.?limit(?:ed)?|too many requests|timed out|service unavailable|temporarily unavailable|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|socket hang up)\b/i.test(msg);
+  // `5\d\d` matches a standalone 3-digit 5xx code; the \b anchors keep it from matching a
+  // 3-digit run *inside* a longer number (e.g. "5000ms", "5001 items" do NOT match). A bare
+  // "503" elsewhere is a rare, cheap false positive (one extra retry) — acceptable.
+  return /\b(429|5\d\d|overloaded|rate.?limit(?:ed)?|too many requests|timed out|service unavailable|temporarily unavailable|ECONNRESET|ETIMEDOUT|ECONNREFUSED|ECONNABORTED|EHOSTUNREACH|EAI_AGAIN|ENETUNREACH|socket hang up)\b/i.test(msg);
 }
 
 function buildAgentEnv() {

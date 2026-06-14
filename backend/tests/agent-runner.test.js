@@ -465,6 +465,94 @@ describe('runAgent — transient retry (#104)', () => {
     ).rejects.toThrow(/not valid JSON/);
     expect(spawnFn).toHaveBeenCalledTimes(1);
   });
+
+  it('does NOT retry an is_error business fault (non-transient)', async () => {
+    // is_error with a domain message ("supplier not found") must not burn retries.
+    const spawnFn = makeMockSpawn({
+      stdout: JSON.stringify({ is_error: true, result: 'Supplier not found' }),
+    });
+    await expect(
+      runAgent('/f.pdf', '20', { ...RETRY_CONFIG, spawnFn }),
+    ).rejects.toThrow(/Supplier not found/);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('sleeps once between two attempts; never sleeps when retry is disabled', async () => {
+    const sleepFn = vi.fn(async () => {});
+    const ok = makeSequencedSpawn([
+      { exitCode: 1, stderr: 'API Error: 429' },
+      { stdout: wrapResult(VALID_DEAL_RESULT) },
+    ]);
+    await runAgent('/f.pdf', '20', { ...BASE_CONFIG, maxAttempts: 2, sleepFn, spawnFn: ok });
+    expect(sleepFn).toHaveBeenCalledTimes(1);
+    expect(sleepFn.mock.calls[0][0]).toBeGreaterThan(0);
+
+    // maxAttempts:1 → single attempt, no backoff sleep even on a transient error.
+    const sleepFn2 = vi.fn(async () => {});
+    const fail = makeMockSpawn({ exitCode: 1, stderr: 'API Error: 429' });
+    await expect(
+      runAgent('/f.pdf', '20', { ...BASE_CONFIG, maxAttempts: 1, sleepFn: sleepFn2, spawnFn: fail }),
+    ).rejects.toThrow();
+    expect(sleepFn2).not.toHaveBeenCalled();
+  });
+
+  it('calls onMeta after a successful retry (not only on first-try success)', async () => {
+    const onMeta = vi.fn();
+    const spawnFn = makeSequencedSpawn([
+      { exitCode: 1, stderr: 'API Error: 503' },
+      { stdout: wrapResult(VALID_DEAL_RESULT) },
+    ]);
+    await runAgent('/f.pdf', '20', { ...RETRY_CONFIG, spawnFn, onMeta });
+    expect(onMeta).toHaveBeenCalledTimes(1);
+    expect(onMeta.mock.calls[0][0]).toMatchObject({ extractMethod: null });
+  });
+
+  it('clamps backoff to retryMaxMs and applies 50–100% jitter', async () => {
+    const sleepFn = vi.fn(async () => {});
+    const spawnFn = makeSequencedSpawn([
+      { exitCode: 1, stderr: '429' },
+      { exitCode: 1, stderr: '429' },
+      { stdout: wrapResult(VALID_DEAL_RESULT) },
+    ]);
+    // randomFn=1 → 100% jitter → delay == window, capped at retryMaxMs.
+    await runAgent('/f.pdf', '20', {
+      ...BASE_CONFIG, maxAttempts: 3, retryBaseMs: 100, retryMaxMs: 150,
+      randomFn: () => 1, sleepFn, spawnFn,
+    });
+    for (const [ms] of sleepFn.mock.calls) expect(ms).toBeLessThanOrEqual(150);
+    expect(sleepFn.mock.calls[0][0]).toBe(100); // window = base*2^0 = 100
+
+    // randomFn=0 → jitter floor = 50% of the window.
+    const sleepFn2 = vi.fn(async () => {});
+    const spawnFn2 = makeSequencedSpawn([
+      { exitCode: 1, stderr: '429' },
+      { stdout: wrapResult(VALID_DEAL_RESULT) },
+    ]);
+    await runAgent('/f.pdf', '20', {
+      ...BASE_CONFIG, maxAttempts: 2, retryBaseMs: 100, retryMaxMs: 1000,
+      randomFn: () => 0, sleepFn: sleepFn2, spawnFn: spawnFn2,
+    });
+    expect(sleepFn2.mock.calls[0][0]).toBe(50); // 100 * (0.5 + 0)
+  });
+
+  it('redacts Bearer tokens in the retry warning log', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const spawnFn = makeSequencedSpawn([
+        { exitCode: 1, stderr: 'Authorization: Bearer super-secret-xyz failed (429)' },
+        { stdout: wrapResult(VALID_DEAL_RESULT) },
+      ]);
+      await runAgent('/f.pdf', '20', { ...RETRY_CONFIG, spawnFn });
+      const retryLogs = warnSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((l) => l.includes('retrying in'));
+      expect(retryLogs.length).toBeGreaterThan(0);
+      expect(retryLogs.join('\n')).toContain('Bearer [REDACTED]');
+      expect(retryLogs.join('\n')).not.toContain('super-secret-xyz');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe('isTransientAgentError (#104)', () => {
@@ -490,6 +578,19 @@ describe('isTransientAgentError (#104)', () => {
       'Agent produced no JSON in its response. result: ...',
     ]) {
       expect(isTransientAgentError(new Error(m))).toBe(false);
+    }
+  });
+
+  it('does not match a 3-digit run inside a longer number (no false positive)', () => {
+    // \b anchors keep 5xx from matching inside "5000ms"/"5001"/"300000ms".
+    for (const m of ['processed 5001 items', 'listening on port 5000', 'took 512ms', 'finished after 300000ms']) {
+      expect(isTransientAgentError(new Error(m))).toBe(false);
+    }
+  });
+
+  it('matches additional network error codes (EHOSTUNREACH / ECONNABORTED)', () => {
+    for (const m of ['spawn error: EHOSTUNREACH', 'request failed: ECONNABORTED']) {
+      expect(isTransientAgentError(new Error(m))).toBe(true);
     }
   });
 });

@@ -23,10 +23,11 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-# Group per triggering commit/ref so a later main push can't cancel an in-flight tag
-# release. Re-runs of the same target still supersede each other.
+# Group per triggering COMMIT so a later main push can't cancel an in-flight release, and
+# a tag + manual dispatch of the same commit serialize (don't both push :latest at once).
+# Re-runs targeting the same commit still supersede each other.
 concurrency:
-  group: deploy-${{ github.event.workflow_run.head_sha || github.ref }}
+  group: deploy-${{ github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: true
 
 # Supply-chain hardening: minimal default permissions.
@@ -34,36 +35,34 @@ permissions:
   contents: read
 
 jobs:
-  # Gate the MANUAL escape hatch on a green CI for the exact commit being deployed. The
-  # workflow_run trigger is already CI-gated, and a v* tag is the human approval itself, so
-  # the check is a no-op for those paths — it only enforces the rule for workflow_dispatch,
-  # which previously shipped :latest without any CI gate.
+  # Enforce a GREEN CI on the exact commit before any deploy that moves :latest — both the
+  # manual escape hatch (workflow_dispatch) AND a v* release tag (a tag can be pushed onto
+  # any commit, incl. one that never passed CI). The workflow_run trigger is already CI-gated
+  # by definition (it only fires after CI completes), so this check is skipped there.
   verify-ci:
     name: Verify CI is green for this commit
     runs-on: ubuntu-latest
     permissions:
       actions: read   # read the CI workflow's run conclusions for this SHA
     steps:
-      - name: Require a successful CI run on this SHA (manual dispatch only)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Require a green CI run on this SHA (release tag & manual dispatch)
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           sha="${{ github.sha }}"
-          conclusions="$(gh api -X GET \
+          # Take the MOST RECENT completed CI run for this commit — a re-run can flip the
+          # result, so "is the latest run green", not "was any run ever green".
+          latest="$(gh api -X GET \
             "repos/${{ github.repository }}/actions/workflows/ci.yml/runs" \
             -f head_sha="$sha" -f status=completed \
-            --jq '.workflow_runs[].conclusion')"
-          echo "CI conclusions for ${sha}: ${conclusions:-<none>}"
-          if [ -z "$conclusions" ]; then
-            echo "::error::No completed CI run found for ${sha}. Push the branch and let CI pass before a manual deploy."
+            --jq '[.workflow_runs[]] | sort_by(.created_at) | last | .conclusion // ""')"
+          echo "Latest completed CI conclusion for ${sha}: ${latest:-<none>}"
+          if [ "$latest" != "success" ]; then
+            echo "::error::CI for ${sha} is not green (latest: ${latest:-none}). Refusing to publish :latest."
             exit 1
           fi
-          if ! grep -qx success <<<"$conclusions"; then
-            echo "::error::Latest CI for ${sha} is not green. Refusing manual deploy."
-            exit 1
-          fi
-          echo "CI is green for ${sha} — manual deploy allowed."
+          echo "CI is green for ${sha} — deploy of :latest allowed."
 
   build-and-push:
     name: Build and push Docker images to GHCR
