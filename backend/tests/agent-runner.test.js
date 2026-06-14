@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { runAgent, buildMcpConfig, extractJson, resolveClaudeSpawn } from '../agent-runner.js';
+import { runAgent, buildMcpConfig, extractJson, resolveClaudeSpawn, isTransientAgentError } from '../agent-runner.js';
 import { platform } from 'node:os';
 
 // claude reads the user prompt from STDIN (not argv). A capturing mock stdin lets tests assert
@@ -42,6 +42,18 @@ function makeMockSpawn({ stdout = '', stderr = '', exitCode = 0, errorCode = nul
   });
 }
 
+// Mock spawn whose Nth call uses the Nth outcome (the last outcome repeats for any extra
+// calls). Lets a retry test simulate "fail, fail, then succeed" across attempts while the
+// outer vi.fn still tracks attempt count via .mock.calls.
+function makeSequencedSpawn(outcomes) {
+  let i = 0;
+  return vi.fn((...args) => {
+    const outcome = outcomes[Math.min(i, outcomes.length - 1)];
+    i += 1;
+    return makeMockSpawn(outcome)(...args);
+  });
+}
+
 // Valid wrapper output from `claude --output-format json`
 function wrapResult(agentJson, { is_error = false } = {}) {
   return JSON.stringify({
@@ -64,7 +76,11 @@ const VALID_DEAL_RESULT = {
 };
 
 // Default: no server-side text extraction in unit tests (hermetic — no pdftotext/OCR spawn).
-const BASE_CONFIG = { timeoutMs: 1000, extractFn: async () => null };
+// Retry disabled by default (maxAttempts: 1) so existing single-attempt assertions stay
+// deterministic — note some of them throw on transient-looking errors (timeout, "rate
+// limit") that the retry path (#104) would otherwise re-run. The retry suite opts in
+// explicitly with maxAttempts > 1 and a no-op sleepFn.
+const BASE_CONFIG = { timeoutMs: 1000, extractFn: async () => null, maxAttempts: 1, sleepFn: async () => {} };
 
 describe('runAgent', () => {
   it('resolves with parsed deal result on successful run', async () => {
@@ -382,6 +398,200 @@ describe('runAgent', () => {
     const after = readdirSync(tmpdir()).filter((d) => d.startsWith('procure-mcp-'));
     const newDirs = after.filter((d) => !before.includes(d));
     expect(newDirs).toHaveLength(0);
+  });
+});
+
+describe('runAgent — transient retry (#104)', () => {
+  // Opt into retry; no-op sleepFn so backoff doesn't actually wait in tests.
+  const RETRY_CONFIG = { ...BASE_CONFIG, maxAttempts: 3, sleepFn: async () => {} };
+
+  it('retries transient failures (429 → 503) then succeeds', async () => {
+    const spawnFn = makeSequencedSpawn([
+      { exitCode: 1, stderr: 'API Error: 429 Too Many Requests' },
+      { exitCode: 1, stderr: 'API Error: 503 overloaded, please retry' },
+      { stdout: wrapResult(VALID_DEAL_RESULT) },
+    ]);
+    const result = await runAgent('/uploads/job/x.pdf', '20', { ...RETRY_CONFIG, spawnFn });
+    expect(result.deal.dealId).toBe('d-7');
+    expect(spawnFn).toHaveBeenCalledTimes(3); // two failures + the winning attempt
+  });
+
+  it('gives up after maxAttempts when the transient failure persists', async () => {
+    const spawnFn = makeMockSpawn({ exitCode: 1, stderr: 'API Error: 429 rate limit exceeded' });
+    await expect(
+      runAgent('/f.pdf', '20', { ...RETRY_CONFIG, spawnFn }),
+    ).rejects.toThrow(/429|exited with code/i);
+    expect(spawnFn).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries our own run timeout, then succeeds on the next attempt', async () => {
+    let call = 0;
+    const spawnFn = vi.fn(() => {
+      call += 1;
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.stdin = mockStdin();
+      proc.kill = vi.fn(() => setImmediate(() => proc.emit('close', null)));
+      if (call > 1) {
+        // 2nd attempt closes cleanly with a valid result.
+        setImmediate(() => {
+          proc.stdout.emit('data', wrapResult(VALID_DEAL_RESULT));
+          proc.emit('close', 0);
+        });
+      }
+      // 1st attempt: never emits close on its own → the run timer fires → SIGTERM → "timed out".
+      return proc;
+    });
+    const result = await runAgent('/f.pdf', '20', {
+      ...BASE_CONFIG, maxAttempts: 3, sleepFn: async () => {}, timeoutMs: 30, spawnFn,
+    });
+    expect(result.deal.dealId).toBe('d-7');
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT retry a permanent failure (missing CLI)', async () => {
+    const spawnFn = makeMockSpawn({ errorCode: 'ENOENT' });
+    await expect(
+      runAgent('/f.pdf', '20', { ...RETRY_CONFIG, spawnFn, claudeBin: '/nonexistent/claude' }),
+    ).rejects.toThrow(/not found/i);
+    expect(spawnFn).toHaveBeenCalledTimes(1); // permanent → single attempt
+  });
+
+  it('does NOT retry malformed agent output', async () => {
+    const spawnFn = makeMockSpawn({ stdout: 'totally not json' });
+    await expect(
+      runAgent('/f.pdf', '20', { ...RETRY_CONFIG, spawnFn }),
+    ).rejects.toThrow(/not valid JSON/);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT retry an is_error business fault (non-transient)', async () => {
+    // is_error with a domain message ("supplier not found") must not burn retries.
+    const spawnFn = makeMockSpawn({
+      stdout: JSON.stringify({ is_error: true, result: 'Supplier not found' }),
+    });
+    await expect(
+      runAgent('/f.pdf', '20', { ...RETRY_CONFIG, spawnFn }),
+    ).rejects.toThrow(/Supplier not found/);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('sleeps once between two attempts; never sleeps when retry is disabled', async () => {
+    const sleepFn = vi.fn(async () => {});
+    const ok = makeSequencedSpawn([
+      { exitCode: 1, stderr: 'API Error: 429' },
+      { stdout: wrapResult(VALID_DEAL_RESULT) },
+    ]);
+    await runAgent('/f.pdf', '20', { ...BASE_CONFIG, maxAttempts: 2, sleepFn, spawnFn: ok });
+    expect(sleepFn).toHaveBeenCalledTimes(1);
+    expect(sleepFn.mock.calls[0][0]).toBeGreaterThan(0);
+
+    // maxAttempts:1 → single attempt, no backoff sleep even on a transient error.
+    const sleepFn2 = vi.fn(async () => {});
+    const fail = makeMockSpawn({ exitCode: 1, stderr: 'API Error: 429' });
+    await expect(
+      runAgent('/f.pdf', '20', { ...BASE_CONFIG, maxAttempts: 1, sleepFn: sleepFn2, spawnFn: fail }),
+    ).rejects.toThrow();
+    expect(sleepFn2).not.toHaveBeenCalled();
+  });
+
+  it('calls onMeta after a successful retry (not only on first-try success)', async () => {
+    const onMeta = vi.fn();
+    const spawnFn = makeSequencedSpawn([
+      { exitCode: 1, stderr: 'API Error: 503' },
+      { stdout: wrapResult(VALID_DEAL_RESULT) },
+    ]);
+    await runAgent('/f.pdf', '20', { ...RETRY_CONFIG, spawnFn, onMeta });
+    expect(onMeta).toHaveBeenCalledTimes(1);
+    expect(onMeta.mock.calls[0][0]).toMatchObject({ extractMethod: null });
+  });
+
+  it('clamps backoff to retryMaxMs and applies 50–100% jitter', async () => {
+    const sleepFn = vi.fn(async () => {});
+    const spawnFn = makeSequencedSpawn([
+      { exitCode: 1, stderr: '429' },
+      { exitCode: 1, stderr: '429' },
+      { stdout: wrapResult(VALID_DEAL_RESULT) },
+    ]);
+    // randomFn=1 → 100% jitter → delay == window, capped at retryMaxMs.
+    await runAgent('/f.pdf', '20', {
+      ...BASE_CONFIG, maxAttempts: 3, retryBaseMs: 100, retryMaxMs: 150,
+      randomFn: () => 1, sleepFn, spawnFn,
+    });
+    for (const [ms] of sleepFn.mock.calls) expect(ms).toBeLessThanOrEqual(150);
+    expect(sleepFn.mock.calls[0][0]).toBe(100); // window = base*2^0 = 100
+
+    // randomFn=0 → jitter floor = 50% of the window.
+    const sleepFn2 = vi.fn(async () => {});
+    const spawnFn2 = makeSequencedSpawn([
+      { exitCode: 1, stderr: '429' },
+      { stdout: wrapResult(VALID_DEAL_RESULT) },
+    ]);
+    await runAgent('/f.pdf', '20', {
+      ...BASE_CONFIG, maxAttempts: 2, retryBaseMs: 100, retryMaxMs: 1000,
+      randomFn: () => 0, sleepFn: sleepFn2, spawnFn: spawnFn2,
+    });
+    expect(sleepFn2.mock.calls[0][0]).toBe(50); // 100 * (0.5 + 0)
+  });
+
+  it('redacts Bearer tokens in the retry warning log', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const spawnFn = makeSequencedSpawn([
+        { exitCode: 1, stderr: 'Authorization: Bearer super-secret-xyz failed (429)' },
+        { stdout: wrapResult(VALID_DEAL_RESULT) },
+      ]);
+      await runAgent('/f.pdf', '20', { ...RETRY_CONFIG, spawnFn });
+      const retryLogs = warnSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((l) => l.includes('retrying in'));
+      expect(retryLogs.length).toBeGreaterThan(0);
+      expect(retryLogs.join('\n')).toContain('Bearer [REDACTED]');
+      expect(retryLogs.join('\n')).not.toContain('super-secret-xyz');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe('isTransientAgentError (#104)', () => {
+  it('classifies provider/network blips as transient', () => {
+    for (const m of [
+      'Agent process exited with code 1: API Error: 429 Too Many Requests',
+      'Agent returned an error: 503 Service Unavailable',
+      'Agent process exited with code 1: Overloaded',
+      'Agent timed out after 300000ms',
+      'spawn error: ECONNRESET',
+      'socket hang up',
+    ]) {
+      expect(isTransientAgentError(new Error(m))).toBe(true);
+    }
+  });
+
+  it('classifies deterministic faults as permanent', () => {
+    for (const m of [
+      'Claude Code CLI not found at "claude".',
+      'spawn error: ENOENT',
+      'Invalid filePath — contains control characters: "x"',
+      'Agent output is not valid JSON. stdout: ...',
+      'Agent produced no JSON in its response. result: ...',
+    ]) {
+      expect(isTransientAgentError(new Error(m))).toBe(false);
+    }
+  });
+
+  it('does not match a 3-digit run inside a longer number (no false positive)', () => {
+    // \b anchors keep 5xx from matching inside "5000ms"/"5001"/"300000ms".
+    for (const m of ['processed 5001 items', 'listening on port 5000', 'took 512ms', 'finished after 300000ms']) {
+      expect(isTransientAgentError(new Error(m))).toBe(false);
+    }
+  });
+
+  it('matches additional network error codes (EHOSTUNREACH / ECONNABORTED)', () => {
+    for (const m of ['spawn error: EHOSTUNREACH', 'request failed: ECONNABORTED']) {
+      expect(isTransientAgentError(new Error(m))).toBe(true);
+    }
   });
 });
 

@@ -246,11 +246,20 @@ cd ui      && pnpm lint && pnpm build
 
 ## Деплой
 
-Образы собираются GitHub Actions при push в `main` и публикуются в
-GHCR (`ghcr.io/postroyka/procure-ai-app`, `…-mcp`) с тегами
-`latest` + `sha-<sha>`. На сервере **Watchtower** (опрос ~5 мин)
-подхватывает новый `latest` и пересоздаёт контейнеры за общим
-nginx-proxy. Git на сервер не клонируется.
+Образы собираются GitHub Actions и публикуются в GHCR
+(`ghcr.io/postroyka/procure-ai-app`, `…-mcp`). **Прод двигает только релизный тег**
+(human-in-the-loop, #104 — зелёный CI ≠ «готово к проду», живой Б24 тестами не покрыт):
+
+- **push в `main`** (после зелёного CI) → собирается только `sha-<sha>` —
+  неизменяемый образ для отката; **прод не трогается**.
+- **релизный тег `v*`** (`git tag v1.2.3 && git push origin v1.2.3`) → собираются
+  `latest` + `v1.2.3` + `sha-<sha>`. Это и есть выкатка: на сервере **Watchtower**
+  (опрос ~5 мин) подхватывает новый `latest` и пересоздаёт контейнеры за общим
+  nginx-proxy.
+- **ручной `workflow_dispatch`** — аварийный путь; публикует `latest`, но **только
+  если CI на этом коммите зелёный** (раньше гейт можно было обойти).
+
+Git на сервер не клонируется.
 
 **Разовая настройка сервера:**
 
@@ -376,4 +385,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-14 (issue #98 — синхронизация статуса фич в доках: 4 PST-инструмента реализованы, формулировки «заглушки/Week 2» убраны; PR #89 — рабочая REST-интеграция закупок: `shef:purchase.api.*` separator, by-ref `CCrmDeal::Update`/таймлайн, `BEGINDATE`/`documentDate`, гомоглиф-устойчивый и быстрый 1-в-1 поиск артикула/договора, кроссплатформенный smoke + эталонный счёт; PR #82 — `make deploy-images` (ручной деплой образов в GHCR без Actions); PR #81 — `workflow_dispatch` для Deploy; PR #79 — переезд дашборда `/metrics` на Nuxt/b24ui + живой курс USD→BYN из НБРБ (фолбэк `USD_BYN_RATE`); PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef:purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
+*Last reviewed: 2026-06-14 (PR #118 — #104: релиз-гейт деплоя (push в main → только `sha-<sha>`; тег `v*` → `:latest`; `workflow_dispatch` → `:latest` только при зелёном CI) + retry агента на транзиентные сбои провайдера (429/5xx/сеть/таймаут); issue #98 — синхронизация статуса фич в доках: 4 PST-инструмента реализованы, формулировки «заглушки/Week 2» убраны; PR #89 — рабочая REST-интеграция закупок: `shef:purchase.api.*` separator, by-ref `CCrmDeal::Update`/таймлайн, `BEGINDATE`/`documentDate`, гомоглиф-устойчивый и быстрый 1-в-1 поиск артикула/договора, кроссплатформенный smoke + эталонный счёт; PR #82 — `make deploy-images` (ручной деплой образов в GHCR без Actions); PR #81 — `workflow_dispatch` для Deploy; PR #79 — переезд дашборда `/metrics` на Nuxt/b24ui + живой курс USD→BYN из НБРБ (фолбэк `USD_BYN_RATE`); PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef:purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*

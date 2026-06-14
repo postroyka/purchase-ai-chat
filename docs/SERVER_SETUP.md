@@ -171,6 +171,15 @@ bash agent-e2e-test.sh
 > (он пробрасывается в контейнер app). Без него агент вернёт «Not logged in»
 > ещё до обращения к MCP.
 
+> **♻️ Ретрай агента (#104).** Транзиентные сбои провайдера (HTTP 429/5xx,
+> сеть, таймаут) агент повторяет с бэкоффом: `AGENT_MAX_ATTEMPTS` (по умолч. 3),
+> `AGENT_RETRY_BASE_MS`, `AGENT_RETRY_MAX_MS` (подробности — в `.env.prod.example`).
+> `AGENT_MAX_ATTEMPTS=1` выключает ретрай. ⚠️ У каждой попытки полный
+> `AGENT_TIMEOUT_MS`, поэтому при недоступности провайдера задание может держать
+> слот до `AGENT_MAX_ATTEMPTS × AGENT_TIMEOUT_MS`; с `MAX_CONCURRENT_JOBS=2`
+> новые загрузки в это время получают `429`. Если важнее «быстро падать» —
+> снизьте `AGENT_MAX_ATTEMPTS` или `AGENT_TIMEOUT_MS`.
+
 > **Что считать успехом.** Полный флоу: агент запустился, авторизовался, прочитал
 > файл, вызвал инструменты `b24_pst_crm_*` и **создал сделку** в Bitrix24
 > (`status=done`). Если вебхук Б24 / контроллеры ещё не настроены, агент дойдёт до
@@ -188,8 +197,9 @@ bash agent-e2e-test.sh
 | Приложение (app, mcp, redis, watchtower) | `docker-compose.prod.yml` | `procure-ai` | `make prod-up` / `prod-redeploy` |
 | Реверс-прокси (nginx-proxy, acme-companion) | `docker-compose.nginxproxy.yml` | `procure-proxy` | `make init-nginxproxy` |
 
-> 🛠️ **Деплой без GitHub Actions.** Обычно образы публикует workflow `Deploy` (после
-> зелёного CI), их подхватывает Watchtower. Если раннеры/минуты Actions недоступны —
+> 🛠️ **Деплой без GitHub Actions.** Обычно прод-образ (`latest`) публикует workflow
+> `Deploy` по релизному тегу `v*` (push в `main` собирает только `sha-<sha>`; #104),
+> и его подхватывает Watchtower. Если раннеры/минуты Actions недоступны —
 > собрать и запушить образы вручную с любой машины с Docker:
 > `GHCR_TOKEN=ghp_xxx make deploy-images` (PAT со scope `write:packages`), затем на
 > сервере `make prod-redeploy`.
