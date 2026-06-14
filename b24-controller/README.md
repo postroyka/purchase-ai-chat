@@ -87,10 +87,11 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
 - `rsync` **без** `--delete` — чужие файлы модуля `shef.purchase` не затрагиваются;
 - **dry-run по умолчанию**: сравнивает с сервером по SSH и печатает список изменений,
   но **на диск сервера ничего не пишет** (показать реальную дельту, ничего не меняя);
-- **`APPLY=1`** — реальная выкладка + **бэкап** прежних версий на сервере
-  (`lib/.deploy-backup/<дата>/` → мгновенный откат) + **пост-деплой health-чек**
-  (read-only: все 4 контроллера отвечают кодами валидации; задайте
-  `WEBHOOK_URL`/`PAI_WEBHOOK_URL`, сделки при проверке не создаются).
+- **`APPLY=1`** — бэкап текущих файлов на сервере **вне web-root**
+  (`~/.procure-ai-deploy-backup/<дата>/`, ротация 10 последних → мгновенный откат) →
+  выкладка → `php -l config.php` → **пост-деплой health-чек** (read-only: контроллеры
+  зарегистрированы + БД жива; сделки не создаются). Вебхук **обязателен** при `APPLY`
+  (`WEBHOOK_URL`/`PAI_WEBHOOK_URL`) либо явный `SKIP_HEALTH=1`.
 
 Папка исключена из Docker-образов (`.dockerignore`).
 
@@ -105,6 +106,14 @@ make deploy-b24            # rsync procure*.php → сервер по SSH
 2. Только после зелёного — выложить на **b24** (`.env.deploy` → b24): `make deploy-b24 APPLY=1`.
    На боевой полный smoke с созданием сделок не гоняем — достаточно автоматического
    read-only health-чека.
+
+**Откат** (конкретный путь бэкапа печатается скриптом при деплое):
+
+```bash
+DST=/home/bitrix/www/bitrix/modules/shef.purchase/lib
+BK=~/.procure-ai-deploy-backup/<дата>     # из вывода деплоя
+ssh bitrix@<host> "cp -p $BK/procure*.php $DST/controllers/ && cp -p $BK/config.php $DST/"
+```
 
 ### Предусловия первого деплоя
 
