@@ -78,4 +78,8 @@ describe('b24_pst_crm_find_supplier', () => {
     expect(r.success).toBe(true)
     expect(r.data).toBe('123456789')
   })
+
+  it('rejects a whitespace-only UNP (normalizes to empty) (#102)', () => {
+    expect((tool as any).inputSchema.unp.safeParse('   ').success).toBe(false)
+  })
 })

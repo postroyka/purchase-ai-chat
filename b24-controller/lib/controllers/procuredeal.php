@@ -52,7 +52,9 @@ class ProcureDeal
 	 * @param int    $contractId        ID договора (0 = не найден) → UF_CRM_DEAL_DOGOVOR
 	 * @param string $documentDate      Дата документа (счёта) в формате d.m.Y →
 	 *                                   BEGINDATE на 09:00. Пусто → текущие дата-время.
-	 * @return array|null { dealId, warnings?: string[] } | null при ошибке создания
+	 * @return array|null { dealId, warnings?: string[] } | null при ошибке создания.
+	 *   Возможные warnings: product_rows_failed | file_attach_failed |
+	 *   invalid_base64_file | document_date_unparsed | timeline_comment_failed.
 	 */
 	public function createAction(
 		int $supplierId,

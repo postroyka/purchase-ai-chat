@@ -73,4 +73,9 @@ describe('b24_pst_crm_find_contract', () => {
   it('rejects empty supplierId via Zod schema', () => {
     expect((tool as any).inputSchema.supplierId.safeParse('').success).toBe(false)
   })
+
+  it('rejects contract number longer than 64 chars via Zod schema (#102, symmetric to con:011)', () => {
+    expect((tool as any).inputSchema.number.safeParse('A'.repeat(65)).success).toBe(false)
+    expect((tool as any).inputSchema.number.safeParse('243Э20').success).toBe(true)
+  })
 })

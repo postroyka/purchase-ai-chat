@@ -41,6 +41,29 @@ REST-контроллеры для procure-ai, размещаемые внутр
 
 Подробности структур Б24 — в [`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md).
 
+### Коды ошибок контроллеров
+
+Ошибки валидации возвращаются с кодом (HTTP 400). «Не найдено» — НЕ ошибка:
+`{ "result": { "id": null } }` (HTTP 200).
+
+| Код | Метод | Когда |
+|---|---|---|
+| `sup:010` | findByUnp | пустой УНП |
+| `sup:011` | findByUnp | УНП длиннее 32 символов |
+| `con:010` | contract.find | `supplierId` < 1 |
+| `con:011` | contract.find | номер договора длиннее 64 символов |
+| `prd:010` | findByVendorCode | пустой артикул |
+| `prd:011` | findByVendorCode | артикул длиннее 64 символов |
+| `deal:010` | deal.create | `supplierId`/`responsibleUserId` < 1 |
+| `deal:020` | deal.create | пустой `items[]` |
+| `deal:021` | deal.create | позиций больше `MAX_ITEMS` |
+| `deal:022` | deal.create | `fileContent` больше лимита (~34 МБ base64) |
+| `deal:030` | deal.create | `CCrmDeal::Add` не создал сделку |
+
+После создания сделки `deal.create` может вернуть `warnings[]` (некритичные сбои —
+сделка уже создана): `product_rows_failed`, `file_attach_failed`,
+`invalid_base64_file`, `document_date_unparsed`, `timeline_comment_failed`.
+
 ## Структура (= путь на сервере)
 
 ```

@@ -36,8 +36,11 @@ function toolMethods(): Record<string, string> {
   for (const f of readdirSync(dealsDir)) {
     if (!f.endsWith('.ts') || f.endsWith('.test.ts') || f.startsWith('_')) continue
     const src = readFileSync(join(dealsDir, f), 'utf8')
-    const hits = [...src.matchAll(/'(shef:purchase\.api\.[a-z0-9.]+)'/g)].map((m) => m[1])
-    if (hits.length) out[f] = hits[hits.length - 1]
+    // Имя метода = первый литерал shef:purchase.api.* ПОСЛЕ вызова callV2(...) —
+    // не «последний литерал в файле» (мог бы поймать докблок/второй вызов).
+    // Нижний регистр: REST-имена регистронезависимы, PHP-сторона тоже в lower.
+    const m = src.match(/callV2\b[\s\S]*?'(shef:purchase\.api\.[^']+)'/)
+    if (m) out[f] = m[1].toLowerCase()
   }
   return out
 }
@@ -74,6 +77,13 @@ describe('contract: MCP tool method names ↔ PHP controllers (#90)', () => {
   it('каждый MCP-инструмент вызывает метод, существующий в PHP-контроллере', () => {
     for (const [file, method] of Object.entries(tools)) {
       expect(php, `${file} → ${method} нет среди action-ов PHP-контроллеров`).toContain(method)
+    }
+  })
+
+  it('каждый PHP-action покрыт MCP-инструментом (нет осиротевших контроллеров)', () => {
+    const used = new Set(Object.values(tools))
+    for (const name of php) {
+      expect([...used], `${name} не вызывается ни одним MCP-инструментом`).toContain(name)
     }
   })
 
