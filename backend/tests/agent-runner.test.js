@@ -140,6 +140,31 @@ describe('runAgent', () => {
     expect(promptOf(spawnFn)).toContain('FILE_PATH: /f.pdf');
   });
 
+  it('calls config.onMeta with extraction method, cost, duration and turns on success', async () => {
+    const wrapper = JSON.stringify({
+      is_error: false,
+      result: JSON.stringify(VALID_DEAL_RESULT),
+      total_cost_usd: 0.0123,
+      duration_ms: 4567,
+      num_turns: 3,
+    });
+    const spawnFn = makeMockSpawn({ stdout: wrapper });
+    const onMeta = vi.fn();
+    await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn, onMeta });
+    expect(onMeta).toHaveBeenCalledTimes(1);
+    expect(onMeta).toHaveBeenCalledWith(expect.objectContaining({
+      extractMethod: null, costUsd: 0.0123, agentDurationMs: 4567, numTurns: 3,
+    }));
+  });
+
+  it('a throwing onMeta never breaks the run (metrics must not affect the pipeline)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    const onMeta = vi.fn(() => { throw new Error('metrics boom'); });
+    const result = await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn, onMeta });
+    expect(result).toBeTruthy();
+    expect(onMeta).toHaveBeenCalled();
+  });
+
   it('passes --model when model is configured', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn, model: 'claude-opus-4-5' });

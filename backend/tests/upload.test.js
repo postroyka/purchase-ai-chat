@@ -364,6 +364,34 @@ describe('Concurrency cap & store errors', () => {
     expect(res.status).toBe(201);
     expect(res.body.files[0].name).toBe('evil name.pdf'); // basename only, no traversal
   });
+
+  it('truncates an oversized agent result (> MAX_RESULT_BYTES) in the job record', async () => {
+    const hugeSpawn = vi.fn(() => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
+      proc.kill = vi.fn();
+      setImmediate(() => {
+        const huge = JSON.stringify({ status: 'stub', blob: 'x'.repeat(120_000) }); // > 100k
+        proc.stdout.emit('data', JSON.stringify({ is_error: false, result: huge }));
+        proc.emit('close', 0);
+      });
+      return proc;
+    });
+    const a = createApp({
+      token: TOKEN, uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: hugeSpawn, extractFn: async () => null },
+    });
+    const up = await request(a)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', makeValidPdfBuffer(), { filename: 'invoice.pdf' });
+    expect(up.status).toBe(201);
+    const job = await pollJob(a, up.body.jobId);
+    expect(job.status).toBe('done');
+    expect(job.files[0].result).toEqual({ truncated: true, message: 'agent result too large — omitted' });
+  });
 });
 
 // ── File type validation (regression) ────────────────────────────────────────
