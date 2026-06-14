@@ -77,7 +77,10 @@ export default defineMcpTool({
       // is per-unit and EXCLUDING VAT, but in Bitrix24 we write it with
       // TAX_RATE=20 and TAX_INCLUDED=Y. This is a deliberate business decision,
       // not a bug — do not "fix" it to exclude VAT during review.
-      priceExclVat: z.number().positive().describe('Price per unit excluding VAT, as stated in document'),
+      // .max guards against an astronomically large float (overflow → Infinity →
+      // JSON.stringify "null" → price silently 0 in the deal). 1e9/unit is far beyond
+      // any real procurement unit price; rounded to 2 decimals in the handler (#101).
+      priceExclVat: z.number().positive().max(1_000_000_000).describe('Price per unit excluding VAT, as stated in document (rounded to 2 decimals at this boundary)'),
       quantity: z.number().int().positive().describe('Quantity from document (integer — unit is always шт)'),
     })).min(1).describe('Line items. Unit is always шт regardless of document.'),
   },
@@ -114,7 +117,9 @@ export default defineMcpTool({
       fileName: basename(filePath),
       fileContent,
       processingLog,
-      items,
+      // Округляем цену до копеек на MCP-границе (#101): защита от float-погрешности
+      // OCR/LLM (напр. 12.991) ещё до REST-контроллера. quantity уже целое по Zod (.int()).
+      items: items.map((it) => ({ ...it, priceExclVat: Math.round(it.priceExclVat * 100) / 100 })),
     }
     // contractId обязателен по схеме (z.string().min(1)), но guard оставляем:
     // юнит-тест вызывает handler напрямую (минуя Zod) и проверяет, что при
