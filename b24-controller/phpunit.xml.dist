@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         failOnWarning="true"
+         failOnNotice="true"
+         cacheDirectory=".phpunit.cache">
+    <!--
+      failOnWarning + failOnNotice — общая гигиена: любой E_WARNING/E_NOTICE из
+      кода во время теста валит прогон.
+
+      Регрессию by-ref (#99) ловит не это, а сам PHP: на PHP 8 передача литерала
+      массива в by-ref параметр (CCrmDeal::Update / CommentController::onCreate)
+      даёт Fatal Error «Argument #N could not be passed by reference», который
+      PHPUnit фиксирует как ERROR теста. Текущий (корректный) код передаёт
+      переменные, поэтому проходит. См. tests/Unit/ProcureDealTest.php.
+    -->
+    <testsuites>
+        <testsuite name="unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>

@@ -1,5 +1,7 @@
 # b24-controller
 
+`Last reviewed: 2026-06-14`
+
 REST-контроллеры для procure-ai, размещаемые внутри **существующего** модуля
 `shef.purchase` коробки Bitrix24 (`b24.postroyka.by`).
 
@@ -249,7 +251,42 @@ PHP — полуручным `make deploy-b24 APPLY=1`, а Docker-образ MCP
 
 ## Тестирование
 
-PHP-контроллеры тестируются **только вручную на dev/боевой коробке** Bitrix24 —
-юнит-тестов в репозитории нет (требуется живое ядро Б24 с модулями `crm`,
-`iblock`, `shef.iblock`). Покрытие тестами есть у вызывающей стороны —
-MCP-инструменты `mcp-overlay/tests/unit/tools/deals/`.
+Два уровня:
+
+**1. Юнит-тесты (PHPUnit, в CI).** Гоняются в джобе `b24 PHP controllers tests`
+без живой коробки — рантайм Bitrix замокан лёгкими заглушками
+(`tests/stubs/bitrix.php`: `Engine\Controller`, `Option`, трейт `Modules`,
+глобальные `CCrm*`/`CIBlock*`/`CRestUtil`/`Timeline`). Покрывают:
+
+- `Config::foldHomoglyphs` / `homoglyphVariants` — свёртка латиница↔кириллица,
+  защита `$cap` (чистая логика);
+- guard-коды контроллеров (`sup/con/prd:010-011`, `deal:010-030`);
+- PHP-фильтрацию договора по номеру (устойчиво к раскладке) и дате, выбор min-ID;
+- нормализацию УНП и краевой trim артикула (#102/#68);
+- бизнес-правила позиций сделки (`TAX_RATE=20`, `TAX_INCLUDED=Y`, «шт»);
+- все `warnings` (`product_rows_failed`, `invalid_base64_file`,
+  `file_attach_failed`, `timeline_comment_failed`, `document_date_unparsed`);
+- **регрессии:** by-ref в `CCrmDeal::Update`/`CommentController::onCreate` (#99,
+  страхует от фатала PHP 8 «Argument #N could not be passed by reference») и
+  непарсибельную дату документа (#113).
+
+Запуск локально (нужен PHP ≥ 8.2 + Composer):
+
+```bash
+cd b24-controller
+composer install      # ставит locked-версии из committed composer.lock
+vendor/bin/phpunit
+```
+
+> `composer.lock` закоммичен → и локально, и в CI ставятся одни и те же версии
+> (`composer install`). Обновлять PHPUnit — осознанно: `composer update` + коммит
+> нового lock.
+
+> `composer.json`, `phpunit.xml.dist`, `tests/`, `vendor/` — **dev-only**: деплой
+> (rsync `--include`) выкладывает на коробку только `procure*.php` + `config.php`.
+
+**2. Смок на живой коробке** (`scripts/smoke-test-b24.sh`, в корне репозитория) — проверяет реальные
+вызовы CRM/iblock (поиск по реквизиту, реальная выборка инфоблока договоров,
+создание сделки), что заглушками не воспроизвести: юнит-тесты мокают
+`Dogovor\Entity::getList()`, а смок гоняет настоящий SQL. Покрытие со стороны
+вызывающего MCP — `mcp-overlay/tests/unit/tools/deals/`.
