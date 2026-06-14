@@ -52,7 +52,9 @@ class ProcureDeal
 	 * @param int    $contractId        ID договора (0 = не найден) → UF_CRM_DEAL_DOGOVOR
 	 * @param string $documentDate      Дата документа (счёта) в формате d.m.Y →
 	 *                                   BEGINDATE на 09:00. Пусто → текущие дата-время.
-	 * @return array|null { dealId, warnings?: string[] } | null при ошибке создания
+	 * @return array|null { dealId, warnings?: string[] } | null при ошибке создания.
+	 *   Возможные warnings: product_rows_failed | file_attach_failed |
+	 *   invalid_base64_file | document_date_unparsed | timeline_comment_failed.
 	 */
 	public function createAction(
 		int $supplierId,
@@ -109,15 +111,23 @@ class ProcureDeal
 		// Если передана дата документа (счёта) — ставим её на 09:00 (считаем, что
 		// документ оформлен утром); иначе — текущие дата-время.
 		$beginTs = null;
+		$documentDateUnparsed = false;
 		if($documentDate !== '')
 		{
-			// Дата документа приходит в формате d.m.Y (как и дата договора в
-			// procurecontract). Пробуем и формат сайта, и явный DD.MM.YYYY.
-			$docTs = \MakeTimeStamp($documentDate, \CSite::GetDateFormat('SHORT'))
-				?: \MakeTimeStamp($documentDate, 'DD.MM.YYYY');
-			if($docTs)
+			// Дата документа приходит строго в формате d.m.Y (контракт MCP).
+			// Разбираем явно + checkdate: MakeTimeStamp принимал бы и календарно
+			// невалидные значения (mktime(99,99,…) переполняется в будущее), что
+			// дало бы абсурдную BEGINDATE без предупреждения (#113).
+			if(preg_match('/^(\d{2})\.(\d{2})\.(\d{4})$/', $documentDate, $m)
+				&& checkdate((int)$m[2], (int)$m[1], (int)$m[3]))
 			{
-				$beginTs = mktime(9, 0, 0, (int)date('n', $docTs), (int)date('j', $docTs), (int)date('Y', $docTs));
+				$beginTs = mktime(9, 0, 0, (int)$m[2], (int)$m[1], (int)$m[3]);
+			}
+			else
+			{
+				// documentDate передан, но не d.m.Y / не календарная дата →
+				// подставим now(), но просигналим в warnings (#102).
+				$documentDateUnparsed = true;
 			}
 		}
 		if($beginTs === null)
@@ -156,6 +166,10 @@ class ProcureDeal
 		// Некритичные проблемы после создания сделки: не валят вызов (агент должен
 		// получить dealId), но возвращаются в payload, чтобы попасть в отчёт.
 		$warnings = [];
+		if($documentDateUnparsed)
+		{
+			$warnings[] = 'document_date_unparsed';
+		}
 
 		// --- 2) Товарные позиции (TAX_RATE=20, TAX_INCLUDED=Y — бизнес-решение) ---
 		$productRows = [];

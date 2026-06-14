@@ -81,6 +81,8 @@
 Если в ответе `create_deal` есть поле `warnings`, сообщи пользователю об этом явно в итоговом сообщении:
 - `product_rows_failed` → «позиции сделки не сохранились, необходимо заполнить вручную»
 - `file_attach_failed` / `invalid_base64_file` → «исходный файл не прикреплён к сделке»
+- `document_date_unparsed` → «дата документа не распознана, в сделке проставлена текущая дата»
+- `timeline_comment_failed` → «комментарий не добавлен в таймлайн сделки»
 
 ---
 
@@ -172,4 +174,4 @@
 
 ---
 
-*Last reviewed: 2026-06-14 (issue #98 — пример системной ошибки без устаревшего «not implemented»; PR #86 — корректность пайплайна (issue #58): E2BIG-фикс (промпт через stdin); явная формула НДС (`/1.2`, не `×0.8`); направление округления количества; `missing_responsible`; уточнение «цена без НДС» ↔ правило 2; таблица error-кодов; схема create_deal — `contractId` обязателен, `quantity` целое; PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров; PR #71 — create_deal принимает `filePath` + `processingLog`, warnings[] обработка; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*
+*Last reviewed: 2026-06-14 (issue #102/#90 — согласование валидации MCP↔PHP: warnings `document_date_unparsed`/`timeline_comment_failed` в шаге 5; issue #98 — пример системной ошибки без устаревшего «not implemented»; PR #86 — корректность пайплайна (issue #58): E2BIG-фикс (промпт через stdin); явная формула НДС (`/1.2`, не `×0.8`); направление округления количества; `missing_responsible`; уточнение «цена без НДС» ↔ правило 2; таблица error-кодов; схема create_deal — `contractId` обязателен, `quantity` целое; PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров; PR #71 — create_deal принимает `filePath` + `processingLog`, warnings[] обработка; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*

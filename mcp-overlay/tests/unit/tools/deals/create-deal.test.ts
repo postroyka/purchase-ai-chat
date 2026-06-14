@@ -91,6 +91,18 @@ describe('b24_pst_crm_create_deal', () => {
     expect((fake.v2Call.mock.calls[0]![0] as any).params).not.toHaveProperty('documentDate')
   })
 
+  it('passes through controller warnings, e.g. document_date_unparsed (#102)', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ dealId: 7, warnings: ['document_date_unparsed'] }))
+
+    const result = await (tool as any).handler({ ...baseInput, filePath: pdfPath })
+    expect(JSON.parse(result.content[0].text)).toEqual({ dealId: 7, warnings: ['document_date_unparsed'] })
+  })
+
+  it('rejects malformed documentDate via Zod schema, accepts d.m.Y (#102)', () => {
+    expect((tool as any).inputSchema.documentDate.safeParse('2025-03-15').success).toBe(false)
+    expect((tool as any).inputSchema.documentDate.safeParse('15.03.2025').success).toBe(true)
+  })
+
   it('returns file_read_failed and does NOT call B24 on path traversal', async () => {
     const result = await (tool as any).handler({ ...baseInput, filePath: join(uploadsDir, '../../etc/passwd') })
     const payload = JSON.parse(result.content[0].text)

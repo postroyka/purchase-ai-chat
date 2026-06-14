@@ -119,6 +119,10 @@ b24 "shef:purchase.api.procurecontract.find" '{"supplierId":999999}'
 echo_sep "2f. find contract — supplierId=0 (ожидаем error con:010)"
 b24 "shef:purchase.api.procurecontract.find" '{"supplierId":0}' || echo "(ожидается ошибка)"
 
+echo_sep "2g. find contract — слишком длинный номер (ожидаем error con:011)"
+b24 "shef:purchase.api.procurecontract.find" \
+  "{\"supplierId\":${SUPPLIER_ID},\"number\":\"$(python3 -c "print('A'*65)")\"}" || echo "(ожидается ошибка)"
+
 # ── 3. procureproduct.findbyvendorcode ────────────────────────────────────────
 echo_sep "3a. findByVendorCode — реальный артикул"
 b24 "shef:purchase.api.procureproduct.findbyvendorcode" "{\"vendorCode\":\"${VENDOR_CODE}\"}"

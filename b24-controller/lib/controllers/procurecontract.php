@@ -69,6 +69,14 @@ class ProcureContract
 			return null;
 		}
 
+		// Симметрично prd:011 / sup:011 — отсекаем заведомо мусорный длинный номер
+		// договора (защита перед перебором + согласованность контракта, #102).
+		if(mb_strlen($number) > 64)
+		{
+			$this->addError(new Error('Слишком длинный номер договора', 'con:011'));
+			return null;
+		}
+
 		$entity = Dogovor\Entity::getInstance();
 
 		/** @var \Shef\IBlock\Lists\Dogovor\Fields\IBlock\Status $statusField */
