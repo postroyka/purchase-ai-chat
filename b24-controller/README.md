@@ -1,5 +1,7 @@
 # b24-controller
 
+`Last reviewed: 2026-06-14`
+
 REST-контроллеры для procure-ai, размещаемые внутри **существующего** модуля
 `shef.purchase` коробки Bitrix24 (`b24.postroyka.by`).
 
