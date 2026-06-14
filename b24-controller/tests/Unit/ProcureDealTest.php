@@ -201,6 +201,27 @@ final class ProcureDealTest extends TestCase
 		$this->assertContains('file_attach_failed', $res['warnings']);
 	}
 
+	/** #103: недоверенное имя файла санитизируется перед CRestUtil::saveFile. */
+	public function testFileNameSanitizedBeforeSaveFile(): void
+	{
+		\CRestUtil::$saveFileReturn = ['ID' => 5, 'name' => 'x'];
+		$c = new ProcureDeal();
+		// path-traversal + NUL control-символ + неразрешённое расширение .php
+		$c->createAction(1, 2, "../../etc/pa\x00sswd.php", base64_encode('data'), 'log', $this->items());
+
+		// saveFile получает [имя, контент] — имя без пути/control, расширение нейтрализовано.
+		$this->assertSame('passwd.bin', \CRestUtil::$lastArg[0]);
+	}
+
+	/** #103: легитимное имя (вкл. кириллицу) проходит без искажений. */
+	public function testLegitFileNamePreserved(): void
+	{
+		\CRestUtil::$saveFileReturn = ['ID' => 6, 'name' => 'x'];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'Счёт №5.pdf', base64_encode('data'), 'log', $this->items());
+		$this->assertSame('Счёт №5.pdf', \CRestUtil::$lastArg[0]);
+	}
+
 	/**
 	 * Регрессия #99 (by-ref): file Update + timeline onCreate принимают второй
 	 * параметр ПО ССЫЛКЕ. Контроллер обязан передавать ПЕРЕМЕННУЮ-массив, иначе

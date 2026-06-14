@@ -140,6 +140,7 @@ $clientField = $entity->getField('CLIENT'); // getPropertyId()
 Файл приходит как base64 (MCP читает его из uploads-тома по `filePath`).
 `\CRestUtil::saveFile([$fileName, $fileContent])` → `$deal->Update($id, ['UF_CRM_DEAL_SH_PRCHS_AI_FILE' => $fileArray])`.
 Сбой вложения не валит сделку — попадает в `warnings`.
+Имя файла **санитизируется** перед `saveFile` (`sanitizeFileName`, #103) — см. ниже.
 
 ### B7 — лог-комментарий ✅ реализовано
 `processingLog` пишется в поле `COMMENTS` при `CCrmDeal::Add`, и отдельно в таймлайн:
@@ -157,3 +158,27 @@ $clientField = $entity->getField('CLIENT'); // getPropertyId()
 отрицательной цены/нулевого кол-ва, потолок `MAX_ITEMS = 500`. Воронка и стадия —
 `Config::getDealCategoryId()` / `getDealDefaultStageId()` (опции
 `B24_DEAL_CATEGORY_ID`=1, `B24_DEAL_DEFAULT_STAGE_ID`=C1:NEW).
+
+## Безопасность (#103)
+
+Контроллер может вызываться и **напрямую по REST** (вебхуком), в обход MCP-слоя —
+поэтому защита дублируется на стороне контроллера, а не только в MCP.
+
+1. **Санитизация `fileName` ✅ реализовано** (`sanitizeFileName`). `fileName` приходит из
+   недоверенного документа и уходит в `title` и `CRestUtil::saveFile`. Приводим к
+   безопасному виду: `basename` (срез пути `../`/`/etc/...`/`C:\...`), удаление ASCII
+   control-символов (анти log/header-injection), белый список расширений
+   (`ALLOWED_FILE_EXT`; иначе `.bin`), лимит длины (`MAX_FILE_NAME_LEN`). Покрыто
+   тестами `testFileNameSanitizedBeforeSaveFile` / `testLegitFileNamePreserved`.
+
+2. **AuthZ REST — проверить на коробке.** Все контроллеры защищены
+   `parent::getDefaultPreFilters()` из модуля `shef.purchase` (его нет в этом репо).
+   ⚠️ Перед продом **подтвердить на коробке**, что состав prefilters включает
+   `Bitrix\Main\Engine\ActionFilter\Authentication` (и при необходимости `Csrf`),
+   а **scope вебхука минимизирован** (только нужные методы CRM). Без аутентификации
+   обладатель вебхука сможет массово создавать сделки/грузить файлы.
+
+3. **Basic-auth публичной страницы.** Дефолтный логин `PUBLIC_PAGE_BASIC_AUTH_USER`
+   предсказуем (`procure`) — **обязательно сменить** в `.env.prod` на нетривиальный, и
+   задать стойкий `PUBLIC_PAGE_BASIC_AUTH_PASS`. Лимит неуспешных попыток (anti-bruteforce)
+   — на уровне nginx-proxy (fail2ban) при развёртывании.
