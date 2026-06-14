@@ -18,6 +18,7 @@ const { data, error, pending, refresh } = useMetrics()
 const OUTCOME_LABELS: Record<string, string> = {
   ok: 'Успешно',
   tool_unavailable: 'Инструмент Б24 недоступен',
+  foreign_supplier: 'Иностранный поставщик',
   supplier_not_found: 'Поставщик не найден',
   contract_not_found: 'Договор не найден',
   unsupported_currency: 'Валюта не BYN',

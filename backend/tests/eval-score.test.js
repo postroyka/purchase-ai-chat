@@ -30,17 +30,18 @@ describe('normName', () => {
   });
 });
 
-describe('scoreResult — error-путь (как эталонный RUB-счёт)', () => {
-  const expected = { fixture: 'etalon-invoice.pdf', expect: 'error', error: 'unsupported_currency' };
+describe('scoreResult — error-путь (как эталонный РФ-поставщик)', () => {
+  // #97: отказ ожидается по РЕКВИЗИТАМ поставщика (foreign_supplier), а не по валюте.
+  const expected = { fixture: 'etalon-invoice.pdf', expect: 'error', error: 'foreign_supplier' };
 
   it('верный error-код → pass', () => {
-    const r = scoreResult({ error: 'unsupported_currency', message: 'RUB не поддерживается' }, expected);
+    const r = scoreResult({ error: 'foreign_supplier', message: 'РФ-реквизиты ИНН/КПП' }, expected);
     expect(r.pass).toBe(true);
     expect(r.fixture).toBe('etalon-invoice.pdf');
   });
 
-  it('другой error-код → fail', () => {
-    const r = scoreResult({ error: 'supplier_not_found' }, expected);
+  it('отказ по валюте вместо реквизитов → fail (#97: сигнал — ИНН/КПП, не валюта)', () => {
+    const r = scoreResult({ error: 'unsupported_currency' }, expected);
     expect(r.pass).toBe(false);
   });
 

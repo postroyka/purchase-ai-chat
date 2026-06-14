@@ -85,10 +85,12 @@ describe('metrics (in-memory)', () => {
     const m = mem();
     await m.recordFile({ format: 'pdf', status: 'done', outcome: 'supplier_not_found', durationMs: 0, agent: null }); // prompts/main.md (#71)
     await m.recordFile({ format: 'pdf', status: 'done', outcome: 'contract_not_found', durationMs: 0, agent: null }); // prompts/main.md (#71)
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'foreign_supplier', durationMs: 0, agent: null }); // prompts/main.md (#97)
     await m.recordFile({ format: 'pdf', status: 'done', outcome: 'totally_made_up_code', durationMs: 0, agent: null }); // valid shape, not whitelisted
     const s = await m.snapshot();
     expect(s.outcomes).toContainEqual({ name: 'supplier_not_found', count: 1 });
     expect(s.outcomes).toContainEqual({ name: 'contract_not_found', count: 1 });
+    expect(s.outcomes).toContainEqual({ name: 'foreign_supplier', count: 1 });        // #97: именованный код, не 'other'
     expect(s.outcomes).toContainEqual({ name: 'other', count: 1 });                  // unknown code → capped
     expect(s.outcomes.find((o) => o.name === 'totally_made_up_code')).toBeFalsy();   // never stored verbatim
   });

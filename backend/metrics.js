@@ -74,8 +74,9 @@ function label(s, fallback = 'other') {
 const KNOWN_OUTCOMES = new Set([
   'ok', 'unknown', 'other',
   // business errors returned by the agent in result.error — keep in sync with prompts/main.md
-  // (updated for PR #71: supplier_not_found / contract_not_found replaced the old file_* codes).
-  'tool_unavailable', 'unreadable_document', 'supplier_not_found', 'contract_not_found', 'unsupported_currency',
+  // (PR #71: supplier_not_found / contract_not_found replaced the old file_* codes;
+  //  #97: foreign_supplier — российский поставщик отсекается по реквизитам ИНН/КПП).
+  'tool_unavailable', 'unreadable_document', 'foreign_supplier', 'supplier_not_found', 'contract_not_found', 'unsupported_currency',
   // infra failures classified in backend/index.js (classifyAgentError)
   'timeout', 'cli_missing', 'agent_crash', 'bad_output', 'other_error',
 ]);
