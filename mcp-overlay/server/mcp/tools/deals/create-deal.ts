@@ -116,7 +116,10 @@ export default defineMcpTool({
       processingLog,
       items,
     }
-    params.contractId = contractId // обязателен (z.string().min(1)) — guard не нужен
+    // contractId обязателен по схеме (z.string().min(1)), но guard оставляем:
+    // юнит-тест вызывает handler напрямую (минуя Zod) и проверяет, что при
+    // отсутствии contractId он НЕ попадает в params как undefined.
+    if (contractId) params.contractId = contractId
     if (documentDate) params.documentDate = documentDate
 
     const result = await callV2<DealResult>(
