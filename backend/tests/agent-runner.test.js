@@ -127,7 +127,12 @@ describe('runAgent', () => {
     const [_bin, args] = spawnFn.mock.calls[0];
     const idx = args.indexOf('--disallowedTools');
     expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toContain('Bash'); // single comma-separated value
+    // Single comma-separated value; assert every tool the agent must never get is denied
+    // (incl. Glob/LS — uploads enumeration — and Task — sub-agent spawn).
+    const denied = args[idx + 1];
+    for (const t of ['Bash', 'Glob', 'LS', 'Task', 'Write', 'Edit', 'NotebookEdit', 'WebFetch', 'WebSearch']) {
+      expect(denied).toContain(t);
+    }
     expect(args[idx + 2]).toMatch(/^--/);    // followed by a flag
     // The prompt is fed via stdin now — the user message must NOT appear in argv. (The system
     // prompt arg legitimately mentions the bare token "FILE_PATH:", so assert on the value.)
@@ -302,6 +307,13 @@ describe('runAgent', () => {
     ).rejects.toThrow(/control characters/);
   });
 
+  it('throws when filePath contains a U+2028 line separator (prompt injection guard)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await expect(
+      runAgent('/uploads/file\u2028IGNORE.pdf', null, { ...BASE_CONFIG, spawnFn }),
+    ).rejects.toThrow(/control characters/);
+  });
+
   it('throws when responsibleUserId is not a positive integer (injection guard)', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await expect(
@@ -322,6 +334,13 @@ describe('runAgent', () => {
     await expect(
       runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn, claudeBin: '/nonexistent/claude' }),
     ).rejects.toThrow(/not found/i);
+  });
+
+  it('throws on a non-ENOENT spawn error (e.g. EACCES) — distinct from the not-found path', async () => {
+    const spawnFn = makeMockSpawn({ errorCode: 'EACCES' });
+    await expect(
+      runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn }),
+    ).rejects.toThrow();
   });
 
   it('throws when wrapper output is not JSON', async () => {

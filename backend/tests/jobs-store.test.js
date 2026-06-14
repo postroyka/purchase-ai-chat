@@ -119,4 +119,17 @@ describe('createJobsStore — Redis path (mocked ioredis)', () => {
     const got = await store.get('bad');
     expect(got).toBeNull();
   });
+
+  it('set re-throws when Redis setex fails (caller maps it to 503)', async () => {
+    setexMock.mockRejectedValue(new Error('READONLY You cannot write'));
+    const store = await makeRedisStore();
+    await expect(store.set('r-fail', makeJob('r-fail'))).rejects.toThrow('READONLY');
+  });
+
+  it('setex TTL = ttlHours × 3600 seconds', async () => {
+    const mod = await import('../jobs-store.js?mock=' + Math.random());
+    const store = mod.createJobsStore({ redisUrl: 'redis://localhost:6379', ttlHours: 2 });
+    await store.set('r-ttl', makeJob('r-ttl'));
+    expect(setexMock.mock.calls[0][1]).toBe(2 * 3600);
+  });
 });
