@@ -149,10 +149,12 @@ jobs:
           # Без '|| true': если git diff упадёт (например, origin/BASE_REF
           # недостижим), джоба должна громко упасть, а не тихо вернуть docker=false
           # и молча пропустить валидацию. prompts/ включён — он копируется в образ
-          # (Dockerfile.app: COPY prompts/). Каталог mcp/ покрывает и mcp/Dockerfile.
+          # (Dockerfile.app: COPY prompts/). Каталог mcp/ покрывает и mcp/Dockerfile;
+          # mcp-overlay/ — оверлей-инструменты, копируются в mcp-образ (Dockerfile.mcp),
+          # поэтому их правки тоже должны триггерить docker-validate.
           changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- \
             Dockerfile.app Dockerfile.mcp \
-            backend ui mcp prompts \
+            backend ui mcp mcp-overlay prompts \
             docker-compose.prod.yml docker-compose.nginxproxy.yml \
             .github/workflows/ci.yml)
           if [ -n "$changed" ]; then

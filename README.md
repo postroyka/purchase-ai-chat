@@ -230,9 +230,11 @@ cd ui      && pnpm install && pnpm dev               # :3001 (проксируе
 ## Тесты
 
 ```bash
-cd backend && pnpm test           # vitest — upload, auth, jobs-store
-cd mcp     && pnpm test           # vitest — инструменты, mcp-auth, naming
+cd backend && pnpm test           # vitest — upload, auth, jobs-store, agent-runner, eval-score
+cd mcp     && pnpm test           # vitest — инструменты шаблона, mcp-auth, naming
 cd ui      && pnpm lint && pnpm build
+# overlay-инструменты (mcp-overlay/) гоняются отдельно — как в CI-джобе test-mcp-overlay:
+cd mcp && cp -r ../mcp-overlay/tests/unit tests/overlay && pnpm exec vitest run tests/overlay && rm -rf tests/overlay
 make ui-smoke                     # ESLint + nuxt typecheck фронта без полной сборки
 make check-agent-stdin            # регрессия #58: claude --print читает промпт из stdin
 make eval                         # eval-набор агента на фикстурах — ТОЛЬКО на сервере (модель+MCP+pdftotext), не в CI

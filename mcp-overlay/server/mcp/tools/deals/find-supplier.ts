@@ -12,7 +12,7 @@ interface SupplierResult {
 /**
  * Find a Belarusian supplier company by УНП (taxpayer number).
  *
- * Calls the custom controller `shef:purchase.api.procuresupplier.findByUnp`
+ * Calls the custom controller `shef:purchase.api.procuresupplier.findbyunp`
  * over the standard webhook (callV2). The controller matches the company
  * requisite field `RQ_INN` (exact, country = BY) and returns the minimum-id
  * company when several share one УНП. Russian suppliers (INN+KPP without УНП)

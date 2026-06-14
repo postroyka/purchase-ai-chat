@@ -12,7 +12,7 @@ interface ProductResult {
 /**
  * Find an active parent product in the catalog by vendor code.
  *
- * Calls `shef:purchase.api.procureproduct.findByVendorCode` over the webhook
+ * Calls `shef:purchase.api.procureproduct.findbyvendorcode` over the webhook
  * (callV2). The controller matches `PURCHASE_ARTICLE` on active parent products
  * (empty PURCHASE_69_PARENT_PRODUCT) and returns the minimum-id match. Matching
  * is homoglyph-tolerant — Latin/Cyrillic look-alikes match interchangeably

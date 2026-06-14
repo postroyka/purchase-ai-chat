@@ -31,6 +31,14 @@ const UPLOADS_DIR = process.env.NUXT_UPLOADS_DIR || '/app/uploads'
 const MAX_ATTACH_BYTES = (Number(process.env.NUXT_MAX_ATTACH_MB) || 25) * 1024 * 1024
 
 /**
+ * Defensive cap on processingLog length before it is written to the B24 deal (COMMENTS +
+ * timeline). The log is agent-generated and bounded in practice (a few hundred chars), but an
+ * anomalous run shouldn't push ~MB of text into the B24 REST API. Truncated, not rejected, so
+ * deal creation never fails on this.
+ */
+const MAX_LOG_CHARS = 50000
+
+/**
  * realpath(UPLOADS_DIR), resolved once and cached: the uploads dir is deployment
  * config and does not change at runtime, so there is no need to call realpath on
  * every handler invocation. Lazy (not at module load) so import does not throw if
@@ -72,13 +80,19 @@ async function resolveWithinUploads(filePath: string): Promise<string> {
 /**
  * Create a procurement deal in Bitrix24 from an extracted document.
  *
- * Calls `shef.purchase.api.procuredeal.create` over the webhook (callV2): funnel
+ * Calls `shef:purchase.api.procuredeal.create` over the webhook (callV2): funnel
  * «Закупки» (category 1), stage C1:NEW, currency BYN; line items written with
  * TAX_RATE=20 and TAX_INCLUDED=Y (the per-unit document price is excl. VAT — see
  * docs/PROJECT_BRIEF.md, intentional). Reads `filePath` from the read-only uploads
  * volume and base64-encodes it for the deal attachment (so the binary never enters
  * the LLM context), and writes `processingLog` to the deal. No duplicate check —
  * a deal is always created.
+ *
+ * Contract note: `contractId` is REQUIRED at this MCP boundary (schema `min(1)`)
+ * even though the PHP controller declares it optional (`int $contractId = 0`). The
+ * agent must resolve a contract in prompt step 3 and stop otherwise, so a deal with
+ * no contract is a defect, not a valid state — we reject it here rather than let a
+ * contract-less deal through. PHP coerces the string id to int.
  */
 export default defineMcpTool({
   name: 'b24_pst_crm_create_deal',
@@ -105,8 +119,13 @@ export default defineMcpTool({
   },
   handler: async ({ supplierId, contractId, responsibleUserId, filePath, documentDate, processingLog, items }) => {
     let fileContent: string
+    // Resolved (symlink-dereferenced) basename — set from safePath inside the try so the
+    // attachment name reflects the REAL file, not the agent-supplied path. Initialised to a
+    // safe fallback to satisfy definite-assignment (the catch returns, so it is never sent).
+    let safeName = basename(filePath)
     try {
       const safePath = await resolveWithinUploads(filePath)
+      safeName = basename(safePath)
       const { size } = await stat(safePath)
       if (size > MAX_ATTACH_BYTES) {
         return {
@@ -133,9 +152,9 @@ export default defineMcpTool({
     const params: Record<string, unknown> = {
       supplierId,
       responsibleUserId,
-      fileName: basename(filePath),
+      fileName: safeName,
       fileContent,
-      processingLog,
+      processingLog: processingLog.length > MAX_LOG_CHARS ? processingLog.slice(0, MAX_LOG_CHARS) : processingLog,
       items,
     }
     params.contractId = contractId // mandatory per schema (min(1)) — always present

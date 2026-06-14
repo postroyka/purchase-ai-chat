@@ -63,6 +63,11 @@ export function scoreResult(actual, expected) {
     add('нет error', actual?.error == null,
       actual?.error == null ? 'ok' : `неожиданный error="${actual.error}"`);
 
+    // Сделка ДОЛЖНА быть создана — иначе агент лишь распознал документ, но не довёл до
+    // B24 (тихий сбой create_deal). Без этой проверки такой прогон был бы ложно-зелёным.
+    add('сделка создана', actual?.deal?.dealId != null,
+      actual?.deal?.dealId != null ? `dealId=${actual.deal.dealId}` : 'нет deal.dealId — сделка не создана');
+
     if (expected.currency != null) {
       add(`currency == ${expected.currency}`, actual?.currency === expected.currency,
         `ожидали ${expected.currency}, получили ${actual?.currency ?? '(нет)'}`);
@@ -70,6 +75,12 @@ export function scoreResult(actual, expected) {
     if (expected.supplier?.unp != null) {
       add('supplier.unp', String(actual?.supplier?.unp ?? '') === String(expected.supplier.unp),
         `ожидали УНП ${expected.supplier.unp}, получили ${actual?.supplier?.unp ?? '(нет)'}`);
+    }
+    if (expected.supplier?.name != null) {
+      const en = normName(expected.supplier.name);
+      const gn = normName(actual?.supplier?.name);
+      add('supplier.name', !!(en && gn && (gn.includes(en) || en.includes(gn))),
+        `ожидали ~"${expected.supplier.name}", получили "${actual?.supplier?.name ?? '(нет)'}"`);
     }
 
     const actualItems = Array.isArray(actual?.items) ? actual.items : [];

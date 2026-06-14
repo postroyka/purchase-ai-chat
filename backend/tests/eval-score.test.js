@@ -49,6 +49,10 @@ describe('normName', () => {
     expect(normName(null)).toBe('');
     expect(normName(undefined)).toBe('');
   });
+
+  it('число → строка (контракт String(s ?? ""))', () => {
+    expect(normName(42)).toBe('42');
+  });
 });
 
 describe('scoreResult — error-путь (как эталонный RUB-счёт)', () => {
@@ -69,6 +73,7 @@ describe('scoreResult — error-путь (как эталонный RUB-счёт
     const r = scoreResult({ deal: { dealId: '777' } }, expected);
     expect(r.pass).toBe(false);
     const dealCheck = r.checks.find((c) => c.name === 'сделка не создана');
+    expect(dealCheck).toBeTruthy();
     expect(dealCheck.ok).toBe(false);
   });
 });
@@ -105,6 +110,7 @@ describe('scoreResult — deal-путь (happy-path BYN)', () => {
     const r = scoreResult(bad, expected);
     expect(r.pass).toBe(false);
     const vatCheck = r.checks.find((c) => c.name.includes('направление НДС'));
+    expect(vatCheck).toBeTruthy();
     expect(vatCheck.ok).toBe(false);
   });
 
@@ -126,6 +132,26 @@ describe('scoreResult — deal-путь (happy-path BYN)', () => {
   it('неожиданный error на deal-фикстуре → fail', () => {
     const r = scoreResult({ error: 'tool_unavailable' }, expected);
     expect(r.pass).toBe(false);
+  });
+
+  it('нет deal.dealId → fail (агент распознал, но сделку не создал — не ложно-зелёный)', () => {
+    const noDeal = {
+      currency: 'BYN',
+      supplier: { unp: '191234567' },
+      items: [{ name: 'Цемент М500', priceExclVat: 100, quantity: 10 }],
+      // deal отсутствует
+    };
+    const r = scoreResult(noDeal, expected);
+    expect(r.pass).toBe(false);
+    const created = r.checks.find((c) => c.name === 'сделка создана');
+    expect(created).toBeTruthy();
+    expect(created.ok).toBe(false);
+  });
+
+  it('неверное имя поставщика при заданном supplier.name → fail', () => {
+    const expWithName = { ...expected, supplier: { unp: '191234567', name: 'ООО Поставщик' } };
+    const bad = { ...goodActual, supplier: { unp: '191234567', name: 'ООО Левый' } };
+    expect(scoreResult(bad, expWithName).pass).toBe(false);
   });
 });
 
@@ -161,5 +187,13 @@ describe('scoreResult — падение прогона (runner)', () => {
     const expected = { fixture: 'byn-ok.pdf', expect: 'deal', currency: 'BYN' };
     const r = scoreResult({ error: 'eval_run_failed', message: 'spawn claude ENOENT' }, expected);
     expect(r.pass).toBe(false);
+  });
+});
+
+describe('scoreResult — неизвестный expect', () => {
+  it('expect не "error"/"deal" → pass=false + check "valid expected.expect"', () => {
+    const r = scoreResult({}, { fixture: 'f.pdf', expect: 'Deal' });
+    expect(r.pass).toBe(false);
+    expect(r.checks.find((c) => c.name === 'valid expected.expect')).toBeTruthy();
   });
 });

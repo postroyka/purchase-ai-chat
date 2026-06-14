@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -25,6 +25,7 @@ const { default: tool } = await import('../../../../server/mcp/tools/deals/creat
 
 const baseInput = {
   supplierId: '10',
+  contractId: '42', // mandatory per schema — keep in the baseline so handler calls are valid
   responsibleUserId: '1',
   filePath: '', // set per-test
   processingLog: 'Processed OK',
@@ -48,6 +49,7 @@ describe('b24_pst_crm_create_deal', () => {
       method: 'shef:purchase.api.procuredeal.create',
       params: expect.objectContaining({
         supplierId: '10',
+        contractId: '42',
         responsibleUserId: '1',
         fileName: 'invoice.pdf',
         fileContent: Buffer.from('PDFDATA').toString('base64'),
@@ -82,8 +84,26 @@ describe('b24_pst_crm_create_deal', () => {
 
     expect((fake.v2Call.mock.calls[0]![0] as any).params).not.toHaveProperty('documentDate')
   })
+
   it('returns file_read_failed and does NOT call B24 on path traversal', async () => {
     const result = await (tool as any).handler({ ...baseInput, filePath: join(uploadsDir, '../../etc/passwd') })
+    const payload = JSON.parse(result.content[0].text)
+
+    expect(payload.error).toBe(true)
+    expect(payload.code).toBe('file_read_failed')
+    expect(fake.v2Call).not.toHaveBeenCalled()
+  })
+
+  it('returns file_read_failed on a symlink that escapes uploads (caught by realpath, not lexical ../)', async () => {
+    // Symlink INSIDE uploads pointing OUTSIDE it — defeats the lexical ../ check; the second
+    // realpath-based containment check must reject it. (.catch keeps the test valid even where
+    // symlink creation is not permitted — a broken link also yields file_read_failed.)
+    const outsideFile = join(tmpdir(), `outside-${Date.now()}.txt`)
+    await writeFile(outsideFile, 'SECRET').catch(() => {})
+    const linkPath = join(uploadsDir, 'escape.pdf')
+    await symlink(outsideFile, linkPath).catch(() => {})
+
+    const result = await (tool as any).handler({ ...baseInput, filePath: linkPath })
     const payload = JSON.parse(result.content[0].text)
 
     expect(payload.error).toBe(true)

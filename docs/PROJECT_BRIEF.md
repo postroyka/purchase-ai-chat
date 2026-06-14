@@ -71,11 +71,14 @@ procure-ai/
 ├── backend/                        # Node.js: /upload, оркестрация, журнал заданий, cron cleanup
 │   ├── agent-runner.js             #   spawn Claude Code CLI, MCP-конфиг, таймаут, парсинг ответа
 │   ├── extract-text.js             #   файл→текст: pdftotext/OCR (poppler+tesseract); office→doc_to_text.py
-│   └── doc_to_text.py              #   xlsx/xls/docx → текст (openpyxl/xlrd/python-docx)
+│   ├── doc_to_text.py              #   xlsx/xls/docx → текст (openpyxl/xlrd/python-docx)
+│   ├── eval/                       #   eval-набор агента: score.js (сверка с эталоном) + run.js (прогон)
+│   └── tests/                      #   vitest: upload, auth, jobs-store, agent-runner, eval-score
 ├── mcp/                            # MCP-сервер: find_supplier / find_contract / find_product / create_deal
 ├── mcp-overlay/                    # PST-инструменты (b24_pst_crm_*), накладываются поверх mcp/ при сборке
 ├── b24-controller/                 # PHP REST-контроллеры shef:purchase.api.procure* (деплой make deploy-b24)
 ├── ui/                             # templates-dashboard + UI Kit: загрузка + пофайловый отчёт
+├── scripts/                        # деплой/смоук/e2e: deploy-b24, smoke-test-b24, agent-e2e-test.{sh,ps1}
 ├── docs/
 │   ├── PROJECT_BRIEF.md            # этот файл
 │   └── ТЗ_Закупки_PST.md

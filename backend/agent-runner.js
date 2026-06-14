@@ -312,10 +312,11 @@ function spawnClaude({
       '--mcp-config', mcpConfigPath,
       // Defense-in-depth against prompt injection from untrusted file content: deny the
       // tools the agent never needs (it only requires Read + the b24_pst_crm_* MCP tools),
-      // so an injected instruction can't shell out, tamper with files, or exfiltrate.
-      // Deny rules are honoured even under --dangerously-skip-permissions. Placed before a
-      // boolean flag so the variadic list never swallows the trailing user message.
-      '--disallowedTools', 'Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch',
+      // so an injected instruction can't shell out, tamper with files, exfiltrate, enumerate
+      // the uploads dir (Glob/LS — would leak other jobs' filenames), or spawn a sub-agent
+      // (Task). Deny rules are honoured even under --dangerously-skip-permissions. Placed
+      // before a boolean flag so the variadic list never swallows the trailing user message.
+      '--disallowedTools', 'Bash,Glob,LS,Task,Write,Edit,NotebookEdit,WebFetch,WebSearch',
       // Required so the agent can read uploaded files without interactive prompts.
       // Mitigated by: container runs as non-root, uploads are in a dedicated directory,
       // filePath is validated above, and the prompt marks file content as untrusted input.

@@ -1,3 +1,8 @@
+---
+name: manage-bx24-template-mcp
+description: Engineering reference for the UPSTREAM Bitrix24 templates-mcp server internals (tool naming, tests, dependency upgrades). NOTE for procure-ai — our custom procurement tools (b24_pst_crm_*) live in mcp-overlay/, NOT in mcp/server/mcp/tools/; see the root README. Use only when working on the mcp/ template itself.
+---
+
 # bx24-template-mcp — Agent Skill
 
 `Last reviewed: 2026-06-03`

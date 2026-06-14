@@ -181,6 +181,9 @@ export function createApp(config = {}) {
   });
 
   const jobs = config.jobs ?? createJobsStore({ redisUrl, ttlHours });
+  if (!redisUrl && !config.jobs) {
+    console.warn('[jobs-store] REDIS_URL не задан — журнал заданий в памяти процесса: задания ЭФЕМЕРНЫ и теряются при рестарте. Для персистентности задайте REDIS_URL.');
+  }
   // The live NB RB rate is wired at the prod entry point (bottom of file), not here, so
   // createApp stays hermetic — no outbound api.nbrb.by call from the unit/route test suites.
   const metrics = config.metrics ?? createMetrics({ redisUrl });
@@ -274,7 +277,11 @@ export function createApp(config = {}) {
         if (err.code === 'LIMIT_FILE_COUNT') {
           return res.status(400).json({ error: `Too many files. Max: ${maxFilesPerRequest}` });
         }
-        return res.status(400).json({ error: err.message });
+        // Known multer errors are handled above with safe messages; for anything else
+        // (e.g. a diskStorage/FS failure) do NOT echo err.message to the client — it can
+        // leak internal paths (/app/uploads/_tmp/…). Log server-side, return a generic message.
+        console.error(`[upload] unexpected upload error: ${err.message}`);
+        return res.status(400).json({ error: 'Upload failed.' });
       }
 
       if (!req.files || req.files.length === 0) {
