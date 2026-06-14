@@ -141,6 +141,28 @@ cp -p ~/.procure-ai-deploy-backup/<дата>/config.php   "$DST"/
    ssh-keyscan -p <порт> <host> >> ~/.ssh/known_hosts
    ```
 
+### Автоматический деплой (CI)
+
+Workflow [`.github/workflows/deploy-b24.yml`](../.github/workflows/deploy-b24.yml):
+
+- **push в `main`** → после зелёного CI, если менялись `b24-controller/**`, файлы
+  выкладываются на **staging (`tstb24`)** автоматически (бэкап + health встроены).
+- **`workflow_dispatch`** (вкладка Actions → Deploy b24-controller → Run) → деплой
+  на выбранное окружение; **`production` (`b24`)** проходит через GitHub Environment
+  с required reviewer — то есть только по ручному аппруву.
+
+Ручной `make deploy-b24 APPLY=1` остаётся рабочим (например для отладки).
+
+**Разовая настройка в репозитории (Settings):**
+1. **Environments** `staging` и `production`; у `production` — Protection rules →
+   Required reviewers.
+2. **Environment secrets** для каждого окружения: `B24_SSH_HOST`, `B24_SSH_USER`,
+   `B24_SSH_PORT`, `B24_SSH_PASS`, `B24_CONTROLLERS_PATH`, `WEBHOOK_URL`
+   (вебхук должен указывать на ТУ ЖЕ коробку, что и хост).
+
+> Полный smoke с созданием сделок в CI не гоняется (создавал бы мусорные сделки) —
+> авто-проверка ограничена read-only health-чеком. Полный smoke — вручную на `tstb24`.
+
 ### Деплой при изменении контракта MCP ↔ PHP
 
 ⚠️ **Контроллеры (`b24-controller`) и MCP-инструменты деплоятся по-разному:**
