@@ -5,18 +5,25 @@ name: Deploy b24-controller
 #   - push в main → после ЗЕЛЁНОГО CI, если менялись b24-controller/**, деплой на
 #     STAGING (tstb24) автоматически;
 #   - workflow_dispatch → деплой на выбранное окружение; PRODUCTION (b24) проходит
-#     через GitHub Environment c required reviewer (человек в контуре).
+#     через GitHub Environment c required reviewer (человек в контуре). Можно
+#     запустить «симуляцию» (dry_run) — без записи на сервер.
 #
-# Бэкап прежних версий, php -l config.php и пост-деплой read-only health-чек —
-# встроены в scripts/deploy-b24-controller.sh (PR #100). Здесь только транспорт.
+# Бэкап прежних версий, php -l config.php, авто-rollback при провале health и
+# read-only health-чек — встроены в scripts/deploy-b24-controller.sh (#100/#110).
 #
-# ── Требуется настроить в репозитории (Settings) ───────────────────────────────
-#   Environments: `staging` и `production`.
-#     • production → Protection rules → Required reviewers (ручной аппрув).
-#   Secrets каждого окружения (Environment secrets):
-#     B24_SSH_HOST, B24_SSH_USER, B24_SSH_PORT, B24_SSH_PASS,
-#     B24_CONTROLLERS_PATH, WEBHOOK_URL  (вебхук ТОЙ ЖЕ коробки!)
-#   Без этих секретов job упадёт на обязательном WEBHOOK_URL — это ожидаемо.
+# ⚠️ СЕТЕВОЙ ДОСТУП: GitHub-hosted раннеры ходят с динамических облачных IP. Если
+#    SSH-порт коробки закрыт файрволом/по IP (типично для боевой b24) — деплой не
+#    дойдёт. Тогда используйте self-hosted runner в сети заказчика: замените
+#    `runs-on: ubuntu-latest` на ваш label (напр. `[self-hosted, b24]`).
+#
+# ── Настройка в репозитории (Settings) ─────────────────────────────────────────
+#   Environments: `staging` и `production` (у production → Required reviewers).
+#   Environment secrets каждого окружения:
+#     B24_SSH_HOST, B24_SSH_USER, B24_SSH_PORT, B24_CONTROLLERS_PATH,
+#     WEBHOOK_URL (вебхук ТОЙ ЖЕ коробки),
+#     и ОДНО из: B24_SSH_PASS (пароль) ИЛИ настроенный deploy-key на хосте.
+#   Опц.: B24_SSH_HOST_KEY — строка known_hosts сервера (пиннинг host-key вместо
+#         доверия ssh-keyscan; рекомендуется). Получить: ssh-keyscan -p <порт> <host>.
 
 on:
   workflow_run:
@@ -30,8 +37,13 @@ on:
         type: choice
         options: [staging, production]
         default: staging
+      dry_run:
+        description: Симуляция (не писать на сервер)
+        type: boolean
+        default: false
 
 # Не отменять идущий деплой; параллельные — в очередь по окружению.
+# (workflow_dispatch → выбранное окружение; workflow_run → всегда staging.)
 concurrency:
   group: deploy-b24-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'staging' }}
   cancel-in-progress: false
@@ -43,8 +55,9 @@ jobs:
   detect:
     name: Что и куда деплоить
     runs-on: ubuntu-latest
-    # workflow_run — только при успешном CI; workflow_dispatch — всегда.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # workflow_dispatch — всегда; workflow_run — только при успешном CI И из ЭТОГО
+    # репозитория (не из форка — иначе чужой PR мог бы инициировать деплой).
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository) }}
     outputs:
       changed: ${{ steps.f.outputs.changed }}
       target_env: ${{ steps.f.outputs.target_env }}
@@ -70,9 +83,15 @@ jobs:
           fi
           # Авто после CI — только staging и только если менялись наши PHP-файлы.
           echo "target_env=staging" >> "$GITHUB_OUTPUT"
-          changed=$(git diff --name-only "${HEAD_SHA}~1" "${HEAD_SHA}" -- \
-            'b24-controller/lib/controllers/procure*.php' \
-            'b24-controller/lib/config.php' || true)
+          # Без '|| true': сбой git diff должен валить detect, а не тихо пропускать
+          # деплой. Первый коммит репо (нет HEAD~1) → считаем, что менялось всё.
+          if git rev-parse --verify -q "${HEAD_SHA}~1" >/dev/null; then
+            changed=$(git diff --name-only "${HEAD_SHA}~1" "${HEAD_SHA}" -- \
+              'b24-controller/lib/controllers/procure*.php' \
+              'b24-controller/lib/config.php')
+          else
+            changed="initial-commit"
+          fi
           if [ -n "$changed" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Изменены b24-controller — деплой на staging:"; echo "$changed" | sed 's/^/  - /'
@@ -84,30 +103,39 @@ jobs:
   deploy:
     name: Деплой → ${{ needs.detect.outputs.target_env }}
     needs: detect
-    if: ${{ needs.detect.outputs.changed == 'true' }}
-    runs-on: ubuntu-latest
-    # Привязка к GitHub Environment → применяются его secrets и protection rules
-    # (для production — required reviewer: job будет ждать ручного аппрува).
+    # Деплоим только если detect успешна И есть изменения (сбой detect ≠ молчаливый skip).
+    if: ${{ needs.detect.result == 'success' && needs.detect.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest   # коробка за firewall → замените на self-hosted (см. шапку)
+    timeout-minutes: 10
+    # GitHub Environment → его secrets + protection rules (production = required reviewer).
     environment: ${{ needs.detect.outputs.target_env }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          fetch-depth: 1
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Установить sshpass
         run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
 
-      - name: Зафиксировать host-key (до деплоя)
+      - name: Подготовить known_hosts
         env:
+          HK: ${{ secrets.B24_SSH_HOST_KEY }}
           H: ${{ secrets.B24_SSH_HOST }}
           P: ${{ secrets.B24_SSH_PORT }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -p "${P:-22}" "$H" >> ~/.ssh/known_hosts 2>/dev/null
+          if [ -n "${HK:-}" ]; then
+            printf '%s\n' "$HK" >> ~/.ssh/known_hosts
+            echo "host-key взят из secret B24_SSH_HOST_KEY (пиннинг)."
+          else
+            echo "::warning title=Host-key TOFU::B24_SSH_HOST_KEY не задан — ключ сервера принимается через ssh-keyscan без верификации (MitM-вектор на раннере). Задайте B24_SSH_HOST_KEY для пиннинга."
+            ssh-keyscan -p "${P:-22}" "$H" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Деплой (APPLY=1) + бэкап + health
+      - name: Деплой + бэкап + health
         env:
           B24_SSH_HOST: ${{ secrets.B24_SSH_HOST }}
           B24_SSH_USER: ${{ secrets.B24_SSH_USER }}
@@ -115,5 +143,6 @@ jobs:
           B24_SSH_PASS: ${{ secrets.B24_SSH_PASS }}
           B24_CONTROLLERS_PATH: ${{ secrets.B24_CONTROLLERS_PATH }}
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
-          APPLY: "1"
+          # dry_run (только из workflow_dispatch) → APPLY=0 (симуляция); иначе APPLY=1.
+          APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '0' || '1' }}
         run: bash scripts/deploy-b24-controller.sh

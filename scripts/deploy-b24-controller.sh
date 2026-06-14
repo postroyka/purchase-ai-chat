@@ -132,6 +132,23 @@ write_deploy_log() {
   echo "$(date -u +%FT%TZ) APPLY env=${DEPLOY_ENV} host=${B24_SSH_HOST} git=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') user=$(whoami) backup=${BACKUP_REL:-?} health=$1" >> "$SCRIPT_DIR/deploy.log"
 }
 
+# Авто-откат: вернуть снимок BACKUP_REL на место. Вызывается при провале php -l /
+# health, чтобы авто-деплой (staging) не оставлял сломанные файлы на сервере.
+rollback() {
+  [ -n "${BACKUP_REL:-}" ] || { echo "  (бэкапа нет — откатывать нечего)" >&2; return 1; }
+  echo "  Авто-откат из ~/${BACKUP_REL}/ ..." >&2
+  if remote "
+    set -e
+    BK=\"\$HOME/${BACKUP_REL}\"
+    cp -p \"\$BK\"/procure*.php '${B24_CONTROLLERS_PATH}/' 2>/dev/null || true
+    [ -f \"\$BK/config.php\" ] && cp -p \"\$BK/config.php\" '${B24_LIB_PATH}/' || true
+  "; then
+    echo "  Откат выполнен (восстановлены прежние версии)." >&2
+  else
+    echo "  ⚠️ Откат не удался — восстановите файлы из бэкапа на сервере вручную." >&2
+  fi
+}
+
 # Пост-деплой health: read-only проверка контроллеров. Семантика 3 уровней:
 #   FAIL — пустой ответ или ERROR_METHOD_NOT_FOUND (сервер лёг / метод не загружен);
 #   OK   — вернулся ожидаемый код/ключ (метод зарегистрирован, валидация отработала);
@@ -154,8 +171,13 @@ postdeploy_health() {
     if printf '%s' "$resp" | grep -qF "\"$3\""; then
       echo "    OK   $1 → $3"; return
     fi
-    # Ответил, но не тем — усекаем до 80 символов, чтобы не светить стек/пути в логе.
-    echo "    WARN $1 → ждали \"$3\", иной ответ (контроллер жив, проверьте): $(printf '%s' "$resp" | tr -d '\n' | head -c 80)"
+    # Ответил, но не тем. Усекаем + вычищаем URL-подобное (вебхук-токен), чтобы не
+    # светить секрет в логе. В CI — GitHub-аннотация (жёлтый badge, иначе WARN не
+    # виден в статусе).
+    local safe
+    safe=$(printf '%s' "$resp" | tr -d '\n' | sed -E 's#https?://[^ "]+#<url>#g' | head -c 80)
+    echo "    WARN $1 → ждали \"$3\", иной ответ (контроллер жив, проверьте): ${safe}"
+    [ "${GITHUB_ACTIONS:-}" = "true" ] && echo "::warning title=health WARN::$1 не вернул \"$3\" — проверьте контроллер/БД вручную"
   }
   # Негативные — регистрация + ранняя валидация (supplierId=0 → deal:010 ДО Add):
   _hc "shef:purchase.api.procuresupplier.findbyunp"       '{"unp":""}'        'sup:010'
@@ -223,8 +245,9 @@ if remote "command -v php >/dev/null 2>&1"; then
   if remote "php -l '${B24_LIB_PATH}/config.php'"; then
     echo "config.php — синтаксис OK."
   else
-    echo "❌ config.php не проходит php -l. Откат из ~/${BACKUP_REL}/ (см. ниже)." >&2
+    echo "❌ config.php не проходит php -l на сервере — откатываю." >&2
     write_deploy_log "config-lint-fail"
+    rollback
     exit 1
   fi
 else
@@ -243,10 +266,9 @@ if [ -n "$HOOK" ]; then
     health_status="fail"
     write_deploy_log "$health_status"
     echo "" >&2
-    echo "❌ Health-чек не прошёл (см. FAIL выше)." >&2
-    echo "   Откат — зайдите на сервер (ssh ${B24_SSH_USER}@${B24_SSH_HOST}) и выполните:" >&2
-    echo "     cp -p ~/${BACKUP_REL}/procure*.php ${B24_CONTROLLERS_PATH}/" >&2
-    echo "     cp -p ~/${BACKUP_REL}/config.php ${B24_LIB_PATH}/" >&2
+    echo "❌ Health-чек не прошёл (см. FAIL выше) — откатываю." >&2
+    rollback
+    echo "   Если откат не сработал — восстановите файлы из бэкапа ~/${BACKUP_REL}/ на сервере." >&2
     exit 1
   fi
 elif [ "${SKIP_HEALTH:-0}" = "1" ]; then

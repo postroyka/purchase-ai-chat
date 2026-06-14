@@ -145,23 +145,38 @@ cp -p ~/.procure-ai-deploy-backup/<дата>/config.php   "$DST"/
 
 Workflow [`.github/workflows/deploy-b24.yml`](../.github/workflows/deploy-b24.yml):
 
-- **push в `main`** → после зелёного CI, если менялись `b24-controller/**`, файлы
-  выкладываются на **staging (`tstb24`)** автоматически (бэкап + health встроены).
-- **`workflow_dispatch`** (вкладка Actions → Deploy b24-controller → Run) → деплой
-  на выбранное окружение; **`production` (`b24`)** проходит через GitHub Environment
-  с required reviewer — то есть только по ручному аппруву.
+- **push в `main`** → после зелёного CI, если менялись `lib/controllers/procure*.php`
+  или `lib/config.php`, файлы выкладываются на **staging (`tstb24`)** автоматически
+  (бэкап + `php -l` + read-only health + **авто-rollback при провале** — в скрипте).
+  Деплоится именно тот коммит, на котором отработал CI.
+- **`workflow_dispatch`** (Actions → Deploy b24-controller → Run) → деплой на выбранное
+  окружение; можно включить **dry_run** (симуляция). **`production` (`b24`)** проходит
+  через GitHub Environment с required reviewer — только по ручному аппруву.
 
-Ручной `make deploy-b24 APPLY=1` остаётся рабочим (например для отладки).
+Ручной `make deploy-b24 APPLY=1` остаётся рабочим (отладка, ad-hoc).
+
+> ⚠️ **Сетевой доступ.** GitHub-hosted раннеры ходят с динамических облачных IP
+> (диапазоны — `https://api.github.com/meta`, поле `actions`). Если SSH-порт коробки
+> закрыт файрволом/по IP (типично для боевой `b24`) — деплой не дойдёт. Тогда нужен
+> **self-hosted runner** в сети заказчика: в `deploy-b24.yml` замените
+> `runs-on: ubuntu-latest` на ваш label (напр. `[self-hosted, b24]`).
 
 **Разовая настройка в репозитории (Settings):**
 1. **Environments** `staging` и `production`; у `production` — Protection rules →
    Required reviewers.
-2. **Environment secrets** для каждого окружения: `B24_SSH_HOST`, `B24_SSH_USER`,
-   `B24_SSH_PORT`, `B24_SSH_PASS`, `B24_CONTROLLERS_PATH`, `WEBHOOK_URL`
-   (вебхук должен указывать на ТУ ЖЕ коробку, что и хост).
+2. **Environment secrets** каждого окружения: `B24_SSH_HOST`, `B24_SSH_USER`,
+   `B24_SSH_PORT`, `B24_CONTROLLERS_PATH`, `WEBHOOK_URL` (вебхук ТОЙ ЖЕ коробки),
+   и **аутентификация SSH**: `B24_SSH_PASS` (пароль) *или* deploy-key на хосте
+   (для CI предпочтительнее ключ — безопаснее и ротируемее пароля).
+3. **Опц., рекомендуется** `B24_SSH_HOST_KEY` — строка `known_hosts` сервера (пиннинг
+   host-key вместо доверия `ssh-keyscan`; получить: `ssh-keyscan -p <порт> <host>`).
 
-> Полный smoke с созданием сделок в CI не гоняется (создавал бы мусорные сделки) —
-> авто-проверка ограничена read-only health-чеком. Полный smoke — вручную на `tstb24`.
+> Полный smoke с созданием сделок в CI не гоняется (плодил бы сделки) — авто-проверка
+> ограничена read-only health-чеком. Полный smoke — вручную на `tstb24`.
+>
+> ⚠️ Деплой PHP на staging ≠ готовая к smoke среда: MCP-образ обновляется отдельно
+> (Watchtower, ~5 мин). При контрактных изменениях MCP↔PHP учитывайте окно
+> рассинхрона (см. ниже «Деплой при изменении контракта»).
 
 ### Деплой при изменении контракта MCP ↔ PHP
 
