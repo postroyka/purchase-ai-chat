@@ -19,6 +19,16 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 // to flush output and exit cleanly before we force-kill.
 const SIGKILL_GRACE_MS = 5_000;
 
+// Bounded retry for TRANSIENT provider failures (HTTP 429 / 5xx / network blip / our
+// own timeout). The LLM provider is a single point of failure (issue #104): a short
+// backoff rides out throttling and momentary outages without an operator re-uploading
+// the invoice by hand. Permanent faults (missing CLI, bad input, unparseable output)
+// are never retried — see isTransientAgentError(). NB: each attempt has the full
+// AGENT_TIMEOUT_MS budget, so worst-case wall time ≈ AGENT_MAX_ATTEMPTS × timeout.
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_RETRY_BASE_MS = 1_000;
+const DEFAULT_RETRY_MAX_MS = 15_000;
+
 // Env vars that claude CLI needs — subset of process.env (principle of least privilege).
 const AGENT_ENV_KEYS = [
   'PATH', 'HOME', 'USER', 'TMPDIR', 'TEMP', 'TMP',
@@ -59,9 +69,14 @@ const AGENT_ENV_KEYS = [
  *   mcpToken?: string,
  *   model?: string,
  *   timeoutMs?: number,
+ *   maxAttempts?: number,
+ *   retryBaseMs?: number,
+ *   retryMaxMs?: number,
  *   jobId?: string,
  *   spawnFn?: typeof import('node:child_process').spawn,
  *   extractFn?: (filePath: string) => Promise<{ text: string, method: string }|null>,
+ *   sleepFn?: (ms: number) => Promise<void>,
+ *   randomFn?: () => number,
  *   onMeta?: (meta: { extractMethod: string|null, costUsd: number|null, agentDurationMs: number, numTurns: number|null }) => void,
  * }} AgentConfig
  */
@@ -77,9 +92,18 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const model = config.model ?? process.env.CLAUDE_MODEL ?? null;
   const timeoutMs = config.timeoutMs
     ?? parseInt(process.env.AGENT_TIMEOUT_MS ?? String(DEFAULT_TIMEOUT_MS), 10);
+  // Retry knobs (transient-only). At least 1 attempt; 1 disables retry.
+  const maxAttempts = Math.max(1, config.maxAttempts
+    ?? (parseInt(process.env.AGENT_MAX_ATTEMPTS ?? String(DEFAULT_MAX_ATTEMPTS), 10) || DEFAULT_MAX_ATTEMPTS));
+  const retryBaseMs = config.retryBaseMs
+    ?? (parseInt(process.env.AGENT_RETRY_BASE_MS ?? '', 10) || DEFAULT_RETRY_BASE_MS);
+  const retryMaxMs = config.retryMaxMs
+    ?? (parseInt(process.env.AGENT_RETRY_MAX_MS ?? '', 10) || DEFAULT_RETRY_MAX_MS);
   const jobId = config.jobId ?? null;
   const spawnFn = config.spawnFn ?? spawn;
   const extractFn = config.extractFn ?? extractDocumentText;
+  const sleepFn = config.sleepFn ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const randomFn = config.randomFn ?? Math.random;
 
   const systemPrompt = getSystemPrompt();
 
@@ -146,26 +170,48 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   }
   const mcpConfigPath = join(tmpDir, 'config.json');
 
+  const tag = jobId ? `[agent job=${jobId}]` : '[agent]';
   try {
-    const { result, meta } = await spawnClaude({
-      spawnFn,
-      claudeBin,
-      model,
-      systemPrompt,
-      userMessage,
-      mcpConfigPath,
-      cwd,
-      timeoutMs,
-      jobId,
-    });
-    // Best-effort usage metric (issue #67): surface extraction method + agent cost/time.
-    // Wrapped so a throwing/absent hook can never break the agent run.
-    if (typeof config.onMeta === 'function') {
+    let lastErr;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        config.onMeta({ extractMethod: extracted?.method ?? null, ...meta });
-      } catch { /* metrics must not affect the pipeline */ }
+        const { result, meta } = await spawnClaude({
+          spawnFn,
+          claudeBin,
+          model,
+          systemPrompt,
+          userMessage,
+          mcpConfigPath,
+          cwd,
+          timeoutMs,
+          jobId,
+        });
+        if (attempt > 1) console.log(`${tag} succeeded on attempt ${attempt}/${maxAttempts}`);
+        // Best-effort usage metric (issue #67): surface extraction method + agent cost/time.
+        // Wrapped so a throwing/absent hook can never break the agent run.
+        if (typeof config.onMeta === 'function') {
+          try {
+            config.onMeta({ extractMethod: extracted?.method ?? null, ...meta });
+          } catch { /* metrics must not affect the pipeline */ }
+        }
+        return result;
+      } catch (err) {
+        lastErr = err;
+        // Last attempt, or a permanent fault → surface the real error (callers/metrics
+        // classify it). Only transient provider/network failures are worth a retry.
+        if (attempt >= maxAttempts || !isTransientAgentError(err)) throw err;
+        // Exponential backoff with partial jitter (50–100% of the window) so concurrent
+        // jobs don't retry in lockstep against an already-stressed provider.
+        const window = Math.min(retryMaxMs, retryBaseMs * 2 ** (attempt - 1));
+        const delay = Math.round(window * (0.5 + randomFn() * 0.5));
+        console.warn(
+          `${tag} attempt ${attempt}/${maxAttempts} failed (transient), retrying in ${delay}ms: `
+          + redactToken(err.message),
+        );
+        await sleepFn(delay);
+      }
     }
-    return result;
+    throw lastErr; // unreachable: the loop always returns or throws, but keeps control flow explicit
   } finally {
     // Always clean up — config file contains auth token.
     try {
@@ -198,6 +244,32 @@ export function buildMcpConfig(mcpUrl, mcpToken) {
  */
 export function redactToken(text) {
   return String(text).replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]');
+}
+
+/**
+ * Classify an agent failure as TRANSIENT (worth a retry) vs PERMANENT.
+ *
+ * Transient = the provider/network blips issue #104 calls out: HTTP 429, any 5xx,
+ * "overloaded"/"rate limit", connection resets and our own run timeout. These usually
+ * clear on a second try once throttling/load subsides.
+ *
+ * Permanent (never retried — re-running only burns time and tokens): missing CLI
+ * binary, path-traversal / input validation, and malformed or non-JSON agent output.
+ *
+ * Matched against the Error message text (agent-runner builds these from the child's
+ * stderr / wrapper), so it works without structured error codes from the CLI.
+ *
+ * @param {Error|unknown} err
+ * @returns {boolean}
+ */
+export function isTransientAgentError(err) {
+  const msg = err && err.message ? String(err.message) : String(err);
+  // Deterministic faults first — retrying cannot help (and "ENOENT" must win over the
+  // network-error list below, which also contains E* codes).
+  if (/CLI not found|ENOENT|path traversal|Invalid filePath|Invalid responsibleUserId|not valid JSON|no JSON/i.test(msg)) {
+    return false;
+  }
+  return /\b(429|5\d\d|overloaded|rate.?limit(?:ed)?|too many requests|timed out|service unavailable|temporarily unavailable|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|socket hang up)\b/i.test(msg);
 }
 
 function buildAgentEnv() {

@@ -81,7 +81,7 @@ procure-ai/
 │   └── ТЗ_Закупки_PST.md
 └── .github/workflows/
     ├── ci.yml
-    └── deploy.yml                  # build → push ghcr.io/<org>/procure-ai; Watchtower подхватывает
+    └── deploy.yml                  # main→sha-<sha>; тег v*→latest (прод #104); Watchtower следит за latest
 ```
 
 ---

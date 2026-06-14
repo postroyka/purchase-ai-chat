@@ -188,8 +188,9 @@ bash agent-e2e-test.sh
 | Приложение (app, mcp, redis, watchtower) | `docker-compose.prod.yml` | `procure-ai` | `make prod-up` / `prod-redeploy` |
 | Реверс-прокси (nginx-proxy, acme-companion) | `docker-compose.nginxproxy.yml` | `procure-proxy` | `make init-nginxproxy` |
 
-> 🛠️ **Деплой без GitHub Actions.** Обычно образы публикует workflow `Deploy` (после
-> зелёного CI), их подхватывает Watchtower. Если раннеры/минуты Actions недоступны —
+> 🛠️ **Деплой без GitHub Actions.** Обычно прод-образ (`latest`) публикует workflow
+> `Deploy` по релизному тегу `v*` (push в `main` собирает только `sha-<sha>`; #104),
+> и его подхватывает Watchtower. Если раннеры/минуты Actions недоступны —
 > собрать и запушить образы вручную с любой машины с Docker:
 > `GHCR_TOKEN=ghp_xxx make deploy-images` (PAT со scope `write:packages`), затем на
 > сервере `make prod-redeploy`.

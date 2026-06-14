@@ -1,25 +1,32 @@
 name: Deploy
 
 # Build images and publish them to GHCR.
-# Triggered only after the CI workflow succeeds on main — this gates the
-# deploy on the full test suite (backend, mcp, ui, test-mcp-overlay), so a
-# broken overlay can never reach production.
-# The production server runs Watchtower, which polls GHCR (~5 min) and
+#
+# Human-in-the-loop release gate (#104) — a green CI is NOT, by itself, "ship to prod"
+# (the live Bitrix24 box isn't covered by tests). So pushing to main no longer moves
+# production:
+#   • Push to main, CI passes  → build immutable sha-<sha> images ONLY (rollback
+#     artifacts). Production is untouched — Watchtower only follows :latest.
+#   • Push a v* tag            → build :latest + :<tag> + sha-<sha>. Cutting the release
+#     tag IS the deliberate human action that ships to prod.
+#   • Manual workflow_dispatch → escape hatch; builds :latest + sha-<sha>, but ONLY after
+#     verifying CI for that exact commit is green (it used to bypass the CI gate entirely).
+#
+# The production server runs Watchtower, which polls GHCR (~5 min) for :latest and
 # recreates the containers automatically — no SSH deploy step here.
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
-  # Manual escape hatch: run the deploy without a CI workflow_run event — e.g. when Actions
-  # runners were unavailable so CI could not gate the deploy, or to re-publish images on demand.
-  # Pick the branch/ref in the Actions UI; its HEAD (github.sha) is built and pushed.
+  push:
+    tags: ['v*']
   workflow_dispatch:
 
-# Prevent concurrent deploys — if two pushes land close together, cancel
-# the older run so only the latest commit reaches production.
+# Group per triggering commit/ref so a later main push can't cancel an in-flight tag
+# release. Re-runs of the same target still supersede each other.
 concurrency:
-  group: deploy-production
+  group: deploy-${{ github.event.workflow_run.head_sha || github.ref }}
   cancel-in-progress: true
 
 # Supply-chain hardening: minimal default permissions.
@@ -27,11 +34,43 @@ permissions:
   contents: read
 
 jobs:
+  # Gate the MANUAL escape hatch on a green CI for the exact commit being deployed. The
+  # workflow_run trigger is already CI-gated, and a v* tag is the human approval itself, so
+  # the check is a no-op for those paths — it only enforces the rule for workflow_dispatch,
+  # which previously shipped :latest without any CI gate.
+  verify-ci:
+    name: Verify CI is green for this commit
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read   # read the CI workflow's run conclusions for this SHA
+    steps:
+      - name: Require a successful CI run on this SHA (manual dispatch only)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="${{ github.sha }}"
+          conclusions="$(gh api -X GET \
+            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs" \
+            -f head_sha="$sha" -f status=completed \
+            --jq '.workflow_runs[].conclusion')"
+          echo "CI conclusions for ${sha}: ${conclusions:-<none>}"
+          if [ -z "$conclusions" ]; then
+            echo "::error::No completed CI run found for ${sha}. Push the branch and let CI pass before a manual deploy."
+            exit 1
+          fi
+          if ! grep -qx success <<<"$conclusions"; then
+            echo "::error::Latest CI for ${sha} is not green. Refusing manual deploy."
+            exit 1
+          fi
+          echo "CI is green for ${sha} — manual deploy allowed."
+
   build-and-push:
     name: Build and push Docker images to GHCR
+    needs: [verify-ci]
     runs-on: ubuntu-latest
-    # Run when the triggering CI workflow passed, OR on a manual dispatch (escape hatch).
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # Run on a (gated) manual dispatch, on a v* tag push, or when the triggering CI passed.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     # Only this job needs to write packages.
     permissions:
       contents: read
@@ -48,11 +87,34 @@ jobs:
             context: .
 
     steps:
-      # CI-triggered deploy: check out the exact commit CI validated. Manual dispatch: fall
-      # back to the HEAD of the selected branch/ref (github.sha).
+      # Resolve the commit to build and the tag set per trigger. Every build publishes an
+      # immutable sha-<sha> tag (rollback); :latest moves ONLY on a release tag or a gated
+      # manual dispatch — never on a plain main push.
+      - name: Resolve commit + image tags
+        id: meta
+        run: |
+          sha="${{ github.event.workflow_run.head_sha || github.sha }}"
+          base="ghcr.io/${{ github.repository_owner }}/procure-ai-${{ matrix.name }}"
+          tags="${base}:sha-${sha}"
+          case "${{ github.event_name }}" in
+            push)               # v* tag → release: move :latest and add the version tag
+              tags="${tags}"$'\n'"${base}:latest"$'\n'"${base}:${{ github.ref_name }}" ;;
+            workflow_dispatch)  # gated escape hatch → also move :latest
+              tags="${tags}"$'\n'"${base}:latest" ;;
+            # workflow_run (CI on main) → sha-only; :latest (production) is left untouched.
+          esac
+          {
+            echo "sha=${sha}"
+            echo "tags<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # CI-triggered: check out the exact commit CI validated. Tag/manual: the resolved
+      # github.sha (tag commit or selected ref HEAD).
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ steps.meta.outputs.sha }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
@@ -71,9 +133,7 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: true
-          # latest for Watchtower; sha-<sha> enables rollback to a specific build.
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/procure-ai-${{ matrix.name }}:latest
-            ghcr.io/${{ github.repository_owner }}/procure-ai-${{ matrix.name }}:sha-${{ github.event.workflow_run.head_sha || github.sha }}
+          # sha-<sha> always (rollback); :latest + :<tag> only on release/dispatch (see meta step).
+          tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
