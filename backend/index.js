@@ -177,6 +177,13 @@ export function createApp(config = {}) {
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-DNS-Prefetch-Control', 'off');
+    // Conservative CSP: same-origin only. 'unsafe-inline' is kept for the prerendered Nuxt
+    // SPA (hydration payload + scoped styles); object-src 'none' + frame-ancestors 'none'
+    // block plugin/clickjacking vectors. Tighten to nonces when the UI is CSP-audited (#105).
+    res.setHeader('Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+      + "img-src 'self' data: https:; font-src 'self' data: https:; connect-src 'self' https:; object-src 'none'; "
+      + "base-uri 'self'; frame-ancestors 'none'");
     next();
   });
 
