@@ -28,6 +28,11 @@ class ProcureDeal
 	// Защита от перегрузки: разумный потолок числа позиций в одной сделке.
 	const MAX_ITEMS = 500;
 
+	// Санитизация имени вложения (#103). Белый список расширений = то же множество, что
+	// принимают фронт/бэк (ALLOWED_EXTENSIONS); неизвестное расширение → `.bin`.
+	const ALLOWED_FILE_EXT = ['pdf', 'xlsx', 'docx', 'xls', 'jpg', 'jpeg', 'png'];
+	const MAX_FILE_NAME_LEN = 200;
+
 	protected static function getModulesList(): array
 	{
 		return ['crm', 'rest'];
@@ -40,6 +45,55 @@ class ProcureDeal
 				'prefilters' => parent::getDefaultPreFilters(),
 			],
 		];
+	}
+
+	/**
+	 * Привести недоверенное имя файла к безопасному виду перед сохранением вложения (#103):
+	 *  - только базовое имя (срез пути `../`, `/etc/...`, `C:\...`);
+	 *  - удаление ASCII control-символов (вкл. \0 и перевод строки) — анти log/header-injection;
+	 *  - расширение из белого списка, иначе `.bin` (нейтрализация исполняемых/HTML-имён);
+	 *  - ограничение длины с сохранением расширения; схлопнувшееся в пустоту имя → `document`.
+	 * Вызывается только для непустого имени (см. createAction).
+	 *
+	 * @param string $name Сырое имя файла из документа/REST-вызова
+	 * @return string Безопасное имя вида `<base>.<ext>`
+	 */
+	protected static function sanitizeFileName(string $name): string
+	{
+		// Нормализуем юникод-«слэши» (U+2215 ∕, U+FF0F ／) в обычный «/», чтобы basename
+		// отрезал и «путь», собранный из них (basename понимает только ASCII-разделители).
+		$name = str_replace(["\u{2215}", "\u{FF0F}", '\\'], '/', $name);
+		// basename — только базовое имя (срез пути).
+		$name = basename($name);
+		// Срез ASCII control-символов и DEL.
+		$name = preg_replace('/[\x00-\x1f\x7f]/', '', $name) ?? '';
+		$name = trim($name);
+		if($name === '' || $name === '.' || $name === '..')
+		{
+			$name = 'document.bin';
+		}
+
+		$dotPos = strrpos($name, '.');
+		$base   = $dotPos === false ? $name : substr($name, 0, $dotPos);
+		$ext    = $dotPos === false ? '' : strtolower(substr($name, $dotPos + 1));
+		if($base === '')
+		{
+			$base = 'document'; // имя вида ".htaccess" — нет базовой части
+		}
+		if(!in_array($ext, static::ALLOWED_FILE_EXT, true))
+		{
+			$ext = 'bin';
+		}
+
+		// Ограничение длины базовой части (оставляем место под «.<ext>»). mb_*, чтобы не
+		// разрезать многобайтовый UTF-8 посередине (длинные кириллические имена → битый UTF-8).
+		$maxBase = max(1, static::MAX_FILE_NAME_LEN - strlen($ext) - 1);
+		if(mb_strlen($base, 'UTF-8') > $maxBase)
+		{
+			$base = mb_substr($base, 0, $maxBase, 'UTF-8');
+		}
+
+		return $base.'.'.$ext;
 	}
 
 	/**
@@ -99,6 +153,16 @@ class ProcureDeal
 		{
 			$this->addError(new Error('fileContent too large', 'deal:022'));
 			return null;
+		}
+
+		// Санитизация недоверенного имени файла (#103): fileName приходит из документа и
+		// уходит в title и CRestUtil::saveFile. Контроллер вызывается и напрямую по REST в
+		// обход basename MCP-слоя, поэтому здесь — единственная гарантированная защита от
+		// path-traversal, control-символов (log/header-injection) и нежелательных расширений.
+		// Пустое имя оставляем как есть — ниже есть отдельная ветка title («поставщик #N»).
+		if($fileName !== '')
+		{
+			$fileName = static::sanitizeFileName($fileName);
 		}
 
 		$categoryId  = Config::getDealCategoryId();
