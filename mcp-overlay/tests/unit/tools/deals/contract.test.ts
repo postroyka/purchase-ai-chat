@@ -65,6 +65,17 @@ function phpRestNames(): Set<string> {
   return names
 }
 
+/**
+ * PHP-action'ы, которые НАМЕРЕННО не вызываются агентом через MCP (инфраструктурные):
+ * их дёргает дашборд/бэкенд напрямую по REST, а не LLM-инструмент. В проверке «нет
+ * осиротевших контроллеров» они — законное исключение (иначе пришлось бы заводить
+ * MCP-инструмент, дающий агенту мутировать схему CRM, чего быть не должно).
+ *   - procureinstall.ensureschema — самонастройка схемы (создание полей сделки) при установке.
+ */
+const NON_MCP_PHP_ACTIONS = new Set<string>([
+  'shef:purchase.api.procureinstall.ensureschema',
+])
+
 describe('contract: MCP tool method names ↔ PHP controllers (#90)', () => {
   const tools = toolMethods()
   const php = [...phpRestNames()]
@@ -83,6 +94,7 @@ describe('contract: MCP tool method names ↔ PHP controllers (#90)', () => {
   it('каждый PHP-action покрыт MCP-инструментом (нет осиротевших контроллеров)', () => {
     const used = new Set(Object.values(tools))
     for (const name of php) {
+      if (NON_MCP_PHP_ACTIONS.has(name)) continue // инфраструктурный метод — не агентский (см. выше)
       expect([...used], `${name} не вызывается ни одним MCP-инструментом`).toContain(name)
     }
   })
