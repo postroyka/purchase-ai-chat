@@ -58,9 +58,15 @@ async function main() {
     // Показываем, что агент извлёк — уже глазами видно, насколько точно.
     console.log(`   извлечено: ${JSON.stringify(result)}`);
     const draft = draftSpecFromResult(file, result);
-    await writeFile(specPath, JSON.stringify(draft, null, 2) + '\n', 'utf8');
-    console.log(`   📝 черновик → ${stem}.expected.json  (ПРОВЕРЬ и поправь!)\n`);
-    wrote += 1;
+    try {
+      await writeFile(specPath, JSON.stringify(draft, null, 2) + '\n', 'utf8');
+      console.log(`   📝 черновик → ${stem}.expected.json  (ПРОВЕРЬ и поправь!)\n`);
+      wrote += 1;
+    } catch (e) {
+      // Напр. нет прав на запись в смонтированную папку (контейнер под appuser): извлечение
+      // уже напечатано выше — ценность не теряется, просто не сохранили файл-черновик.
+      console.log(`   ⚠️  не записал черновик (${e?.code ?? e?.message ?? e}); извлечение см. выше\n`);
+    }
   }
 
   console.log(`=== BASELINE: записано ${wrote} черновиков, пропущено ${skipped} ===`);

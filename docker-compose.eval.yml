@@ -1,0 +1,67 @@
+# Изолированный eval-стек (#93): прогон агента на РЕАЛЬНЫХ счетах БЕЗОПАСНО.
+#
+# Зачем: обычный прогон eval запускает полный конвейер, и агент СОЗДАЁТ настоящие сделки в
+# том Bitrix24, куда смотрит MCP. Чтобы не засорять боевой портал, этот стек поднимает
+# ОТДЕЛЬНЫЙ MCP, подключённый к ТЕСТОВОМУ Bitrix24 (NUXT_BITRIX24_TEST_WEBHOOK_URL), и гоняет
+# baseline против него. Свой проект (procure-eval) и своя сеть (eval-net) — боевые контейнеры
+# (procure-app/procure-mcp) и живой портал НЕ затрагиваются.
+#
+# Запуск:  make eval-test          Подробности: backend/eval/README.md
+name: procure-eval
+
+services:
+  # MCP, указывающий на ТЕСТОВЫЙ портал: тот же образ, что в проде, но боевой вебхук
+  # переопределён тестовым — все создаваемые сделки идут в песочницу.
+  mcp-eval:
+    image: ghcr.io/postroyka/procure-ai-mcp:${MCP_IMAGE_TAG:-latest}
+    env_file:
+      - .env.prod
+    environment:
+      # ГЛАВНОЕ: подменяем боевой вебхук тестовым. Падаем с понятной ошибкой, если не задан.
+      NUXT_BITRIX24_WEBHOOK_URL: ${NUXT_BITRIX24_TEST_WEBHOOK_URL:?Set NUXT_BITRIX24_TEST_WEBHOOK_URL (вебхук ТЕСТ-портала Bitrix24) in .env.prod}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # create_deal читает файл счёта ПО ПУТИ (чтобы приложить к сделке) — поэтому те же счета
+    # монтируем сюда по тому же пути, что видит eval-контейнер (EVAL_SAMPLES_DIR).
+    volumes:
+      - ./scripts/samples:/work/samples:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - eval-net
+
+  # Прогон агента: образ приложения (в нём claude CLI + извлечение текста), но команда —
+  # baseline.js. Свежий eval-код кладём поверх образа, чтобы не ждать релиза.
+  eval:
+    image: ghcr.io/postroyka/procure-ai-app:${APP_IMAGE_TAG:-latest}
+    depends_on:
+      mcp-eval:
+        condition: service_healthy
+    env_file:
+      - .env.prod
+    environment:
+      # Направляем агента на ТЕСТОВЫЙ MCP, а не на боевой http://mcp:3000/mcp из .env.prod.
+      MCP_SERVER_URL: http://mcp-eval:3000/mcp
+      # Defence-in-depth: даже если какой-то путь в образе обратится к B24 напрямую — в тест.
+      NUXT_BITRIX24_WEBHOOK_URL: ${NUXT_BITRIX24_TEST_WEBHOOK_URL:?Set NUXT_BITRIX24_TEST_WEBHOOK_URL (вебхук ТЕСТ-портала Bitrix24) in .env.prod}
+      EVAL_SAMPLES_DIR: /work/samples
+      EVAL_RESPONSIBLE_ID: ${EVAL_RESPONSIBLE_ID:-1}
+    volumes:
+      # Свежий код eval (baseline.js, score.js) поверх образа; node_modules образа не прячем.
+      - ./backend/eval:/app/backend/eval:ro
+      # Счета внутрь по тому же пути, что и у mcp-eval; сюда же пишутся черновики *.expected.json
+      # (контейнер под appuser — папка на хосте должна быть доступна ему на запись).
+      - ./scripts/samples:/work/samples
+    command: ["node", "/app/backend/eval/baseline.js"]
+    networks:
+      - eval-net
+
+networks:
+  # Отдельная сеть — eval не видит и не трогает боевые procure-net/proxy-net.
+  eval-net:
+    driver: bridge
