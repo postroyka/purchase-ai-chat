@@ -286,6 +286,10 @@ jobs:
         working-directory: ui
         run: pnpm lint
 
+      - name: Unit tests
+        working-directory: ui
+        run: pnpm test
+
       - name: Build
         working-directory: ui
         run: pnpm build
