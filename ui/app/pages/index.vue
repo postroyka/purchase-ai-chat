@@ -203,9 +203,10 @@ const FILE_LABELS = JOB_LABELS
 const FILE_COLORS = JOB_COLORS
 
 // ── API ───────────────────────────────────────────────────────────────────────
-// Backend calls are same-origin and carry no token (#41/#105 P1): in prod the browser's HTTP
-// Basic session (the gate on this page) authenticates them; in dev the nitro devProxy injects the
-// Bearer server-side. $fetch defaults to credentials:'same-origin', so the Basic header rides along.
+// Backend calls are same-origin and carry no token (#41/#105 P1): in prod the browser auto-attaches
+// its cached HTTP Basic Authorization header (the gate on this page) to same-origin requests — Basic
+// is a per-origin credential, sent regardless of the fetch credentials flag. In dev the nitro
+// devProxy injects the Bearer server-side.
 
 // Автозагрузка сразу после выбора файлов — одно действие, без лишней кнопки.
 watch(selectedFiles, (files) => {

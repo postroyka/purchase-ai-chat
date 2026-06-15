@@ -40,8 +40,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 
 | Переменная | Контейнер | Обязательно | Описание |
 |---|---|---|---|
-| `BACKEND_API_TOKEN` | app | ✅ | Bearer-токен для `/upload` и `/job/:id/status` |
-| `NUXT_PUBLIC_BACKEND_TOKEN` | app | ✅ | Токен, которым UI зовёт бэкенд из браузера — **должен совпадать с `BACKEND_API_TOKEN`** |
+| `BACKEND_API_TOKEN` | app | ✅ | Bearer для `/upload`, `/job/:id/status`, `/metrics/data`. **Серверный** — в браузер не попадает: UI авторизуется HTTP Basic (см. `PUBLIC_PAGE_BASIC_AUTH_*`), #41/#105 P1 |
 | `REDIS_PASSWORD` | app/redis | ✅ | Пароль Redis (тот же подставляется в `REDIS_URL` в compose) |
 | `NUXT_MCP_AUTH_TOKEN` | mcp | ✅ | Bearer-токен для `/mcp` endpoint |
 | `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Вебхук Bitrix24: вызывает контроллеры `shef:purchase.api.procure*` + стандартные `crm.*` |

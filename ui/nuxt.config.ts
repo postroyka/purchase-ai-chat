@@ -13,6 +13,11 @@ const prodUrl = process?.env.NUXT_PUBLIC_SITE_URL ?? ''
 // behind HTTP Basic and the browser's cached Basic credentials authenticate the API calls instead.
 const devApiToken = process?.env.BACKEND_API_TOKEN ?? ''
 const devAuthHeaders = devApiToken ? { Authorization: `Bearer ${devApiToken}` } : {}
+if (!devApiToken && process?.env.NODE_ENV !== 'production') {
+  // Dev only: without a token the dev-proxy forwards API calls unauthenticated → 401 if the
+  // backend requires auth. (In prod builds NODE_ENV=production, so this never fires there.)
+  console.warn('[nuxt.config] BACKEND_API_TOKEN не задан — dev-proxy проксирует /upload·/job·/metrics без авторизации.')
+}
 
 export default defineNuxtConfig({
 
@@ -36,10 +41,9 @@ export default defineNuxtConfig({
      * @see https://nuxt.com/docs/guide/going-further/runtime-config#example
      */
     public: {
+      // siteUrl only — the backend API token is intentionally NOT exposed to the browser here
+      // (#41/#105 P1). Same-origin auth: page HTTP Basic (prod) / dev-proxy Bearer (dev), see above.
       siteUrl: prodUrl
-      // No backend token here by design (#41/#105 P1): the browser must never receive it.
-      // Same-origin requests authenticate via the page's HTTP Basic session (prod) or the
-      // dev-proxy's server-side Bearer injection (dev) — see nitro.devProxy below.
     }
   },
 

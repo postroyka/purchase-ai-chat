@@ -105,7 +105,7 @@ function extractError(e: unknown): string {
     if (data?.error) return data.error
   }
   if (e && typeof e === 'object' && 'status' in e && (e as { status?: number }).status === 401) {
-    return 'Нет доступа (проверьте токен бэкенда)'
+    return 'Нет доступа (401) — обновите страницу и войдите заново'
   }
   if (e instanceof Error) return e.message
   return 'Не удалось загрузить метрики'
