@@ -684,6 +684,33 @@ describe('extractJson', () => {
   it('returns null for incomplete JSON', () => {
     expect(extractJson('{"incomplete":')).toBeNull();
   });
+
+  it('still finds trailing JSON when prose contains stray braces', () => {
+    expect(extractJson('prose { not json } more text\n{"deal":1}')).toEqual({ deal: 1 });
+  });
+
+  it('does NOT hang on injected unbalanced braces — quadratic DoS guard (#57)', () => {
+    // ~2 MB of "{" with no closer would be ~10^12 ops in the naive O(n²) scan and pin the
+    // event loop. The op-budget must bail quickly; correctness for adversarial input is
+    // "don't hang" (returns null), not "recover the needle".
+    const t0 = Date.now();
+    const result = extractJson('{'.repeat(2 * 1024 * 1024));
+    expect(Date.now() - t0).toBeLessThan(2000); // would be minutes without the guard
+    expect(result).toBeNull();
+  });
+
+  it('extracts a large-but-legit JSON object (well under the op budget)', () => {
+    // 200 KB of real JSON (one big string field) must still parse — the DoS guard must not
+    // turn a legitimately large agent result into null.
+    const obj = { note: 'x'.repeat(200_000), deal: { dealId: 'd-9' } };
+    expect(extractJson(`result:\n${JSON.stringify(obj)}`)).toEqual(obj);
+  });
+
+  it('finds trailing JSON even after >256 KB of leading prose (tail scan)', () => {
+    // The bracket-scan only looks at the tail; the agent always emits its JSON last, so a long
+    // preamble must not hide it.
+    expect(extractJson('A'.repeat(300_000) + '\n{"deal":42}')).toEqual({ deal: 42 });
+  });
 });
 
 describe('resolveClaudeSpawn', () => {

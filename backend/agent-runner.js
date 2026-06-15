@@ -539,19 +539,30 @@ export function extractJson(text) {
     try { return JSON.parse(fenceMatch[1]); } catch {}
   }
 
-  // 3. Scan forward for balanced {…} / […] blocks, skipping any braces/brackets that
-  //    appear inside JSON string literals (with backslash-escape handling). Returns the
-  //    LAST block that parses — matches the agent's habit of emitting prose then JSON.
+  // 3. Scan for balanced {…} / […] blocks, skipping any braces/brackets that appear
+  //    inside JSON string literals (with backslash-escape handling). Returns the LAST
+  //    block that parses — matches the agent's habit of emitting prose then JSON.
+  //
+  //    Hardened against a quadratic-blowup DoS (#57): the raw bracket-scan is O(n²) in the
+  //    worst case (e.g. an injected ~10 MB of unbalanced "{"), which would pin the single
+  //    event loop and stall /health, polling and /upload. Two bounds keep it cheap:
+  //      (a) only the TAIL is scanned — the agent's JSON result is always at the very end;
+  //      (b) a hard op-budget caps total inner iterations, bailing with the best match so far.
+  const JSON_SCAN_LIMIT = 256 * 1024;            // result JSON is tiny; tail is plenty
+  const scan = text.length > JSON_SCAN_LIMIT ? text.slice(-JSON_SCAN_LIMIT) : text;
+  const MAX_SCAN_OPS = 5_000_000;                // ~tens of ms worst-case; legit output needs far less
+  let ops = 0;
   let result = null;
-  for (let i = 0; i < text.length; i++) {
-    const open = text[i];
+  for (let i = 0; i < scan.length; i++) {
+    const open = scan[i];
     if (open !== '{' && open !== '[') continue;
     const close = open === '{' ? '}' : ']';
     let depth = 0;
     let inStr = false;
     let esc = false;
-    for (let j = i; j < text.length; j++) {
-      const ch = text[j];
+    for (let j = i; j < scan.length; j++) {
+      if (++ops > MAX_SCAN_OPS) return result; // DoS guard: bail with best-so-far instead of hanging
+      const ch = scan[j];
       if (inStr) {
         if (esc) esc = false;
         else if (ch === '\\') esc = true;
@@ -562,7 +573,7 @@ export function extractJson(text) {
       if (ch === open) depth++;
       else if (ch === close && --depth === 0) {
         // Keep the last parseable block; advance i past it to continue scanning.
-        try { result = JSON.parse(text.slice(i, j + 1)); i = j; } catch { /* not JSON — keep scanning */ }
+        try { result = JSON.parse(scan.slice(i, j + 1)); i = j; } catch { /* not JSON — keep scanning */ }
         break;
       }
     }
