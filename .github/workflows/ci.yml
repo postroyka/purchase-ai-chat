@@ -286,9 +286,25 @@ jobs:
         working-directory: ui
         run: pnpm lint
 
+      - name: Unit tests
+        working-directory: ui
+        run: pnpm test
+
       - name: Build
         working-directory: ui
         run: pnpm build
+
+      # Regression guard for #41/#105 P1: the backend API token must never be embedded in the
+      # browser bundle. If someone re-adds it to runtimeConfig.public, the `backendToken` key
+      # appears in the client __NUXT__ payload under .output/public — fail the build then.
+      - name: Assert backend token absent from the browser bundle (#41/#105 P1)
+        working-directory: ui
+        run: |
+          if grep -rIl -e 'backendToken' -e 'NUXT_PUBLIC_BACKEND_TOKEN' .output/public; then
+            echo "::error::Backend API token leaked into the browser bundle (#41/#105 P1)"
+            exit 1
+          fi
+          echo "OK: no backend token in .output/public"
 
   b24-deploy-reminder:
     name: b24 deploy reminder
