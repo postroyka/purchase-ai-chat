@@ -1,7 +1,7 @@
 .PHONY: dev logs shell-app shell-mcp \
 	prod-up prod-down prod-redeploy prod-pull \
 	init-network init-nginxproxy \
-	deploy-b24 deploy-images ui-smoke check-agent-stdin eval eval-baseline
+	deploy-b24 deploy-images ui-smoke check-agent-stdin eval eval-baseline eval-test
 
 # Shared reverse-proxy network name on the server (грабли #1).
 PROXY_NET ?= proxy-net
@@ -9,6 +9,8 @@ PROXY_NET ?= proxy-net
 # `name:` field in each compose file) so `up --remove-orphans` can't cross stacks.
 COMPOSE   := docker compose -p procure-ai -f docker-compose.prod.yml --env-file .env.prod
 NGINX     := docker compose -p procure-proxy -f docker-compose.nginxproxy.yml --env-file .env.prod
+# Изолированный eval-стек (#93): свой проект, чтобы не пересекаться с боевым procure-ai.
+EVAL      := docker compose -p procure-eval -f docker-compose.eval.yml --env-file .env.prod
 
 # ---- local development ----
 dev:
@@ -47,6 +49,14 @@ eval:
 # То же живое окружение, что и eval. Подробности: backend/eval/README.md
 eval-baseline:
 	node backend/eval/baseline.js
+
+# ---- Безопасный прогон eval на реальных счетах в ТЕСТОВЫЙ Bitrix24 (#93) ----
+# Изолированный стек (docker-compose.eval.yml): отдельный MCP на тест-вебхуке
+# (NUXT_BITRIX24_TEST_WEBHOOK_URL) + baseline. Боевой портал/контейнеры НЕ трогает — сделки
+# идут в тест-портал. Счета — в scripts/samples/. Подробности: backend/eval/README.md
+eval-test:
+	-$(EVAL) run --rm eval
+	$(EVAL) down
 
 # ---- production (on the server) ----
 # Pull latest images from GHCR and (re)create containers.
