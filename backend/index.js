@@ -95,12 +95,17 @@ function createRateLimiter({ windowMs, max, redisClient = null }) {
       .update(String(req.headers['authorization'] || req.ip || 'anon'))
       .digest('hex').slice(0, 32);
 
-  // Redis fixed-window: INCR the counter, set the window TTL on the first hit. Fail-OPEN on any
-  // Redis error — a best-effort DoS guard must never block legitimate uploads during a blip.
+  // Redis fixed-window: INCR the counter and (re)arm the window TTL. We pexpire on EVERY hit,
+  // not just the first: if the process died between INCR and pexpire on the first hit, the key
+  // would otherwise live forever with no TTL and lock the client out — re-arming every hit makes
+  // it self-healing (the tiny window-extension on each request is acceptable for a DoS guard).
+  // The INCR/pexpire pair is not atomic — a key expiring exactly between two concurrent INCRs can
+  // permit ±1 request at the boundary; acceptable here (a Lua script would make it strict).
+  // Fail-OPEN on any Redis error: a best-effort DoS guard must never block uploads during a blip.
   async function allowedViaRedis(key) {
     try {
       const n = await redisClient.incr(key);
-      if (n === 1) await redisClient.pexpire(key, windowMs);
+      await redisClient.pexpire(key, windowMs);
       return n <= max;
     } catch (e) {
       console.warn(`[rate-limit] Redis error — failing open: ${e?.message ?? e}`);
@@ -125,7 +130,10 @@ function createRateLimiter({ windowMs, max, redisClient = null }) {
       res.status(429).json({ error: 'Too many requests — slow down.' });
     };
     if (redisClient) {
-      allowedViaRedis(key).then((ok) => (ok ? next() : tooMany()));
+      // .catch is belt-and-suspenders: allowedViaRedis already fails open, but a throw inside
+      // the .then callback (e.g. next()) would otherwise become an UnhandledRejection that
+      // crashes the process on Node 18+. Route it to Express's error handler instead.
+      allowedViaRedis(key).then((ok) => (ok ? next() : tooMany())).catch((err) => next(err));
       return;
     }
     if (allowedViaMemory(key)) next(); else tooMany();
@@ -241,8 +249,12 @@ export function createApp(config = {}) {
   const agentConfig = config.agentConfig ?? {};
   // Rate-limiter state in Redis when available (multi-instance-safe, survives restart — #105);
   // dedicated lazy client mirroring jobs-store. Tests inject a fake via config.rateLimitRedis.
+  // commandTimeout 1s (tighter than jobs-store's 3s): a rate-limit check must be fast, and a
+  // hanging Redis should fail open quickly rather than pile up pending /upload handlers.
+  // NB: like the jobs-store/metrics clients, this is not explicitly .quit()'d on shutdown —
+  // process exit closes it (a uniform graceful Redis close is a small follow-up).
   const rateLimitRedis = config.rateLimitRedis ?? (redisUrl
-    ? new Redis(redisUrl, { lazyConnect: true, enableOfflineQueue: false, commandTimeout: 3000 })
+    ? new Redis(redisUrl, { lazyConnect: true, enableOfflineQueue: false, commandTimeout: 1000 })
     : null);
   if (rateLimitRedis?.on) rateLimitRedis.on('error', (e) => console.error('[rate-limit] Redis error:', e?.message ?? e));
   const uploadRateLimit = createRateLimiter({ windowMs: rateLimitWindowMs, max: rateLimitMax, redisClient: rateLimitRedis });

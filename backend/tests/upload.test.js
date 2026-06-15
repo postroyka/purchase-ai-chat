@@ -782,12 +782,12 @@ describe('rate limiting on /upload', () => {
   });
 
   // #105: when a Redis client is present the limiter uses it (multi-instance-safe).
-  it('uses Redis INCR/pexpire when a client is provided and 429s over the limit', async () => {
-    let counter = 0;
-    const calls = { pexpire: 0 };
+  it('uses per-key Redis INCR/pexpire, arms the correct TTL, and 429s over the limit', async () => {
+    const counters = new Map(); // per-key — proves keyFor isolates clients, not a global counter
+    const ttls = [];
     const fakeRedis = {
-      incr: async () => ++counter,
-      pexpire: async () => { calls.pexpire += 1; },
+      incr: async (key) => { const n = (counters.get(key) ?? 0) + 1; counters.set(key, n); return n; },
+      pexpire: async (_key, ms) => { ttls.push(ms); },
       on: () => {},
     };
     const redisApp = createApp({
@@ -795,13 +795,24 @@ describe('rate limiting on /upload', () => {
       uploadDir: UPLOAD_DIR,
       agentConfig: { spawnFn: makeMockAgentSpawn() },
       rateLimitMax: 2,
+      rateLimitWindowMs: 60_000,
       rateLimitRedis: fakeRedis,
+      // A second valid identity (Basic) so we can prove keyFor isolates clients: only one
+      // bearer token is valid, so distinct clients must come via a different auth header.
+      basicAuthUser: 'u',
+      basicAuthPass: 'p',
     });
-    const send = () => request(redisApp).post('/upload').set('Authorization', auth())
+    const basic = 'Basic ' + Buffer.from('u:p').toString('base64');
+    const sendWith = (authHeader) => request(redisApp).post('/upload').set('Authorization', authHeader)
       .attach('files[]', pdf(), { contentType: 'application/pdf' });
-    const [r1, r2, r3] = [await send(), await send(), await send()];
-    expect([r1.status, r2.status, r3.status]).toEqual([201, 201, 429]);
-    expect(calls.pexpire).toBe(1); // TTL armed once, on the first hit of the window
+    // Client A (Bearer): 3 hits, limit 2 → 3rd is 429.
+    const [a1, a2, a3] = [await sendWith(auth()), await sendWith(auth()), await sendWith(auth())];
+    expect([a1.status, a2.status, a3.status]).toEqual([201, 201, 429]);
+    // Client B (Basic) has an INDEPENDENT counter → its first request still passes.
+    const b1 = await sendWith(basic);
+    expect(b1.status).toBe(201);
+    expect(counters.size).toBe(2);            // two distinct keys (Bearer ≠ Basic)
+    expect(ttls.every((ms) => ms === 60_000)).toBe(true); // pexpire armed with windowMs (ms, not s)
   });
 
   it('fails OPEN when Redis errors — a blip must not block uploads (#105)', async () => {
