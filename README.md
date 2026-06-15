@@ -52,6 +52,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `MCP_SERVER_URL` | app | — | URL MCP внутри сети (по умолчанию: `http://mcp:3000/mcp`) |
 | `B24_DEAL_CATEGORY_ID` | mcp | — | Воронка сделок (по умолчанию: `1` «Закупки») |
 | `B24_DEAL_DEFAULT_STAGE_ID` | mcp | — | Стадия сделки (по умолчанию: `C1:NEW`) |
+| `B24_FRAME_ANCESTORS` | app | — | Кто вправе встраивать UI во фрейм (CSP `frame-ancestors`). По умолчанию — облачные домены Bitrix24 (`*.bitrix24.ru/.com/.by`); для self-hosted коробки указать origin портала |
 | `PUBLIC_PAGE_ENABLED` | app | — | Включить публичную страницу (по умолчанию: `true`) |
 | `PUBLIC_PAGE_BASIC_AUTH_USER` | app | — | Логин публичной страницы (по умолчанию: `procure`) |
 | `PUBLIC_PAGE_RESPONSIBLE_USER_ID` | app | — | ID пользователя Б24 по умолчанию |

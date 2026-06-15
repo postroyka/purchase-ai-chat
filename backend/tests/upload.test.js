@@ -674,7 +674,9 @@ describe('Security headers', () => {
   it('sets baseline headers and hides X-Powered-By', async () => {
     const res = await request(app).get('/health');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
-    expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+    // X-Frame-Options намеренно НЕ ставится: фрейм Bitrix24 (кросс-домен) разрешаем через CSP
+    // frame-ancestors, а X-Frame-Options умеет только SAMEORIGIN/DENY и заблокировал бы его.
+    expect(res.headers['x-frame-options']).toBeUndefined();
     expect(res.headers['referrer-policy']).toBe('no-referrer');
     expect(res.headers['x-powered-by']).toBeUndefined();
   });
@@ -685,7 +687,8 @@ describe('Security headers', () => {
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("connect-src 'self'");      // anti-exfil lever
     expect(csp).toContain("object-src 'none'");
-    expect(csp).toContain("frame-ancestors 'self'");  // clickjacking
+    expect(csp).toContain("frame-ancestors 'self'");  // clickjacking: same-origin…
+    expect(csp).toContain('https://*.bitrix24.ru');   // …+ порталы Bitrix24 (работа во фрейме)
     expect(csp).toContain("base-uri 'self'");         // base-tag injection
     // HSTS gated to NODE_ENV=production so a dev/staging HTTP host isn't pinned for 2y.
     expect(res.headers['strict-transport-security']).toBeUndefined();
