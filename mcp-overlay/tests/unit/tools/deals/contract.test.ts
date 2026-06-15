@@ -70,7 +70,7 @@ function phpRestNames(): Set<string> {
  * их дёргает дашборд/бэкенд напрямую по REST, а не LLM-инструмент. В проверке «нет
  * осиротевших контроллеров» они — законное исключение (иначе пришлось бы заводить
  * MCP-инструмент, дающий агенту мутировать схему CRM, чего быть не должно).
- *   - procureinstall.ensureschema — самонастройка схемы (создание полей сделки) при установке.
+ *   - procureinstall.ensureschema — самонастройка схемы (создание полей сделки): её зовёт дашборд/бэкенд, не агент.
  */
 const NON_MCP_PHP_ACTIONS = new Set<string>([
   'shef:purchase.api.procureinstall.ensureschema',
