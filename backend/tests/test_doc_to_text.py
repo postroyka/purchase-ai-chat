@@ -47,6 +47,53 @@ def test_docx_extracts_paragraphs_and_tables(tmp_path):
     assert "Краска MAXIMA" in r.stdout
 
 
+def test_xlsx_with_doctype_rejected_as_xxe(tmp_path):
+    # #57: легитимные xlsx/docx не содержат DTD; файл с <!DOCTYPE/<!ENTITY> в XML-части —
+    # XXE-вектор и должен быть отклонён ДО парсера (openpyxl/python-docx на lxml).
+    import zipfile
+    p = tmp_path / "evil.xlsx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr(
+            "xl/worksheets/sheet1.xml",
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+            "<root>&xxe;</root>",
+        )
+    r = _run(p)
+    assert r.returncode == 1
+    assert "DTD/ENTITY" in r.stderr
+
+
+def test_xlsx_with_utf16_doctype_rejected(tmp_path):
+    # #57: гейт не должен обходиться UTF-16-кодировкой XML-части (lxml читает BOM).
+    import zipfile
+    p = tmp_path / "utf16.xlsx"
+    payload = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><r>&e;</r>'
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("xl/worksheets/sheet1.xml", b"\xff\xfe" + payload.encode("utf-16-le"))
+    r = _run(p)
+    assert r.returncode == 1
+    assert "DTD/ENTITY" in r.stderr
+
+
+def test_docx_with_doctype_in_rels_rejected(tmp_path):
+    # #57: гейт покрывает и .docx, и .rels-части (не только .xml).
+    import zipfile
+    p = tmp_path / "evil.docx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("word/document.xml", "<doc/>")
+        z.writestr(
+            "_rels/.rels",
+            '<!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><Relationships/>',
+        )
+    r = _run(p)
+    assert r.returncode == 1
+    assert "DTD/ENTITY" in r.stderr
+
+
 def test_unsupported_extension_exits_nonzero(tmp_path):
     p = tmp_path / "note.txt"
     p.write_text("hi")
