@@ -780,4 +780,58 @@ describe('rate limiting on /upload', () => {
       expect(r.status).toBe(201);
     }
   });
+
+  // #105: when a Redis client is present the limiter uses it (multi-instance-safe).
+  it('uses per-key Redis INCR/pexpire, arms the correct TTL, and 429s over the limit', async () => {
+    const counters = new Map(); // per-key — proves keyFor isolates clients, not a global counter
+    const ttls = [];
+    const fakeRedis = {
+      incr: async (key) => { const n = (counters.get(key) ?? 0) + 1; counters.set(key, n); return n; },
+      pexpire: async (_key, ms) => { ttls.push(ms); },
+      on: () => {},
+    };
+    const redisApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: makeMockAgentSpawn() },
+      rateLimitMax: 2,
+      rateLimitWindowMs: 60_000,
+      rateLimitRedis: fakeRedis,
+      // A second valid identity (Basic) so we can prove keyFor isolates clients: only one
+      // bearer token is valid, so distinct clients must come via a different auth header.
+      basicAuthUser: 'u',
+      basicAuthPass: 'p',
+    });
+    const basic = 'Basic ' + Buffer.from('u:p').toString('base64');
+    const sendWith = (authHeader) => request(redisApp).post('/upload').set('Authorization', authHeader)
+      .attach('files[]', pdf(), { contentType: 'application/pdf' });
+    // Client A (Bearer): 3 hits, limit 2 → 3rd is 429.
+    const [a1, a2, a3] = [await sendWith(auth()), await sendWith(auth()), await sendWith(auth())];
+    expect([a1.status, a2.status, a3.status]).toEqual([201, 201, 429]);
+    // Client B (Basic) has an INDEPENDENT counter → its first request still passes.
+    const b1 = await sendWith(basic);
+    expect(b1.status).toBe(201);
+    expect(counters.size).toBe(2);            // two distinct keys (Bearer ≠ Basic)
+    expect(ttls.every((ms) => ms === 60_000)).toBe(true); // pexpire armed with windowMs (ms, not s)
+  });
+
+  it('fails OPEN when Redis errors — a blip must not block uploads (#105)', async () => {
+    const fakeRedis = {
+      incr: async () => { throw new Error('redis down'); },
+      pexpire: async () => {},
+      on: () => {},
+    };
+    const redisApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: makeMockAgentSpawn() },
+      rateLimitMax: 1, // would 429 after the 1st request if Redis worked
+      rateLimitRedis: fakeRedis,
+    });
+    for (let i = 0; i < 3; i++) {
+      const r = await request(redisApp).post('/upload').set('Authorization', auth())
+        .attach('files[]', pdf(), { contentType: 'application/pdf' });
+      expect(r.status).toBe(201); // all allowed — failed open
+    }
+  });
 });
