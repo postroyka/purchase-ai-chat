@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scoreResult, checkVatDirection, normName, summarize } from '../eval/score.js';
+import { scoreResult, checkVatDirection, normName, summarize, draftSpecFromResult } from '../eval/score.js';
 
 describe('checkVatDirection (ловушка НДС из #58)', () => {
   it('÷1.2 — верно (ok)', () => {
@@ -152,5 +152,42 @@ describe('summarize — агрегатная метрика (#93)', () => {
     const s = summarize([r]);
     expect(s.vat.multiplyBy0_8).toBe(1);
     expect(s.vat.divideBy1_2).toBe(0);
+  });
+});
+
+describe('draftSpecFromResult — черновик эталона (baseline)', () => {
+  it('ошибка агента → черновик expect:error с draft-меткой', () => {
+    const d = draftSpecFromResult('schet.pdf', { error: 'unsupported_currency', message: 'RUB' });
+    expect(d).toMatchObject({
+      fixture: 'schet.pdf', expect: 'error', error: 'unsupported_currency', draft: true,
+    });
+  });
+
+  it('сделка → черновик expect:deal; только УНП поставщика и базовые поля позиции', () => {
+    const d = draftSpecFromResult('schet.pdf', {
+      currency: 'BYN',
+      supplier: { unp: '191234567', name: 'ООО Х' },
+      items: [{ name: 'Цемент', priceExclVat: 100, quantity: 10, unit: 'шт', productId: 'p1' }],
+      deal: { dealId: 'd1' },
+    });
+    expect(d.expect).toBe('deal');
+    expect(d.currency).toBe('BYN');
+    expect(d.supplier).toEqual({ unp: '191234567' });
+    expect(d.items).toEqual([{ name: 'Цемент', priceExclVat: 100, quantity: 10 }]);
+    expect(d.draft).toBe(true);
+  });
+
+  it('пустой/кривой ответ → null-поля, без падения', () => {
+    const d = draftSpecFromResult('x.pdf', {});
+    expect(d.expect).toBe('deal');
+    expect(d.currency).toBeNull();
+    expect(d.supplier).toEqual({ unp: null });
+    expect(d.items).toEqual([]);
+  });
+
+  it('всегда помечен draft:true + notes (нельзя спутать с эталоном)', () => {
+    const d = draftSpecFromResult('x.pdf', { error: 'supplier_not_found' });
+    expect(d.draft).toBe(true);
+    expect(typeof d.notes).toBe('string');
   });
 });

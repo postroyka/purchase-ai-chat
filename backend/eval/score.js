@@ -161,3 +161,43 @@ export function summarize(results) {
     },
   };
 }
+
+/**
+ * Черновик эталона `<name>.expected.json` из ФАКТИЧЕСКОГО ответа агента — для baseline-режима
+ * (backend/eval/baseline.js): когда писать эталон руками лень, агента прогоняют один раз и берут
+ * его вывод как стартовую заготовку.
+ *
+ * ⚠️ Это НЕ истина: сравнивать агента с его же выводом бессмысленно (всегда PASS). Заготовку
+ * ОБЯЗАТЕЛЬНО проверяют по документу и правят. Поэтому помечаем `draft: true` + `notes`, а
+ * `priceInclVatHint` (для проверки направления НДС) агент не возвращает — его вносят вручную.
+ *
+ * @param {string} fixture — имя файла-счёта (рядом с которым ляжет эталон)
+ * @param {object} result — распарсенный ответ агента (runAgent)
+ */
+export function draftSpecFromResult(fixture, result) {
+  if (result?.error) {
+    return {
+      fixture,
+      expect: 'error',
+      error: result.error,
+      draft: true,
+      notes: 'ЧЕРНОВИК от агента — НЕ эталон. Сверь по документу и поправь.',
+    };
+  }
+  const items = Array.isArray(result?.items)
+    ? result.items.map((it) => ({
+        name: it?.name ?? null,
+        priceExclVat: it?.priceExclVat ?? null,
+        quantity: it?.quantity ?? null,
+      }))
+    : [];
+  return {
+    fixture,
+    expect: 'deal',
+    currency: result?.currency ?? null,
+    supplier: { unp: result?.supplier?.unp ?? null },
+    items,
+    draft: true,
+    notes: 'ЧЕРНОВИК от агента — НЕ эталон. Сверь по документу; для проверки НДС впиши priceInclVatHint (цена С НДС из документа).',
+  };
+}
