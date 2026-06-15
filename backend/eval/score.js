@@ -48,7 +48,10 @@ export function checkVatDirection(priceExclVat, priceInclVatHint) {
  */
 export function scoreResult(actual, expected) {
   const checks = [];
-  const add = (name, ok, detail = 'ok') => checks.push({ name, ok: !!ok, detail });
+  // `meta` lets a check carry machine-readable tags (e.g. the VAT-direction outcome) so
+  // summarize() can aggregate them without parsing the human-readable `detail` string.
+  const add = (name, ok, detail = 'ok', meta = null) =>
+    checks.push({ name, ok: !!ok, detail, ...(meta ?? {}) });
 
   if (expected.expect === 'error') {
     const gotError = actual?.error ?? null;
@@ -98,10 +101,12 @@ export function scoreResult(actual, expected) {
         }
         const vat = checkVatDirection(got.priceExclVat, exp.priceInclVatHint);
         if (vat) {
+          // Tag the check with the structured outcome so summarize() can count ÷1.2 vs ×0.8 (#93).
           add(`«${label}» направление НДС`, vat.ok,
             vat.ok
               ? `ok (÷1.2 ≈ ${vat.correct})`
-              : `похоже на ×0.8 (=${vat.wrong}) вместо ÷1.2 (=${vat.correct}); получили ${vat.got}`);
+              : `похоже на ×0.8 (=${vat.wrong}) вместо ÷1.2 (=${vat.correct}); получили ${vat.got}`,
+            { vat: vat.gotCloserTo });
         }
       });
     }
@@ -113,5 +118,46 @@ export function scoreResult(actual, expected) {
     fixture: expected.fixture ?? null,
     pass: checks.every((c) => c.ok),
     checks,
+  };
+}
+
+/**
+ * Агрегатная метрика по набору сфейленных/прошедших фикстур (#93): доля совпавших с эталоном
+ * полей + разбивка направления НДС (÷1.2 против ×0.8, баг #58). Чистая функция над выводом
+ * scoreResult() — без I/O и модели, поэтому покрыта юнит-тестами (eval-score.test.js).
+ * @param {Array<{pass:boolean, checks:Array<{ok:boolean, vat?:string}>}>} results
+ * @returns {{
+ *   fixtures: {passed:number, total:number},
+ *   checks:   {passed:number, total:number, pct:number|null},
+ *   vat:      {divideBy1_2:number, multiplyBy0_8:number, total:number, errorPct:number|null}
+ * }}
+ */
+export function summarize(results) {
+  let checksTotal = 0;
+  let checksPassed = 0;
+  let vatDivide = 0;
+  let vatMultiply = 0;
+  for (const r of results) {
+    for (const c of r.checks) {
+      checksTotal += 1;
+      if (c.ok) checksPassed += 1;
+      if (c.vat === 'divide_by_1.2') vatDivide += 1;
+      else if (c.vat === 'multiply_by_0.8') vatMultiply += 1;
+    }
+  }
+  const vatTotal = vatDivide + vatMultiply;
+  return {
+    fixtures: { passed: results.filter((r) => r.pass).length, total: results.length },
+    checks: {
+      passed: checksPassed,
+      total: checksTotal,
+      pct: checksTotal ? round2((checksPassed / checksTotal) * 100) : null,
+    },
+    vat: {
+      divideBy1_2: vatDivide,
+      multiplyBy0_8: vatMultiply,
+      total: vatTotal,
+      errorPct: vatTotal ? round2((vatMultiply / vatTotal) * 100) : null,
+    },
   };
 }

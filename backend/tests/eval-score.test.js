@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scoreResult, checkVatDirection, normName } from '../eval/score.js';
+import { scoreResult, checkVatDirection, normName, summarize } from '../eval/score.js';
 
 describe('checkVatDirection (ловушка НДС из #58)', () => {
   it('÷1.2 — верно (ok)', () => {
@@ -106,5 +106,51 @@ describe('scoreResult — deal-путь (happy-path BYN)', () => {
   it('неожиданный error на deal-фикстуре → fail', () => {
     const r = scoreResult({ error: 'tool_unavailable' }, expected);
     expect(r.pass).toBe(false);
+  });
+});
+
+describe('summarize — агрегатная метрика (#93)', () => {
+  // summarize() работает над выводом scoreResult(); строим объекты вручную, чтобы метрика
+  // тестировалась независимо от внутреннего числа чеков scoreResult.
+  const R = (pass, checks) => ({ fixture: 'f', pass, checks });
+
+  it('пустой набор → нули, проценты null', () => {
+    const s = summarize([]);
+    expect(s.fixtures).toEqual({ passed: 0, total: 0 });
+    expect(s.checks).toEqual({ passed: 0, total: 0, pct: null });
+    expect(s.vat).toEqual({ divideBy1_2: 0, multiplyBy0_8: 0, total: 0, errorPct: null });
+  });
+
+  it('доля прошедших фикстур и совпавших полей', () => {
+    const s = summarize([
+      R(true, [{ name: 'a', ok: true }, { name: 'b', ok: true }]),
+      R(false, [{ name: 'a', ok: true }, { name: 'b', ok: false }]),
+    ]);
+    expect(s.fixtures).toEqual({ passed: 1, total: 2 });
+    expect(s.checks).toEqual({ passed: 3, total: 4, pct: 75 });
+  });
+
+  it('частота НДС-ошибки ×0.8 vs ÷1.2', () => {
+    const s = summarize([
+      R(true, [{ name: 'НДС', ok: true, vat: 'divide_by_1.2' }]),
+      R(false, [{ name: 'НДС', ok: false, vat: 'multiply_by_0.8' }]),
+      R(false, [{ name: 'НДС', ok: false, vat: 'multiply_by_0.8' }]),
+    ]);
+    expect(s.vat.divideBy1_2).toBe(1);
+    expect(s.vat.multiplyBy0_8).toBe(2);
+    expect(s.vat.total).toBe(3);
+    expect(s.vat.errorPct).toBe(66.67); // round2(2/3 × 100)
+  });
+
+  it('интегрируется с реальным scoreResult — НДС-тег попадает в метрику', () => {
+    const dealExpected = {
+      fixture: 'byn-ok.pdf', expect: 'deal',
+      items: [{ name: 'Цемент', priceExclVat: 100, priceInclVatHint: 120 }],
+    };
+    // агент посчитал ×0.8 (96) — ошибка должна быть засчитана в vat.multiplyBy0_8
+    const r = scoreResult({ items: [{ name: 'Цемент', priceExclVat: 96 }] }, dealExpected);
+    const s = summarize([r]);
+    expect(s.vat.multiplyBy0_8).toBe(1);
+    expect(s.vat.divideBy1_2).toBe(0);
   });
 });
