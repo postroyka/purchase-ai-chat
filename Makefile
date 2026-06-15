@@ -1,7 +1,7 @@
 .PHONY: dev logs shell-app shell-mcp \
 	prod-up prod-down prod-redeploy prod-pull \
 	init-network init-nginxproxy \
-	deploy-b24 deploy-images ui-smoke check-agent-stdin eval
+	deploy-b24 deploy-images ui-smoke check-agent-stdin eval eval-baseline
 
 # Shared reverse-proxy network name on the server (грабли #1).
 PROXY_NET ?= proxy-net
@@ -41,6 +41,12 @@ check-agent-stdin:
 # в backend/tests/eval-score.test.js. Подробности: backend/eval/README.md
 eval:
 	node backend/eval/run.js
+
+# ---- Baseline-черновики (#93): прогнать агента по счетам БЕЗ эталона и записать черновики
+# <name>.expected.json из вывода агента (потом сверить с документом и поправить руками).
+# То же живое окружение, что и eval. Подробности: backend/eval/README.md
+eval-baseline:
+	node backend/eval/baseline.js
 
 # ---- production (on the server) ----
 # Pull latest images from GHCR and (re)create containers.

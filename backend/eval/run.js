@@ -38,6 +38,8 @@ async function main() {
     const fixturePath = join(SAMPLES_DIR, expected.fixture);
     const want = `${expected.expect}${expected.error ? ' ' + expected.error : ''}`;
     console.log(`▶ ${expected.fixture}  (ожидаем: ${want})`);
+    // Незаправленный baseline-черновик: сравнение агента с его же выводом не показательно.
+    if (expected.draft) console.log('   ⚠️  это ЧЕРНОВИК (baseline) — сверь и поправь эталон, иначе результат бессмысленный');
 
     let actual;
     try {

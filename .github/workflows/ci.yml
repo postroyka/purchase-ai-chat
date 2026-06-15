@@ -44,6 +44,7 @@ jobs:
           node --check backend/nbrb-rate.js
           node --check backend/eval/score.js
           node --check backend/eval/run.js
+          node --check backend/eval/baseline.js
 
       - name: Run tests
         working-directory: backend
