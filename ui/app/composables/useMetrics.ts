@@ -1,5 +1,5 @@
 // Fetches the lifetime usage snapshot from the backend (GET /metrics/data) and keeps it fresh.
-// Mirrors the auth pattern used on the upload page: a Bearer token from public runtime config.
+// Mirrors the upload page: same-origin call with no browser token — auth via the HTTP Basic session.
 // The fetch runs only on the client (onMounted) so prerendering the page never calls the API.
 
 export interface MetricNamedCount { name: string, count: number }
@@ -44,8 +44,6 @@ export interface MetricsSnapshot {
 const REFRESH_MS = 30_000
 
 export function useMetrics() {
-  const config = useRuntimeConfig()
-
   const data = ref<MetricsSnapshot | null>(null)
   const error = ref<string | null>(null)
   const pending = ref(false)
@@ -60,9 +58,8 @@ export function useMetrics() {
     const { signal } = controller
     pending.value = true
     try {
-      const token = config.public.backendToken
+      // Same-origin, no token (#41/#105 P1): browser HTTP Basic session (prod) / dev-proxy (dev) auth.
       const snapshot = await $fetch<MetricsSnapshot>('/metrics/data', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
         cache: 'no-store',
         signal
       })

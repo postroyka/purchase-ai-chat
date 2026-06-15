@@ -141,7 +141,6 @@
 definePageMeta({ layout: 'default' })
 
 const toast = useToast()
-const config = useRuntimeConfig()
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
 
@@ -204,11 +203,9 @@ const FILE_LABELS = JOB_LABELS
 const FILE_COLORS = JOB_COLORS
 
 // ── API ───────────────────────────────────────────────────────────────────────
-
-function authHeaders(): Record<string, string> {
-  const token = config.public.backendToken
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
+// Backend calls are same-origin and carry no token (#41/#105 P1): in prod the browser's HTTP
+// Basic session (the gate on this page) authenticates them; in dev the nitro devProxy injects the
+// Bearer server-side. $fetch defaults to credentials:'same-origin', so the Basic header rides along.
 
 // Автозагрузка сразу после выбора файлов — одно действие, без лишней кнопки.
 watch(selectedFiles, (files) => {
@@ -233,7 +230,7 @@ async function doUpload() {
   try {
     const res = await $fetch<{ jobId: string, files: Array<{ name: string, status: string }> }>(
       '/upload',
-      { method: 'POST', body: form, headers: authHeaders() }
+      { method: 'POST', body: form }
     )
 
     job.value = {
@@ -276,7 +273,6 @@ async function pollOnce(jobId: string) {
   pollController = controller
   try {
     const data = await $fetch<JobStatus>(`/job/${jobId}/status`, {
-      headers: authHeaders(),
       signal: controller.signal
     })
     pollErrors = 0

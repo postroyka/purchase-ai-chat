@@ -8,6 +8,12 @@ const extraAllowedHosts = (process?.env.NUXT_ALLOWED_HOSTS?.split(',').map((s: s
 
 const prodUrl = process?.env.NUXT_PUBLIC_SITE_URL ?? ''
 
+// Dev-only: the dev-proxy (nitro.devProxy below) injects this Bearer token SERVER-SIDE so it never
+// enters the browser bundle (#41/#105 P1). Empty in production builds — there the UI is same-origin
+// behind HTTP Basic and the browser's cached Basic credentials authenticate the API calls instead.
+const devApiToken = process?.env.BACKEND_API_TOKEN ?? ''
+const devAuthHeaders = devApiToken ? { Authorization: `Bearer ${devApiToken}` } : {}
+
 export default defineNuxtConfig({
 
   modules: [
@@ -30,11 +36,10 @@ export default defineNuxtConfig({
      * @see https://nuxt.com/docs/guide/going-further/runtime-config#example
      */
     public: {
-      siteUrl: prodUrl,
-      // Token for backend API calls from the browser. Set NUXT_PUBLIC_BACKEND_TOKEN env var.
-      // In production, the UI is served by the backend process on the same origin —
-      // the token never leaves the same server boundary.
-      backendToken: process?.env.NUXT_PUBLIC_BACKEND_TOKEN ?? ''
+      siteUrl: prodUrl
+      // No backend token here by design (#41/#105 P1): the browser must never receive it.
+      // Same-origin requests authenticate via the page's HTTP Basic session (prod) or the
+      // dev-proxy's server-side Bearer injection (dev) — see nitro.devProxy below.
     }
   },
 
@@ -65,12 +70,15 @@ export default defineNuxtConfig({
   nitro: {
     // In local dev the UI dev-server runs on :3001; API calls are proxied to backend on :3000.
     // In production the backend Express server serves the built static files directly.
+    // Authed routes inject the Bearer token here (server-side) so the browser never holds it
+    // (#41/#105 P1). /health is unauthenticated. In prod these proxies don't exist — Express
+    // serves the static UI same-origin and the browser's HTTP Basic session authenticates.
     devProxy: {
-      '/upload': { target: 'http://localhost:3000/upload', changeOrigin: true },
-      '/job': { target: 'http://localhost:3000/job', changeOrigin: true },
+      '/upload': { target: 'http://localhost:3000/upload', changeOrigin: true, headers: devAuthHeaders },
+      '/job': { target: 'http://localhost:3000/job', changeOrigin: true, headers: devAuthHeaders },
       '/health': { target: 'http://localhost:3000/health', changeOrigin: true },
       // Only the JSON data is a backend call; /metrics itself is a Nuxt page.
-      '/metrics/data': { target: 'http://localhost:3000/metrics/data', changeOrigin: true }
+      '/metrics/data': { target: 'http://localhost:3000/metrics/data', changeOrigin: true, headers: devAuthHeaders }
     },
     prerender: {
       routes: [
