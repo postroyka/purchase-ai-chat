@@ -60,8 +60,11 @@ class ProcureDeal
 	 */
 	protected static function sanitizeFileName(string $name): string
 	{
-		// basename по обоим разделителям — Windows-пути приходят с обратным слэшем.
-		$name = basename(str_replace('\\', '/', $name));
+		// Нормализуем юникод-«слэши» (U+2215 ∕, U+FF0F ／) в обычный «/», чтобы basename
+		// отрезал и «путь», собранный из них (basename понимает только ASCII-разделители).
+		$name = str_replace(["\u{2215}", "\u{FF0F}", '\\'], '/', $name);
+		// basename — только базовое имя (срез пути).
+		$name = basename($name);
 		// Срез ASCII control-символов и DEL.
 		$name = preg_replace('/[\x00-\x1f\x7f]/', '', $name) ?? '';
 		$name = trim($name);
@@ -82,11 +85,12 @@ class ProcureDeal
 			$ext = 'bin';
 		}
 
-		// Ограничение длины базовой части (оставляем место под «.<ext>»).
+		// Ограничение длины базовой части (оставляем место под «.<ext>»). mb_*, чтобы не
+		// разрезать многобайтовый UTF-8 посередине (длинные кириллические имена → битый UTF-8).
 		$maxBase = max(1, static::MAX_FILE_NAME_LEN - strlen($ext) - 1);
-		if(strlen($base) > $maxBase)
+		if(mb_strlen($base, 'UTF-8') > $maxBase)
 		{
-			$base = substr($base, 0, $maxBase);
+			$base = mb_substr($base, 0, $maxBase, 'UTF-8');
 		}
 
 		return $base.'.'.$ext;

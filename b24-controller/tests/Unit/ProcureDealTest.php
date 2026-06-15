@@ -222,6 +222,36 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame('Счёт №5.pdf', \CRestUtil::$lastArg[0]);
 	}
 
+	/** #103: двойное расширение — итоговое (последнее) решает; .php → .bin. */
+	public function testDoubleExtensionNeutralised(): void
+	{
+		\CRestUtil::$saveFileReturn = ['ID' => 7, 'name' => 'x'];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'report.pdf.php', base64_encode('data'), 'log', $this->items());
+		$this->assertSame('report.pdf.bin', \CRestUtil::$lastArg[0]); // .php не в whitelist → .bin
+	}
+
+	/** #103: юникод-«слэши» (U+2215/U+FF0F) трактуются как разделитель пути и срезаются. */
+	public function testUnicodeSlashStripped(): void
+	{
+		\CRestUtil::$saveFileReturn = ['ID' => 8, 'name' => 'x'];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, "a\u{2215}b\u{FF0F}evil.pdf", base64_encode('data'), 'log', $this->items());
+		$this->assertSame('evil.pdf', \CRestUtil::$lastArg[0]);
+	}
+
+	/** #103: длинное кириллическое имя обрезается по символам (валидный UTF-8), расширение цело. */
+	public function testLongCyrillicNameTruncatedWithoutBrokenUtf8(): void
+	{
+		\CRestUtil::$saveFileReturn = ['ID' => 9, 'name' => 'x'];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, str_repeat('Я', 300).'.pdf', base64_encode('data'), 'log', $this->items());
+		$saved = \CRestUtil::$lastArg[0];
+		$this->assertStringEndsWith('.pdf', $saved);
+		$this->assertSame($saved, mb_convert_encoding($saved, 'UTF-8', 'UTF-8')); // не побит на полусимволе
+		$this->assertLessThanOrEqual(200, mb_strlen($saved, 'UTF-8'));
+	}
+
 	/**
 	 * Регрессия #99 (by-ref): file Update + timeline onCreate принимают второй
 	 * параметр ПО ССЫЛКЕ. Контроллер обязан передавать ПЕРЕМЕННУЮ-массив, иначе
