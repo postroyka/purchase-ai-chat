@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import Redis from 'ioredis';
 import { timingSafeEqual, createHash } from 'node:crypto';
 import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
@@ -83,23 +84,51 @@ function decodeOriginalName(name) {
   return decoded.includes('�') ? name : decoded;
 }
 
-// Dependency-free in-memory rate limiter. Keyed by Authorization header (per client),
-// so a single token flooding /upload can't exhaust the agent subprocess pool. State is
-// per-process — matches the single-process deployment (see processJob note below).
-function createRateLimiter({ windowMs, max }) {
-  const hits = new Map();
-  return function rateLimit(req, res, next) {
-    if (!max || max <= 0) return next(); // max<=0 disables the limiter
-    const key = req.headers['authorization'] || req.ip || 'anon';
+// Per-client rate limiter, keyed by a HASH of the Authorization header (so a single token
+// flooding /upload can't exhaust the agent subprocess pool, and the raw token never becomes a
+// Redis key). Prefers Redis (shared across instances + survives restart, #105); falls back to
+// an in-memory Map when no Redis client is supplied (dev/tests/single-process).
+function createRateLimiter({ windowMs, max, redisClient = null }) {
+  const hits = new Map(); // process-local fallback
+  const keyFor = (req) =>
+    'rl:' + createHash('sha256')
+      .update(String(req.headers['authorization'] || req.ip || 'anon'))
+      .digest('hex').slice(0, 32);
+
+  // Redis fixed-window: INCR the counter, set the window TTL on the first hit. Fail-OPEN on any
+  // Redis error — a best-effort DoS guard must never block legitimate uploads during a blip.
+  async function allowedViaRedis(key) {
+    try {
+      const n = await redisClient.incr(key);
+      if (n === 1) await redisClient.pexpire(key, windowMs);
+      return n <= max;
+    } catch (e) {
+      console.warn(`[rate-limit] Redis error — failing open: ${e?.message ?? e}`);
+      return true;
+    }
+  }
+
+  function allowedViaMemory(key) {
     const now = Date.now();
     const recent = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
-    if (recent.length >= max) {
-      res.setHeader('Retry-After', String(Math.ceil(windowMs / 1000)));
-      return res.status(429).json({ error: 'Too many requests — slow down.' });
-    }
+    if (recent.length >= max) return false;
     recent.push(now);
     hits.set(key, recent);
-    return next();
+    return true;
+  }
+
+  return function rateLimit(req, res, next) {
+    if (!max || max <= 0) { next(); return; } // max<=0 disables the limiter
+    const key = keyFor(req);
+    const tooMany = () => {
+      res.setHeader('Retry-After', String(Math.ceil(windowMs / 1000)));
+      res.status(429).json({ error: 'Too many requests — slow down.' });
+    };
+    if (redisClient) {
+      allowedViaRedis(key).then((ok) => (ok ? next() : tooMany()));
+      return;
+    }
+    if (allowedViaMemory(key)) next(); else tooMany();
   };
 }
 
@@ -125,6 +154,7 @@ function createRateLimiter({ windowMs, max }) {
  *   agentConfig?: import('./agent-runner.js').AgentConfig,
  *   jobs?: object,
  *   metrics?: object,
+ *   rateLimitRedis?: object,
  * }} [config]
  * @returns {import('express').Express}
  *
@@ -209,7 +239,13 @@ export function createApp(config = {}) {
   // createApp stays hermetic — no outbound api.nbrb.by call from the unit/route test suites.
   const metrics = config.metrics ?? createMetrics({ redisUrl });
   const agentConfig = config.agentConfig ?? {};
-  const uploadRateLimit = createRateLimiter({ windowMs: rateLimitWindowMs, max: rateLimitMax });
+  // Rate-limiter state in Redis when available (multi-instance-safe, survives restart — #105);
+  // dedicated lazy client mirroring jobs-store. Tests inject a fake via config.rateLimitRedis.
+  const rateLimitRedis = config.rateLimitRedis ?? (redisUrl
+    ? new Redis(redisUrl, { lazyConnect: true, enableOfflineQueue: false, commandTimeout: 3000 })
+    : null);
+  if (rateLimitRedis?.on) rateLimitRedis.on('error', (e) => console.error('[rate-limit] Redis error:', e?.message ?? e));
+  const uploadRateLimit = createRateLimiter({ windowMs: rateLimitWindowMs, max: rateLimitMax, redisClient: rateLimitRedis });
 
   // Track in-flight processJob calls so graceful shutdown can wait for them.
   let activeJobs = 0;

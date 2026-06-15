@@ -780,4 +780,47 @@ describe('rate limiting on /upload', () => {
       expect(r.status).toBe(201);
     }
   });
+
+  // #105: when a Redis client is present the limiter uses it (multi-instance-safe).
+  it('uses Redis INCR/pexpire when a client is provided and 429s over the limit', async () => {
+    let counter = 0;
+    const calls = { pexpire: 0 };
+    const fakeRedis = {
+      incr: async () => ++counter,
+      pexpire: async () => { calls.pexpire += 1; },
+      on: () => {},
+    };
+    const redisApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: makeMockAgentSpawn() },
+      rateLimitMax: 2,
+      rateLimitRedis: fakeRedis,
+    });
+    const send = () => request(redisApp).post('/upload').set('Authorization', auth())
+      .attach('files[]', pdf(), { contentType: 'application/pdf' });
+    const [r1, r2, r3] = [await send(), await send(), await send()];
+    expect([r1.status, r2.status, r3.status]).toEqual([201, 201, 429]);
+    expect(calls.pexpire).toBe(1); // TTL armed once, on the first hit of the window
+  });
+
+  it('fails OPEN when Redis errors — a blip must not block uploads (#105)', async () => {
+    const fakeRedis = {
+      incr: async () => { throw new Error('redis down'); },
+      pexpire: async () => {},
+      on: () => {},
+    };
+    const redisApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: makeMockAgentSpawn() },
+      rateLimitMax: 1, // would 429 after the 1st request if Redis worked
+      rateLimitRedis: fakeRedis,
+    });
+    for (let i = 0; i < 3; i++) {
+      const r = await request(redisApp).post('/upload').set('Authorization', auth())
+        .attach('files[]', pdf(), { contentType: 'application/pdf' });
+      expect(r.status).toBe(201); // all allowed — failed open
+    }
+  });
 });
