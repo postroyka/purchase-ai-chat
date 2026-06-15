@@ -16,7 +16,7 @@ export const useB24 = () => {
     return LoggerFactory.createForBrowser(loggerTitle ?? 'dashBoard', devMode)
   }
 
-  function get() {
+  function get(): B24Frame | undefined {
     return $b24
   }
 
