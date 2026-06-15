@@ -47,6 +47,24 @@ def test_docx_extracts_paragraphs_and_tables(tmp_path):
     assert "Краска MAXIMA" in r.stdout
 
 
+def test_xlsx_with_doctype_rejected_as_xxe(tmp_path):
+    # #57: легитимные xlsx/docx не содержат DTD; файл с <!DOCTYPE/<!ENTITY> в XML-части —
+    # XXE-вектор и должен быть отклонён ДО парсера (openpyxl/python-docx на lxml).
+    import zipfile
+    p = tmp_path / "evil.xlsx"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr(
+            "xl/worksheets/sheet1.xml",
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+            "<root>&xxe;</root>",
+        )
+    r = _run(p)
+    assert r.returncode == 1
+    assert "DTD/ENTITY" in r.stderr
+
+
 def test_unsupported_extension_exits_nonzero(tmp_path):
     p = tmp_path / "note.txt"
     p.write_text("hi")

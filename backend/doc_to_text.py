@@ -8,6 +8,7 @@
 # Коды возврата:  0 — успех, 1 — ошибка/неподдерживаемый формат (детали на stderr)
 import os
 import sys
+import zipfile
 
 # Жёсткий лимит адресного пространства процесса (анти-zip-bomb для xlsx/docx — это ZIP):
 # при разбухании получим MemoryError внутри этого процесса, а не OOM-kill всего контейнера.
@@ -26,8 +27,29 @@ def _fmt(value):
     return str(value)
 
 
+# Маркеры, которых НЕ бывает в легитимных xlsx/docx (это ZIP с XML-частями): DOCTYPE/ENTITY —
+# признак XXE / «billion laughs». Блокируем на входе, не полагаясь на безопасные дефолты lxml,
+# который используют openpyxl/python-docx и в который нельзя надёжно внедрить безопасный парсер (#57).
+_XXE_MARKERS = (b"<!doctype", b"<!entity")
+
+
+def _reject_xxe_in_zip(path):
+    """Просканировать XML-части офисного ZIP на DTD/ENTITY и отклонить файл при их наличии.
+    DOCTYPE по правилам XML стоит в начале части, поэтому читаем ограниченный префикс. Значения
+    ячеек хранятся XML-экранированными (`&lt;!DOCTYPE`), так что ложных срабатываний на контенте нет."""
+    with zipfile.ZipFile(path) as z:
+        for name in z.namelist():
+            if not name.lower().endswith((".xml", ".rels")):
+                continue
+            with z.open(name) as f:
+                head = f.read(65536).lower()
+            if any(m in head for m in _XXE_MARKERS):
+                raise ValueError("DTD/ENTITY not allowed in {} (possible XXE)".format(name))
+
+
 def xlsx_text(path):
     """Читаем .xlsx через openpyxl (data_only — значения, а не формулы; read_only — потоково)."""
+    _reject_xxe_in_zip(path)  # #57: отсечь DTD/ENTITY до парсера
     from openpyxl import load_workbook
     wb = load_workbook(path, data_only=True, read_only=True)
     out = []
@@ -70,6 +92,7 @@ def xls_text(path):
 
 def docx_text(path):
     """Читаем .docx через python-docx: абзацы + ячейки таблиц (включая вложенные)."""
+    _reject_xxe_in_zip(path)  # #57: отсечь DTD/ENTITY до парсера
     import docx
 
     def cell_text(cell):

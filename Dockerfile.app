@@ -35,6 +35,7 @@ COPY backend/requirements.txt /tmp/requirements.txt
 RUN apk add --no-cache \
       poppler-utils \
       tesseract-ocr tesseract-ocr-data-rus tesseract-ocr-data-eng tesseract-ocr-data-bel \
+      util-linux \
       python3 py3-pip \
  && pip install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 

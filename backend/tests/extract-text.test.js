@@ -5,7 +5,14 @@ import { EventEmitter } from 'node:events';
 // Tests set h.outputs[cmd] / h.codes[cmd] per external tool ('pdftotext'|'tesseract'|'python3'|'pdftoppm').
 const h = vi.hoisted(() => ({ outputs: {}, codes: {} }));
 vi.mock('node:child_process', () => ({
-  spawn: (cmd) => {
+  spawn: (cmd, args) => {
+    // #57: prod wraps OCR binaries as `prlimit --as=… -- <cmd> …`. Unwrap so the mock keys on
+    // the logical command (real binary is the token after '--'), independent of whether the
+    // test runner actually has prlimit installed.
+    if (typeof cmd === 'string' && cmd.endsWith('prlimit') && Array.isArray(args)) {
+      const sep = args.indexOf('--');
+      if (sep >= 0 && args[sep + 1]) cmd = args[sep + 1];
+    }
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
@@ -19,7 +26,7 @@ vi.mock('node:child_process', () => ({
   },
 }));
 
-const { extractDocumentText } = await import('../extract-text.js');
+const { extractDocumentText, rlimitWrap } = await import('../extract-text.js');
 
 beforeEach(() => { h.outputs = {}; h.codes = {}; });
 
@@ -68,5 +75,23 @@ describe('extractDocumentText', () => {
   it('returns null for unsupported extensions', async () => {
     expect(await extractDocumentText('/x/note.txt')).toBeNull();
     expect(await extractDocumentText('/x/archive.zip')).toBeNull();
+  });
+});
+
+describe('rlimitWrap (#57 — memory cap for OCR/PDF binaries)', () => {
+  it('wraps in prlimit --as=<bytes> when a limiter path + positive cap are given', () => {
+    const { cmd, args } = rlimitWrap('tesseract', ['scan.png', 'stdout'], { asMb: 1024, prlimitPath: '/usr/bin/prlimit' });
+    expect(cmd).toBe('/usr/bin/prlimit');
+    expect(args).toEqual(['--as=1073741824', '--', 'tesseract', 'scan.png', 'stdout']);
+  });
+
+  it('falls back to a direct spawn when prlimit is unavailable (never breaks extraction)', () => {
+    expect(rlimitWrap('pdftotext', ['-layout', 'f.pdf'], { asMb: 1024, prlimitPath: null }))
+      .toEqual({ cmd: 'pdftotext', args: ['-layout', 'f.pdf'] });
+  });
+
+  it('falls back when the cap is non-positive (disabled)', () => {
+    expect(rlimitWrap('pdftoppm', ['-png'], { asMb: 0, prlimitPath: '/usr/bin/prlimit' }))
+      .toEqual({ cmd: 'pdftoppm', args: ['-png'] });
   });
 });

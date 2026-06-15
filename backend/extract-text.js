@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +28,27 @@ const MAX_BUFFER = 16 * 1024 * 1024;
 const OFFICE_EXTS = new Set(['.xlsx', '.xls', '.docx']);
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg']);
 
+// Hard per-process address-space cap for the external OCR/PDF binaries (#57). The python
+// office path already self-limits via RLIMIT_AS; the node-spawned pdftotext/pdftoppm/tesseract
+// did not. We wrap them in `prlimit --as=<bytes>` so a decompression-bomb / giant-page PDF
+// fails THAT process with ENOMEM instead of growing until the cgroup OOM-kills the whole
+// container (a DoS for every concurrent job). The default is generous — it won't kill normal
+// invoice OCR — and is meant to be tuned DOWN per box via OCR_RLIMIT_AS_MB. Safe fallback: if
+// prlimit is absent (non-Linux / not installed) we spawn directly — never break extraction.
+const OCR_RLIMIT_AS_MB = parseInt(process.env.OCR_RLIMIT_AS_MB || '1536', 10);
+const PRLIMIT_PATH = ['/usr/bin/prlimit', '/bin/prlimit', '/usr/sbin/prlimit', '/sbin/prlimit']
+  .find((p) => { try { return existsSync(p); } catch { return false; } }) || null;
+
+/**
+ * Wrap a command in `prlimit --as=<bytes>` when a limiter is available and a positive cap is
+ * set; otherwise return the command unchanged. Pure + injectable so it can be unit-tested
+ * without spawning. @returns {{ cmd: string, args: string[] }}
+ */
+export function rlimitWrap(cmd, args, { asMb = OCR_RLIMIT_AS_MB, prlimitPath = PRLIMIT_PATH } = {}) {
+  if (!prlimitPath || !(asMb > 0)) return { cmd, args };
+  return { cmd: prlimitPath, args: [`--as=${asMb * 1024 * 1024}`, '--', cmd, ...args] };
+}
+
 /** @param {string} s @returns {number} length ignoring whitespace */
 function meaningfulLen(s) {
   return s.replace(/\s+/g, '').length;
@@ -43,7 +64,10 @@ function meaningfulLen(s) {
  */
 function run(cmd, args) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // Spawn under prlimit when available (#57). Error/log messages keep using the logical
+    // `cmd` (e.g. "pdftotext"), not the prlimit wrapper, so they stay readable.
+    const spawnTarget = rlimitWrap(cmd, args);
+    const proc = spawn(spawnTarget.cmd, spawnTarget.args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const chunks = [];
     let size = 0;
     let stderr = '';
