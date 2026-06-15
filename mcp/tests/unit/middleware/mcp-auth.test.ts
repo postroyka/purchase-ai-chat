@@ -129,4 +129,17 @@ describe('mcp-auth middleware', () => {
   it('trims surrounding whitespace from the token', () => {
     expect(callMiddleware('/mcp', { authorization: `Bearer   ${VALID_TOKEN}  ` })()).toBeUndefined()
   })
+
+  it('rejects a much-shorter request token with 401 (no throw on unequal length)', () => {
+    // Regression guard: hash-based compare must NOT throw on differing lengths (the old direct
+    // timingSafeEqual would). A 1-char token against a 64-char expected → plain 401.
+    expect(callMiddleware('/mcp', { authorization: 'Bearer x' })).toThrow(
+      expect.objectContaining({ statusCode: 401 }),
+    )
+  })
+
+  it('trims the CONFIGURED token so a stray env space does not 401 everyone', () => {
+    runtimeConfig.mcpAuthToken = `  ${VALID_TOKEN}  ` // operator accidentally added spaces in .env
+    expect(callMiddleware('/mcp', { authorization: `Bearer ${VALID_TOKEN}` })()).toBeUndefined()
+  })
 })

@@ -9,7 +9,9 @@ export default defineEventHandler((event) => {
   // but also must not require it (404 from the router is fine).
   if (pathname !== '/mcp' && !pathname.startsWith('/mcp/')) return
 
-  const expected = useRuntimeConfig().mcpAuthToken
+  // .trim(): a stray space in the env value would otherwise pass the length gate but never
+  // match the (trimmed) request token — a confusing 401-for-everyone operational trap.
+  const expected = useRuntimeConfig().mcpAuthToken?.trim()
   // Treat the `.env.example` placeholder as "not configured": an operator who
   // copied the example without running `openssl rand -hex 32` must not end up
   // with a guessable, publicly-documented token guarding /mcp.

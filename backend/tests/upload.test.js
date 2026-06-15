@@ -679,13 +679,24 @@ describe('Security headers', () => {
     expect(res.headers['x-powered-by']).toBeUndefined();
   });
 
-  it('sets CSP and HSTS (#105)', async () => {
+  it('sets CSP always; HSTS only in production (#105)', async () => {
     const res = await request(app).get('/health');
     const csp = res.headers['content-security-policy'];
     expect(csp).toContain("default-src 'self'");
-    expect(csp).toContain("connect-src 'self'");   // anti-exfil lever
+    expect(csp).toContain("connect-src 'self'");      // anti-exfil lever
     expect(csp).toContain("object-src 'none'");
-    expect(res.headers['strict-transport-security']).toContain('max-age=63072000');
+    expect(csp).toContain("frame-ancestors 'self'");  // clickjacking
+    expect(csp).toContain("base-uri 'self'");         // base-tag injection
+    // HSTS gated to NODE_ENV=production so a dev/staging HTTP host isn't pinned for 2y.
+    expect(res.headers['strict-transport-security']).toBeUndefined();
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const prod = await request(app).get('/health');
+      expect(prod.headers['strict-transport-security']).toContain('max-age=63072000');
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
   });
 });
 

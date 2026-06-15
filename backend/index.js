@@ -171,9 +171,10 @@ export function createApp(config = {}) {
   // prod image still builds with `pnpm install --frozen-lockfile --prod`.
   //
   // CSP (#105): pragmatic, not maximal. 'unsafe-inline' is retained for script/style because
-  // the Nuxt production bundle emits inline hydration/styles — a strict nonce-based policy is
-  // a follow-up. The lever that still bites here is `connect-src 'self'`: it blocks an XSS
-  // payload from POSTing the (currently client-visible) backend token to an attacker origin.
+  // the Nuxt production bundle emits inline hydration/styles, so this does NOT stop inline-script
+  // XSS — TODO: nonce-based CSP (drop 'unsafe-inline') as a #105 follow-up; do not consider P2
+  // fully closed by this. The lever that still bites here is `connect-src 'self'`: it blocks an
+  // XSS payload from POSTing the (currently client-visible) backend token to an attacker origin.
   // object-src/base-uri/frame-ancestors close clickjacking and base-tag injection.
   // HSTS (#105): force HTTPS for 2y incl. subdomains (the TLS-terminating proxy must serve it).
   // NOTE: after deploy, smoke-check that the dashboard still renders under this CSP.
@@ -195,7 +196,11 @@ export function createApp(config = {}) {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-DNS-Prefetch-Control', 'off');
     res.setHeader('Content-Security-Policy', csp);
-    res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
+    // HSTS only in production: in dev/staging the backend may be hit over plain HTTP
+    // (no TLS proxy), and a 2-year HSTS pin there would wrongly block HTTP for that host.
+    if (process.env.NODE_ENV === 'production') {
+      res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
+    }
     next();
   });
 
