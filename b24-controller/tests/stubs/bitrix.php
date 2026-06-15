@@ -159,6 +159,10 @@ namespace Shef\Purchase\Tests {
 			\CIBlockElement::$calls = [];
 			\CIBlockElement::$resultQueue = [];
 
+			\CUserTypeEntity::$added = [];
+			\CUserTypeEntity::$existing = [];
+			\CUserTypeEntity::$addReturn = 50;
+
 			\CCrmDeal::$addReturn = 100;
 			\CCrmDeal::$lastAddFields = null;
 			\CCrmDeal::$saveRowsReturn = true;
@@ -328,6 +332,34 @@ namespace {
 			self::$calls[] = ['order' => $order, 'filter' => $filter, 'nav' => $nav, 'select' => $select];
 			$rows = array_shift(self::$resultQueue);
 			return new \FakeDbResult($rows ?? []);
+		}
+	}
+
+	/**
+	 * Заглушка CUserTypeEntity (пользовательские поля). GetList() «находит» поле, если его
+	 * FIELD_NAME перечислен в $existing; Add() складывает поля в $added и возвращает
+	 * $addReturn (id > 0 — успех, false — провал создания).
+	 */
+	class CUserTypeEntity
+	{
+		/** @var array<int,array> поля, переданные в Add() */
+		public static array $added = [];
+		/** Коды (FIELD_NAME) уже существующих полей — их «находит» GetList(). */
+		public static array $existing = [];
+		/** Что вернёт Add(): id (>0 успех) или false (провал). */
+		public static $addReturn = 50;
+
+		public function Add(array $fields)
+		{
+			self::$added[] = $fields;
+			return self::$addReturn;
+		}
+
+		public static function GetList($order = [], $filter = [])
+		{
+			$name = $filter['FIELD_NAME'] ?? null;
+			$rows = in_array($name, self::$existing, true) ? [['FIELD_NAME' => $name]] : [];
+			return new \FakeDbResult($rows);
 		}
 	}
 
