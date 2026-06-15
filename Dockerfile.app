@@ -39,6 +39,9 @@ RUN apk add --no-cache \
       python3 py3-pip \
  && pip install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 
+# #57: fail the build early if util-linux didn't provide prlimit (OCR memory cap relies on it).
+RUN prlimit --version >/dev/null
+
 WORKDIR /app
 
 # Backend

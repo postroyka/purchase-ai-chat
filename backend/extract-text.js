@@ -32,12 +32,19 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg']);
 // office path already self-limits via RLIMIT_AS; the node-spawned pdftotext/pdftoppm/tesseract
 // did not. We wrap them in `prlimit --as=<bytes>` so a decompression-bomb / giant-page PDF
 // fails THAT process with ENOMEM instead of growing until the cgroup OOM-kills the whole
-// container (a DoS for every concurrent job). The default is generous — it won't kill normal
-// invoice OCR — and is meant to be tuned DOWN per box via OCR_RLIMIT_AS_MB. Safe fallback: if
-// prlimit is absent (non-Linux / not installed) we spawn directly — never break extraction.
-const OCR_RLIMIT_AS_MB = parseInt(process.env.OCR_RLIMIT_AS_MB || '1536', 10);
+// container (a DoS for every concurrent job).
+//
+// The cap MUST sit BELOW the container memory limit to be useful (otherwise cgroup-OOM fires
+// first and kills everything): default 640 MB vs the prod 768 MB container, leaving headroom for
+// the Node parent. Generous enough for normal single-page invoice OCR; tune via OCR_RLIMIT_AS_MB.
+// Safe fallback: if prlimit is absent (non-Linux / not installed) we spawn directly — never break
+// extraction (and warn once on Linux so a silently-unprotected prod is visible in logs).
+const OCR_RLIMIT_AS_MB = parseInt(process.env.OCR_RLIMIT_AS_MB || '640', 10);
 const PRLIMIT_PATH = ['/usr/bin/prlimit', '/bin/prlimit', '/usr/sbin/prlimit', '/sbin/prlimit']
   .find((p) => { try { return existsSync(p); } catch { return false; } }) || null;
+if (!PRLIMIT_PATH && process.platform === 'linux' && OCR_RLIMIT_AS_MB > 0) {
+  console.warn('[extract-text] prlimit not found — OCR/PDF binaries run WITHOUT a memory cap (#57). Install util-linux.');
+}
 
 /**
  * Wrap a command in `prlimit --as=<bytes>` when a limiter is available and a positive cap is

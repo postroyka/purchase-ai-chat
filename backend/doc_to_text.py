@@ -42,7 +42,12 @@ def _reject_xxe_in_zip(path):
             if not name.lower().endswith((".xml", ".rels")):
                 continue
             with z.open(name) as f:
-                head = f.read(65536).lower()
+                # Read a generous prefix (DOCTYPE must precede the root element by XML spec).
+                # Strip NUL bytes BEFORE matching: a UTF-16-encoded part renders "<!DOCTYPE" as
+                # "<\x00!\x00D…" (LE) / "\x00<\x00!…" (BE) — removing NULs reconstructs the ASCII
+                # markers so a UTF-16 file can't evade the gate (lxml honours the BOM). Valid UTF-8
+                # XML has no NULs, so this is a no-op there.
+                head = f.read(1024 * 1024).replace(b"\x00", b"").lower()
             if any(m in head for m in _XXE_MARKERS):
                 raise ValueError("DTD/ENTITY not allowed in {} (possible XXE)".format(name))
 
