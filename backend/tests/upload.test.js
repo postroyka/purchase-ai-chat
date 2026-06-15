@@ -746,6 +746,12 @@ describe('processJob error handling', () => {
 describe('rate limiting on /upload', () => {
   const pdf = () => path.join(FIXTURES, 'valid.pdf');
 
+  // Each app below sets a high maxConcurrentJobs on purpose: these tests assert the RATE
+  // LIMITER's 429, but /upload also 429s on the concurrency cap (default 2). The mock agent
+  // closes on setImmediate, so a prior upload's job can still be in flight (activeJobs not yet
+  // decremented) when the next request's `activeJobs >= max` check runs → a flaky "Server busy"
+  // 429. Raising the cap removes that confound; the concurrency cap has its own test above.
+
   it('returns 429 once the per-window limit is exceeded', async () => {
     const limitedApp = createApp({
       token: TOKEN,
@@ -753,6 +759,7 @@ describe('rate limiting on /upload', () => {
       agentConfig: { spawnFn: makeMockAgentSpawn() },
       rateLimitMax: 2,
       rateLimitWindowMs: 60_000,
+      maxConcurrentJobs: 50,
     });
     const r1 = await request(limitedApp).post('/upload').set('Authorization', auth())
       .attach('files[]', pdf(), { contentType: 'application/pdf' });
@@ -773,6 +780,7 @@ describe('rate limiting on /upload', () => {
       uploadDir: UPLOAD_DIR,
       agentConfig: { spawnFn: makeMockAgentSpawn() },
       rateLimitMax: 0,
+      maxConcurrentJobs: 50,
     });
     for (let i = 0; i < 5; i++) {
       const r = await request(openApp).post('/upload').set('Authorization', auth())
@@ -801,6 +809,7 @@ describe('rate limiting on /upload', () => {
       // bearer token is valid, so distinct clients must come via a different auth header.
       basicAuthUser: 'u',
       basicAuthPass: 'p',
+      maxConcurrentJobs: 50,
     });
     const basic = 'Basic ' + Buffer.from('u:p').toString('base64');
     const sendWith = (authHeader) => request(redisApp).post('/upload').set('Authorization', authHeader)
@@ -827,6 +836,7 @@ describe('rate limiting on /upload', () => {
       agentConfig: { spawnFn: makeMockAgentSpawn() },
       rateLimitMax: 1, // would 429 after the 1st request if Redis worked
       rateLimitRedis: fakeRedis,
+      maxConcurrentJobs: 50,
     });
     for (let i = 0; i < 3; i++) {
       const r = await request(redisApp).post('/upload').set('Authorization', auth())
