@@ -21,6 +21,7 @@ UI (Nuxt SPA) ──upload/poll──▶ backend (Express, :3000) ──Claude C
 - **Dev**: Nuxt dev-server на `:3001`, backend на `:3000`. devProxy в nuxt.config.ts перенаправляет `/upload`, `/job`, `/health`, `/metrics/data` на backend.
 - **Prod**: Nuxt собирается в статику (`ui/.output/public/`); в образе она копируется в `ui/public/`, откуда Express раздаёт её через `express.static` — один процесс, один порт `:3000`.
 - MCP не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3000/mcp`).
+- **Bitrix24**: интеграция через входящий вебхук + PHP-модуль `shef.purchase` (REST-контроллеры `procure*.php`). Приложение **само доводит схему CRM при установке**: REST-метод `procureinstall.ensureSchema` идемпотентно создаёт нужные кастомные поля сделки (`UF_CRM_DEAL_SH_PRCHS_AI_FILE` — файл документа, `UF_CRM_DEAL_DOGOVOR` — договор); каталог, воронку «Закупки» и реквизит `RQ_INN` возвращает чек-листом для проверки. Цель развития — отдельной страницы установки не делать: схема создаётся самим приложением. Список полей и детали — [`b24-controller/README.md`](./b24-controller/README.md).
 
 ## Быстрый старт
 

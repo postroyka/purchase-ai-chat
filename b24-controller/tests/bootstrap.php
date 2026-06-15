@@ -25,3 +25,4 @@ require $lib . '/controllers/procuresupplier.php';
 require $lib . '/controllers/procureproduct.php';
 require $lib . '/controllers/procurecontract.php';
 require $lib . '/controllers/procuredeal.php';
+require $lib . '/controllers/procureinstall.php';

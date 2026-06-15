@@ -1,6 +1,6 @@
 # b24-controller
 
-`Last reviewed: 2026-06-14`
+`Last reviewed: 2026-06-15`
 
 REST-контроллеры для procure-ai, размещаемые внутри **существующего** модуля
 `shef.purchase` коробки Bitrix24 (`b24.postroyka.by`).
@@ -40,6 +40,7 @@ REST-контроллеры для procure-ai, размещаемые внутр
 | `shef:purchase.api.procureproduct.findbyvendorcode` | `findByVendorCodeAction` | `procureproduct.php` | ✅ реализован (B4–B5) |
 | `shef:purchase.api.procurecontract.find` | `findAction` | `procurecontract.php` | ✅ реализован (B3a–B3e) |
 | `shef:purchase.api.procuredeal.create` | `createAction` | `procuredeal.php` | ✅ реализован (B6–B8) |
+| `shef:purchase.api.procureinstall.ensureschema` | `ensureSchemaAction` | `procureinstall.php` | ✅ самонастройка схемы |
 
 Подробности структур Б24 — в [`IMPLEMENTATION_NOTES.md`](./IMPLEMENTATION_NOTES.md).
 
@@ -66,6 +67,31 @@ REST-контроллеры для procure-ai, размещаемые внутр
 сделка уже создана): `product_rows_failed`, `file_attach_failed`,
 `invalid_base64_file`, `document_date_unparsed`, `timeline_comment_failed`.
 
+## Самонастройка схемы (`procureinstall.ensureSchema`)
+
+Чтобы приложение само доводило коробку до рабочего состояния (особенно свежий или тестовый
+портал), метод `shef:purchase.api.procureinstall.ensureSchema` **идемпотентно** создаёт
+недостающие кастомные поля СДЕЛКИ:
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `UF_CRM_DEAL_SH_PRCHS_AI_FILE` | file | Файл документа (счёт/накладная), который `deal.create` прикрепляет к сделке |
+| `UF_CRM_DEAL_DOGOVOR` | string | Привязка договора к сделке (идентификатор) |
+
+Поле создаётся только если его нет (проверка по коду) — повторный вызов ничего не дублирует.
+Ответ: `{ ok, created[], existing[], failed[], checklist[] }`.
+
+> ⚠️ **Мутирующий метод** — создаёт поля. Только ДОБАВЛЯЕТ, ничего не меняет и не удаляет.
+> Поэтому он **НЕ** входит в read-only post-deploy health-чек.
+
+Структуру каталога и воронку метод **не создаёт молча** (тип `PURCHASE_69_PARENT_PRODUCT` и ID
+инфоблоков специфичны для коробки) — возвращает их в `checklist` для ручной проверки:
+каталог-iBlock со свойствами `PURCHASE_ARTICLE` / `PURCHASE_69_PARENT_PRODUCT`, воронка
+«Закупки» (`CATEGORY_ID`/стадия), список договоров (`shef.iblock`), реквизит `RQ_INN`.
+
+Вызывается дашбордом при первом открытии приложения. Деплоится как обычный `procure*.php`
+(`make deploy-b24`).
+
 ## Структура (= путь на сервере)
 
 ```
@@ -76,7 +102,8 @@ b24-controller/
         ├── procuresupplier.php
         ├── procureproduct.php
         ├── procurecontract.php
-        └── procuredeal.php
+        ├── procuredeal.php
+        └── procureinstall.php
 ```
 
 На сервере: контроллеры → `…/bitrix/modules/shef.purchase/lib/controllers/`,
