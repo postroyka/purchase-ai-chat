@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer'
-import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto'
 import { createError, defineEventHandler, getHeader, getRequestURL } from 'h3'
 
 export default defineEventHandler((event) => {
@@ -9,13 +9,25 @@ export default defineEventHandler((event) => {
   // but also must not require it (404 from the router is fine).
   if (pathname !== '/mcp' && !pathname.startsWith('/mcp/')) return
 
-  const expected = useRuntimeConfig().mcpAuthToken
+  // .trim(): a stray space in the env value would otherwise pass the length gate but never
+  // match the (trimmed) request token — a confusing 401-for-everyone operational trap.
+  const expected = useRuntimeConfig().mcpAuthToken?.trim()
   // Treat the `.env.example` placeholder as "not configured": an operator who
   // copied the example without running `openssl rand -hex 32` must not end up
   // with a guessable, publicly-documented token guarding /mcp.
   if (!expected || expected === 'replace-with-secure-token') {
     // Service-unavailable: not configured, not the caller's fault. Surfacing
     // 500 here would leak misconfiguration to anonymous callers.
+    throw createError({
+      statusCode: 503,
+      statusMessage: 'MCP endpoint is not available',
+    })
+  }
+
+  // Reject a too-short (brute-forceable) token as misconfiguration (#105): the contract is
+  // `openssl rand -hex 32` (64 hex chars). Fail closed rather than guard /mcp with a weak
+  // secret. Same opaque 503 — never reveal token specifics to anonymous callers.
+  if (expected.length < 32) {
     throw createError({
       statusCode: 503,
       statusMessage: 'MCP endpoint is not available',
@@ -36,9 +48,13 @@ export default defineEventHandler((event) => {
 })
 
 function timingSafeEqual(a: string, b: string): boolean {
-  // crypto.timingSafeEqual throws if the buffers differ in length, so length
-  // is checked first. Length leak is acceptable: our tokens are fixed-length
-  // hex from `openssl rand -hex 32`.
-  if (a.length !== b.length) return false
-  return cryptoTimingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))
+  // Hash both sides to a fixed 32-byte digest so comparison is constant-time with no
+  // length leak (#105) — avoids both crypto.timingSafeEqual's equal-length throw and the
+  // old early length short-circuit. SHA-256 collision resistance ⇒ equal digests mean
+  // equal tokens for auth.
+  return cryptoTimingSafeEqual(sha256(a), sha256(b))
+}
+
+function sha256(s: string): Buffer {
+  return createHash('sha256').update(Buffer.from(s, 'utf8')).digest()
 }
