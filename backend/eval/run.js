@@ -16,7 +16,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAgent } from '../agent-runner.js';
-import { scoreResult } from './score.js';
+import { scoreResult, summarize } from './score.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = process.env.EVAL_SAMPLES_DIR ?? join(HERE, '..', '..', 'scripts', 'samples');
@@ -55,9 +55,16 @@ async function main() {
     results.push(score);
   }
 
-  const passed = results.filter((r) => r.pass).length;
-  console.log(`=== EVAL: ${passed}/${results.length} фикстур прошло ===`);
-  process.exit(passed === results.length ? 0 : 1);
+  // Агрегатная метрика (#93): доля совпавших полей + частота НДС-ошибки ×0.8 (баг #58).
+  const sum = summarize(results);
+  console.log(`=== EVAL: ${sum.fixtures.passed}/${sum.fixtures.total} фикстур прошло ===`);
+  console.log(`Поля: ${sum.checks.passed}/${sum.checks.total} совпало с эталоном`
+    + (sum.checks.pct != null ? ` (${sum.checks.pct}%)` : ''));
+  if (sum.vat.total > 0) {
+    console.log(`Направление НДС: ÷1.2 — ${sum.vat.divideBy1_2}, ×0.8 — ${sum.vat.multiplyBy0_8}`
+      + (sum.vat.errorPct != null ? `  (ошибок ×0.8: ${sum.vat.errorPct}%)` : ''));
+  }
+  process.exit(sum.fixtures.passed === sum.fixtures.total ? 0 : 1);
 }
 
 main().catch((e) => { console.error(e); process.exit(2); });
