@@ -698,6 +698,19 @@ describe('extractJson', () => {
     expect(Date.now() - t0).toBeLessThan(2000); // would be minutes without the guard
     expect(result).toBeNull();
   });
+
+  it('extracts a large-but-legit JSON object (well under the op budget)', () => {
+    // 200 KB of real JSON (one big string field) must still parse — the DoS guard must not
+    // turn a legitimately large agent result into null.
+    const obj = { note: 'x'.repeat(200_000), deal: { dealId: 'd-9' } };
+    expect(extractJson(`result:\n${JSON.stringify(obj)}`)).toEqual(obj);
+  });
+
+  it('finds trailing JSON even after >256 KB of leading prose (tail scan)', () => {
+    // The bracket-scan only looks at the tail; the agent always emits its JSON last, so a long
+    // preamble must not hide it.
+    expect(extractJson('A'.repeat(300_000) + '\n{"deal":42}')).toEqual({ deal: 42 });
+  });
 });
 
 describe('resolveClaudeSpawn', () => {

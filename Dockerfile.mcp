@@ -20,6 +20,10 @@ COPY mcp-overlay/server/ ./server/
 # bloat in every model call. Tools are auto-discovered from this dir — no static imports
 # reference these, so removal is safe (the CI "Validate Docker builds" job verifies).
 RUN rm -rf ./server/mcp/tools/tasks ./server/mcp/tools/users ./server/mcp/tools/meta
+# Assert the removal actually took (rm -rf is silent on a wrong/renamed path): fail the build
+# here rather than ship an image that still registers tasks/users/meta. This is the CI guard
+# that the blast-radius reduction can't silently regress on an upstream resync.
+RUN test ! -d ./server/mcp/tools/tasks && test ! -d ./server/mcp/tools/users && test ! -d ./server/mcp/tools/meta
 
 RUN pnpm build
 
