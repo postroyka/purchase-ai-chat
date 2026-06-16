@@ -81,6 +81,17 @@ final class ProcureContractTest extends TestCase
 		$this->assertSame('ABC', $res['number']);
 	}
 
+	public function testNumberMatchIgnoresParentheticalSuffix(): void
+	{
+		// В Б24 к номеру дописывают аннотацию «(основной)», в документе номер чистый →
+		// должны совпасть. Возвращаем номер как в Б24 (с припиской).
+		DogovorEntity::$rows = [$this->row(10, '789-22/24 (основной)', '04.03.2024')];
+		$c = new ProcureContract();
+		$res = $c->findAction(5, '789-22/24');
+		$this->assertSame(10, $res['id']);
+		$this->assertSame('789-22/24 (основной)', $res['number']);
+	}
+
 	public function testDateNarrowsToCorrectContract(): void
 	{
 		DogovorEntity::$rows = [

@@ -121,7 +121,7 @@ class ProcureContract
 			'select' => ['ID', $numProp, $dateProp],
 		]);
 
-		$wantNumber = $number !== '' ? Config::foldHomoglyphs($number) : '';
+		$wantNumber = $number !== '' ? self::matchableNumber($number) : '';
 		$wantDate   = trim($date);
 
 		foreach($rows as $row)
@@ -129,7 +129,7 @@ class ProcureContract
 			$rowNumber = (string)($row[$numProp.'_VALUE'] ?? '');
 			$rowDate   = (string)($row[$dateProp.'_VALUE'] ?? '');
 
-			if($wantNumber !== '' && Config::foldHomoglyphs($rowNumber) !== $wantNumber)
+			if($wantNumber !== '' && self::matchableNumber($rowNumber) !== $wantNumber)
 			{
 				continue;
 			}
@@ -147,5 +147,18 @@ class ProcureContract
 		}
 
 		return ['id' => null];
+	}
+
+	/**
+	 * Приводит номер договора к сопоставимому виду перед сравнением:
+	 *  - срезает хвостовую аннотацию в скобках — в Б24 к номеру часто дописывают «(основной)»,
+	 *    «(доп.)» и т.п., тогда как в документе номер чистый («789-22/24»);
+	 *  - убирает крайние пробелы;
+	 *  - сворачивает гомоглифы (латиница/кириллица).
+	 */
+	private static function matchableNumber(string $n): string
+	{
+		$stripped = preg_replace('/\s*(?:\([^)]*\)\s*)+$/u', '', $n);
+		return Config::foldHomoglyphs(trim($stripped ?? $n));
 	}
 }
