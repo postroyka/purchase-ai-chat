@@ -145,6 +145,8 @@
 }
 ```
 
+> **`productId: null`** в `items[]` означает «у позиции НЕТ артикула» (свободная строка). Позиции, у которых артикул ЕСТЬ, но он НЕ найден в каталоге, в `items[]` **не включаются** (см. Шаг 4) — они идут только в `processingLog`.
+
 В случае ошибки верни:
 
 ```json
@@ -201,4 +203,4 @@
 
 ---
 
-*Last reviewed: 2026-06-14 (issue #97 — шаг 1.5: отсев РФ-поставщика по реквизитам ИНН(10/12)/КПП → `foreign_supplier`, антипаттерны «руб.»/«(Россия)»; issue #102/#90 — согласование валидации MCP↔PHP: warnings `document_date_unparsed`/`timeline_comment_failed` в шаге 5; issue #98 — пример системной ошибки без устаревшего «not implemented»; PR #86 — корректность пайплайна (issue #58): E2BIG-фикс (промпт через stdin); явная формула НДС (`/1.2`, не `×0.8`); направление округления количества; `missing_responsible`; уточнение «цена без НДС» ↔ правило 2; таблица error-кодов; схема create_deal — `contractId` обязателен, `quantity` целое; PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров; PR #71 — create_deal принимает `filePath` + `processingLog`, warnings[] обработка; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*
+*Last reviewed: 2026-06-16 (PR #144/#146 — приоритет причин отказа `foreign_supplier` > `unsupported_currency` (шаг 1.5/правило 1); Шаг 4 — товар с артикулом, не найденным в каталоге, исключается из сделки и пишется в `processingLog`; issue #97 — шаг 1.5: отсев РФ-поставщика по реквизитам ИНН(10/12)/КПП → `foreign_supplier`, антипаттерны «руб.»/«(Россия)»; issue #102/#90 — согласование валидации MCP↔PHP: warnings `document_date_unparsed`/`timeline_comment_failed` в шаге 5; issue #98 — пример системной ошибки без устаревшего «not implemented»; PR #86 — корректность пайплайна (issue #58): E2BIG-фикс (промпт через stdin); явная формула НДС (`/1.2`, не `×0.8`); направление округления количества; `missing_responsible`; уточнение «цена без НДС» ↔ правило 2; таблица error-кодов; схема create_deal — `contractId` обязателен, `quantity` целое; PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров; PR #71 — create_deal принимает `filePath` + `processingLog`, warnings[] обработка; find_product только по `vendorCode`; MCP читает файл из uploads-тома. PR #53 — `DOCUMENT_TEXT`; PR #47/#48 — защита от prompt-injection)*
