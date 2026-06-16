@@ -402,4 +402,36 @@ final class ProcureDealTest extends TestCase
 
 		$this->assertSame('Импорт прайса от поставщик #5', \CCrmDeal::$lastAddFields['TITLE']);
 	}
+
+	/**
+	 * Заголовок ограничен 255 символами (TITLE сделки — varchar(255)): очень длинное
+	 * название компании обрезается, иначе БД усечёт молча / уронит вставку в strict-режиме.
+	 */
+	public function testLongSupplierNameTruncatesTitleTo255(): void
+	{
+		\CCrmCompany::$resultQueue[] = [['ID' => 1, 'TITLE' => str_repeat('Я', 300)]];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'invoice.pdf', '', 'log', $this->items());
+
+		$title = \CCrmDeal::$lastAddFields['TITLE'];
+		$this->assertSame(255, mb_strlen($title, 'UTF-8'));
+		$this->assertStringStartsWith('Импорт прайса от ', $title);
+	}
+
+	/**
+	 * Артикул-строка «0» — это валидный непустой артикул: несопоставленная позиция с ним
+	 * исключается (guard через !== '' не путает «0» с «нет артикула» — ловушка empty('0')).
+	 */
+	public function testZeroStringVendorCodeUnmatchedIsExcluded(): void
+	{
+		\CCrmDeal::$addReturn = 703;
+		$items = [
+			['name' => 'Ноль-артикул', 'priceExclVat' => 10.0, 'quantity' => 1, 'vendorCode' => '0', 'productId' => null],
+		];
+		$c = new ProcureDeal();
+		$res = $c->createAction(1, 2, 'f.pdf', '', 'log', $items);
+
+		$this->assertNull(\CCrmDeal::$lastProductRows);          // позиция отброшена
+		$this->assertContains('no_items_matched', $res['warnings']);
+	}
 }

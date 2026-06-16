@@ -187,11 +187,10 @@ b24 "shef:purchase.api.procuredeal.create" \
   '{"supplierId":0,"responsibleUserId":1,"fileName":"x.pdf","fileContent":"dGVzdA==","processingLog":"","items":[{"name":"x","priceExclVat":1,"quantity":1}]}' \
   || echo "(ожидается ошибка)"
 
-echo_sep "4d. create deal — пустой items[] (ожидаем error deal:020)"
+echo_sep "4d. create deal — пустой items[] (ожидаем сделку + warning no_items_matched, #150)"
 b24 "shef:purchase.api.procuredeal.create" \
-  "{\"supplierId\":${SUPPLIER_ID},\"responsibleUserId\":${RESPONSIBLE_USER_ID},\"fileName\":\"x.pdf\",\"fileContent\":\"dGVzdA==\",\"processingLog\":\"\",\"items\":[]}" \
-  || echo "(ожидается ошибка)"
+  "{\"supplierId\":${SUPPLIER_ID},\"responsibleUserId\":${RESPONSIBLE_USER_ID},\"fileName\":\"x.pdf\",\"fileContent\":\"dGVzdA==\",\"processingLog\":\"\",\"items\":[]}"
 
 echo ""
 echo "✅ Smoke-тест завершён."
-echo "⚠️  Проверьте CRM Bitrix24 — удалите тестовые сделки из тестов 4a и 4b вручную."
+echo "⚠️  Проверьте CRM Bitrix24 — удалите тестовые сделки из тестов 4a, 4b и 4d вручную."
