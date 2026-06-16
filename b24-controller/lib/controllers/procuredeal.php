@@ -14,7 +14,9 @@ use Shef\Purchase\Config;
  *   CATEGORY_ID = 1 («Закупки»)
  *   STAGE_ID    = C1:NEW
  *   CURRENCY_ID = BYN
+ *   TITLE       = «Импорт прайса от <название компании-поставщика>»
  *   Каждая позиция: TAX_RATE=20, TAX_INCLUDED=Y, единица=шт, цена = priceExclVat
+ *   Позиция с артикулом, не сопоставленным с каталогом, в сделку не кладётся.
  *   Сделка создаётся всегда (дублей не проверяем).
  *   fileContent (base64) → UF_CRM_DEAL_SH_PRCHS_AI_FILE + таймлайн-комментарий.
  *   processingLog → COMMENTS сделки + CommentEntry в таймлайне.
@@ -124,12 +126,39 @@ class ProcureDeal
 	}
 
 	/**
+	 * Название компании-поставщика для заголовка сделки («Импорт прайса от <название>»).
+	 * Тянем TITLE из CRM по ID одним точечным запросом; пусто/не найдено → фолбэк
+	 * «поставщик #N». Имя файла в заголовок больше не идёт (только во вложение).
+	 *
+	 * @param int $supplierId ID компании-поставщика (COMPANY_ID сделки)
+	 * @return string Название компании либо «поставщик #N»
+	 */
+	protected static function fetchSupplierName(int $supplierId): string
+	{
+		$res = \CCrmCompany::GetListEx(
+			[],
+			['=ID' => $supplierId, 'CHECK_PERMISSIONS' => 'N'],
+			false,
+			false,
+			['ID', 'TITLE']
+		);
+		$row   = is_object($res) ? $res->Fetch() : false;
+		$title = is_array($row) ? trim((string)($row['TITLE'] ?? '')) : '';
+
+		return $title !== '' ? $title : 'поставщик #'.$supplierId;
+	}
+
+	/**
 	 * @param int    $supplierId        ID компании-поставщика
 	 * @param int    $responsibleUserId ID ответственного (b_user)
 	 * @param string $fileName          Оригинальное имя файла
 	 * @param string $fileContent       Содержимое файла в base64
 	 * @param string $processingLog     Лог обработки (пишется в COMMENTS и таймлайн)
-	 * @param array  $items             Позиции: [{ productId?, vendorCode?, name, priceExclVat, quantity }]
+	 * @param array  $items             Позиции: [{ productId?, vendorCode?, name, priceExclVat, quantity }].
+	 *                                  Позиция с артикулом (vendorCode), но без сопоставленного
+	 *                                  товара (productId пуст) в сделку НЕ кладётся — «не найдено»
+	 *                                  (см. prompts/main.md, Шаг 4). Позиция без артикула остаётся
+	 *                                  свободной строкой (PRODUCT_ID=0).
 	 * @param int    $contractId        ID договора (0 = не найден) → UF_CRM_DEAL_DOGOVOR
 	 * @param string $documentDate      Дата документа (счёта) в формате d.m.Y →
 	 *                                   BEGINDATE на 09:00. Пусто → текущие дата-время.
@@ -195,7 +224,9 @@ class ProcureDeal
 		$measureCode = Config::getUnitOkeiSht();
 
 		// --- 1) Создать сделку ---
-		$titleBase = $fileName !== '' ? pathinfo($fileName, PATHINFO_FILENAME) : 'поставщик #'.$supplierId;
+		// Заголовок — «Импорт прайса от <поставщик>». Имя поставщика берём из CRM по
+		// COMPANY_ID; имя файла остаётся только для вложения (в заголовок не идёт).
+		$supplierName = static::fetchSupplierName($supplierId);
 		// BEGINDATE («Дата начала») — обязательное поле воронки «Закупки».
 		// Если передана дата документа (счёта) — ставим её на 09:00 (считаем, что
 		// документ оформлен утром); иначе — текущие дата-время.
@@ -224,8 +255,12 @@ class ProcureDeal
 			$beginTs = time();
 		}
 
+		// TITLE сделки — varchar(255) в Б24: длинное название компании обрезаем, иначе БД
+		// усечёт молча (или уронит вставку в strict-режиме → сделка не создастся).
+		$title = mb_substr('Импорт прайса от '.$supplierName, 0, 255, 'UTF-8');
+
 		$dealFields = [
-			'TITLE'          => 'Закупка: '.$titleBase,
+			'TITLE'          => $title,
 			'COMPANY_ID'     => $supplierId,
 			'ASSIGNED_BY_ID' => $responsibleUserId,
 			'CATEGORY_ID'    => $categoryId,
@@ -264,6 +299,18 @@ class ProcureDeal
 		$productRows = [];
 		foreach($items as $item)
 		{
+			// Серверная страховка от «не найдено в каталоге»: если у позиции задан непустой
+			// артикул поставщика (vendorCode, в т.ч. строка «0»), но товар по нему не
+			// сопоставлен (productId пуст/0) — в сделку её НЕ кладём (см. prompts/main.md,
+			// Шаг 4). Это дублирует правило промпта на уровне контроллера, т.к. модель не
+			// всегда исключает такие позиции сама. Позиции БЕЗ артикула (свободная строка)
+			// остаются как есть. vendorCode сверяем через !== '' (а не empty), чтобы артикул
+			// «0» не спутать с отсутствием артикула — ловушка empty('0') === true.
+			if(($item['vendorCode'] ?? '') !== '' && empty($item['productId']))
+			{
+				continue;
+			}
+
 			// Серверная страховка (Zod на стороне MCP уже это проверяет, но прямой
 			// REST-вызов мог бы обойти):
 			// - цена неотрицательная, КОНЕЧНАЯ и округлена до 2 знаков (#101) — иначе

@@ -58,14 +58,18 @@ REST-контроллеры для procure-ai, размещаемые внутр
 | `prd:010` | findByVendorCode | пустой артикул |
 | `prd:011` | findByVendorCode | артикул длиннее 64 символов |
 | `deal:010` | deal.create | `supplierId`/`responsibleUserId` < 1 |
-| `deal:020` | deal.create | пустой `items[]` |
 | `deal:021` | deal.create | позиций больше `MAX_ITEMS` |
 | `deal:022` | deal.create | `fileContent` больше лимита (~34 МБ base64) |
 | `deal:030` | deal.create | `CCrmDeal::Add` не создал сделку |
 
 После создания сделки `deal.create` может вернуть `warnings[]` (некритичные сбои —
-сделка уже создана): `product_rows_failed`, `file_attach_failed`,
+сделка уже создана): `no_items_matched`, `product_rows_failed`, `file_attach_failed`,
 `invalid_base64_file`, `document_date_unparsed`, `timeline_comment_failed`.
+
+> Пустой `items[]` — **не** ошибка: сделка создаётся без позиций (+ `no_items_matched`).
+> Позиция с артикулом поставщика, не найденным в каталоге, в сделку **не** кладётся
+> (см. Шаг 4 промпта); позиция без артикула остаётся свободной строкой. Заголовок
+> сделки — «Импорт прайса от &lt;название компании-поставщика&gt;».
 
 ## Самонастройка схемы (`procureinstall.ensureSchema`)
 
