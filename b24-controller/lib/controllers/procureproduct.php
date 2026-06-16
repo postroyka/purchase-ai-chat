@@ -36,13 +36,10 @@ class ProcureProduct
 	 * Ищет активный родительский товар по артикулу поставщика.
 	 * Родительский = пустое свойство PURCHASE_69_PARENT_PRODUCT.
 	 *
-	 * Алгоритм (приоритет скорости):
-	 *   1) быстрый путь — точное совпадение 1-в-1 по артикулу как есть (один
-	 *      точечный =PROPERTY-запрос; на чистых данных этого достаточно);
-	 *   2) фолбэк «по всякому», только если шаг 1 пуст — устойчивость к раскладке
-	 *      латиница/кириллица (гомоглифы, напр. «тех 100х25х6000») и к краевым
-	 *      пробелам/табам в данных каталога.
-	 * Несколько найдено → товар с минимальным ID.
+	 * Поиск — строго по ТОЧНОМУ совпадению артикула как есть (один точечный
+	 * =PROPERTY-запрос). Подмена раскладки/гомоглифов и LIKE-фолбэк убраны намеренно:
+	 * «выбрал → поискал → записал, что не найдено». Несколько найдено → товар с
+	 * минимальным ID.
 	 *
 	 * @param string $vendorCode Артикул поставщика из документа
 	 * @return array|null { id, name, vendorCode } | { id: null }
@@ -94,55 +91,9 @@ class ProcureProduct
 			return self::formatProduct($row);
 		}
 
-		// --- Шаг 2. «По всякому» (только если точный 1-в-1 не нашёл) ---
-		// Артикул мог быть набран в другой раскладке (латиница/кириллица — гомоглифы,
-		// напр. «тех 100х25х6000») или содержать краевые пробелы/табы из выгрузок
-		// 1С/Excel («…6000\t»). Каталог большой — фолд в SQL невозможен, поэтому
-		// генерируем гомоглиф-варианты.
-		$variants = Config::homoglyphVariants($vendorCode);
-
-		// 2a) Точный IN по вариантам — гасит разницу раскладки на чистых данных.
-		if(count($variants) > 1)
-		{
-			$byVariants = \CIBlockElement::GetList(
-				['ID' => 'ASC'],
-				['=PROPERTY_PURCHASE_ARTICLE' => $variants] + $base,
-				false,
-				['nTopCount' => 1],
-				['ID', 'NAME', 'PROPERTY_PURCHASE_ARTICLE']
-			);
-			if(is_object($byVariants) && ($row = $byVariants->Fetch()))
-			{
-				return self::formatProduct($row);
-			}
-		}
-
-		// 2b) LIKE-подстрока по каждому варианту + сверка foldHomoglyphs() (гасит
-		// регистр, раскладку и краевые пробелы) — добивает «грязные» данные. Путь
-		// редкий и самый дорогой, поэтому последний.
-		$needleFold = Config::foldHomoglyphs($vendorCode);
-		foreach($variants as $variant)
-		{
-			$like = \CIBlockElement::GetList(
-				['ID' => 'ASC'],              // мин. ID при дублях
-				['%PROPERTY_PURCHASE_ARTICLE' => $variant] + $base, // LIKE %variant%
-				false,
-				['nTopCount' => 50],
-				['ID', 'NAME', 'PROPERTY_PURCHASE_ARTICLE']
-			);
-			if(!is_object($like))
-			{
-				continue;
-			}
-			while($row = $like->Fetch())
-			{
-				if(Config::foldHomoglyphs((string)$row['PROPERTY_PURCHASE_ARTICLE_VALUE']) === $needleFold)
-				{
-					return self::formatProduct($row);
-				}
-			}
-		}
-
+		// Точного совпадения нет → товар не найден. Подмену раскладки/гомоглифов и
+		// LIKE-фолбэк убрали намеренно: артикул сверяется строго «как есть». Несопоставленную
+		// позицию агент в сделку не кладёт, а пишет в лог (см. prompts/main.md, Шаг 4).
 		return ['id' => null];
 	}
 
