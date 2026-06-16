@@ -603,9 +603,10 @@ describe('buildMcpConfig', () => {
     });
   });
 
-  it('omits headers when token is empty string', () => {
+  it('omits headers when token is empty string (but still declares http type)', () => {
     const cfg = buildMcpConfig('http://mcp:3000/mcp', '');
     expect(cfg.mcpServers['procure-ai'].headers).toBeUndefined();
+    expect(cfg.mcpServers['procure-ai'].type).toBe('http'); // type не зависит от наличия токена
   });
 
   it('omits headers when token is null', () => {
