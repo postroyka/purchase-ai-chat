@@ -134,7 +134,7 @@ class ProcureDeal
 	 * @param string $documentDate      Дата документа (счёта) в формате d.m.Y →
 	 *                                   BEGINDATE на 09:00. Пусто → текущие дата-время.
 	 * @return array|null { dealId, warnings?: string[] } | null при ошибке создания.
-	 *   Возможные warnings: product_rows_failed | file_attach_failed |
+	 *   Возможные warnings: no_items_matched | product_rows_failed | file_attach_failed |
 	 *   invalid_base64_file | document_date_unparsed | timeline_comment_failed.
 	 */
 	public function createAction(
@@ -161,12 +161,10 @@ class ProcureDeal
 			return null;
 		}
 
-		if(empty($items))
-		{
-			$this->addError(new Error('items is empty', 'deal:020'));
-			return null;
-		}
-
+		// Пустой items[] больше НЕ ошибка: если все позиции имели артикул, но ни одна не
+		// сопоставлена с каталогом (см. prompts/main.md, Шаг 4), сделку всё равно создаём
+		// (поставщик/договор валидны), позиции — в processingLog, + warning no_items_matched.
+		// Прежний гард deal:020 снят осознанно (согласовано).
 		if(count($items) > static::MAX_ITEMS)
 		{
 			$this->addError(new Error('too many items (max '.static::MAX_ITEMS.')', 'deal:021'));
@@ -296,7 +294,13 @@ class ProcureDeal
 				'MEASURE_NAME' => 'шт',
 			];
 		}
-		if(!\CCrmDeal::SaveProductRows($dealId, $productRows))
+		if(empty($productRows))
+		{
+			// Ни одна позиция не сопоставлена с каталогом: сделку создали, позиций нет.
+			// SaveProductRows с пустым массивом не зовём — просто сигналим оператору.
+			$warnings[] = 'no_items_matched';
+		}
+		elseif(!\CCrmDeal::SaveProductRows($dealId, $productRows))
 		{
 			// Сделка уже создана; позиции не сохранились — сигналим в warnings, но
 			// сделку не откатываем (агент увидит и сможет дозаполнить вручную).
