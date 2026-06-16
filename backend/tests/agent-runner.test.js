@@ -622,6 +622,13 @@ describe('buildMcpConfig', () => {
     const cfg = buildMcpConfig('http://custom-mcp:9000/mcp', '');
     expect(cfg.mcpServers['procure-ai'].url).toBe('http://custom-mcp:9000/mcp');
   });
+
+  // Without an explicit transport type Claude Code silently skips the server, so the agent
+  // loads no tools and every call fails with "No such tool available". Guard against regression.
+  it('declares the http transport type (required by Claude Code)', () => {
+    const cfg = buildMcpConfig('http://mcp:3000/mcp', 'secret-token');
+    expect(cfg.mcpServers['procure-ai'].type).toBe('http');
+  });
 });
 
 describe('extractJson', () => {
