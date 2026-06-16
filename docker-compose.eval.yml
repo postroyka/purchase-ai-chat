@@ -19,6 +19,10 @@ services:
     environment:
       # ГЛАВНОЕ: подменяем боевой вебхук тестовым. Падаем с понятной ошибкой, если не задан.
       NUXT_BITRIX24_WEBHOOK_URL: ${NUXT_BITRIX24_TEST_WEBHOOK_URL:?Set NUXT_BITRIX24_TEST_WEBHOOK_URL (вебхук ТЕСТ-портала Bitrix24) in .env.prod}
+      # create_deal читает файл-счёт из NUXT_UPLOADS_DIR, чтобы приложить его к сделке. В eval
+      # счета смонтированы в /work/samples (volumes ниже), а НЕ в боевой /app/uploads из
+      # .env.prod — иначе realpath('/app/uploads') падает ENOENT. Указываем явно.
+      NUXT_UPLOADS_DIR: /work/samples
     cap_drop:
       - ALL
     security_opt:
