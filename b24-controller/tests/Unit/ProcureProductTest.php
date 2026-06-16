@@ -51,49 +51,20 @@ final class ProcureProductTest extends TestCase
 		$this->assertSame('SKU', $exactFilter['=PROPERTY_PURCHASE_ARTICLE']);
 	}
 
-	public function testHomoglyphVariantFoundViaExactInStep2a(): void
+	public function testOnlyExactLookupNoFallback(): void
 	{
-		// Артикул в БД латиницей «ABC», в документе кириллицей «АВС»: точный шаг 1
-		// мимо, а шаг 2a (=PROPERTY IN [варианты]) должен найти по двойнику.
-		\CIBlockElement::$resultQueue = [
-			[],                                                                       // шаг 1 (точный) — мимо
-			[['ID' => 7, 'NAME' => 'Уголок', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'ABC']], // шаг 2a — попадание
-		];
-
+		// Шаг 2 (подмена раскладки/гомоглифы + LIKE) убран: при промахе делается РОВНО
+		// один точечный =PROPERTY-запрос и сразу id:null. Латиница в БД vs кириллица в
+		// документе теперь НЕ совпадают — так и задумано («выбрал-поискал-записал»).
 		$c = new ProcureProduct();
-		$res = $c->findByVendorCodeAction('АВС'); // кириллица
-
-		$this->assertSame(7, $res['id']);
-		$this->assertSame('ABC', $res['vendorCode']);
-		// Шаг 2a ищет IN по списку гомоглиф-вариантов, среди которых есть латинский «ABC».
-		$inFilter = \CIBlockElement::$calls[1]['filter']['=PROPERTY_PURCHASE_ARTICLE'];
-		$this->assertIsArray($inFilter);
-		$this->assertContains('ABC', $inFilter);
-	}
-
-	public function testDirtyCatalogValueFoundViaLikeStep2b(): void
-	{
-		// Значение в каталоге с краевыми пробелами « SKU »: точный (шаг 1) и IN
-		// по вариантам (шаг 2a) мимо, добивает LIKE+foldHomoglyphs (шаг 2b).
-		\CIBlockElement::$resultQueue = [
-			[],                                                                          // шаг 1 — мимо
-			[],                                                                          // шаг 2a — мимо
-			[['ID' => 9, 'NAME' => 'Болт', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => ' SKU ']], // шаг 2b (LIKE) — попадание
-		];
-
-		$c = new ProcureProduct();
-		$res = $c->findByVendorCodeAction('SKU');
-
-		$this->assertSame(9, $res['id']);
-		// Найдено именно через LIKE-ветку: запрос вёлся по подстроке (%PROPERTY...).
-		$likeFilter = \CIBlockElement::$calls[2]['filter'];
-		$this->assertArrayHasKey('%PROPERTY_PURCHASE_ARTICLE', $likeFilter);
+		$this->assertSame(['id' => null], $c->findByVendorCodeAction('АВС'));
+		$this->assertCount(1, \CIBlockElement::$calls); // ровно один запрос, без фолбэков
+		$this->assertArrayHasKey('=PROPERTY_PURCHASE_ARTICLE', \CIBlockElement::$calls[0]['filter']);
 	}
 
 	public function testProductNotFoundReturnsIdNull(): void
 	{
-		// Артикул из цифр → гомоглиф-вариантов нет, только точный + LIKE-фолбэк,
-		// все курсоры пустые → id: null.
+		// Только точное совпадение; курсор пуст → id: null.
 		$c = new ProcureProduct();
 		$this->assertSame(['id' => null], $c->findByVendorCodeAction('999999'));
 	}

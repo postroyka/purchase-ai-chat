@@ -14,7 +14,8 @@ use Shef\Purchase\Config;
  * Инфоблок-список IBLOCK_ID=32 (Shef\IBlock\Lists\Dogovor\Entity).
  * Фильтр: CLIENT=CO_<supplierId>, ACTIVE=Y, STATUS != TO_DELETE,
  *         TYPE in {PURCHASE, PURCHASE_ZAK}. Опц. сужение по NUMBER и DATE
- *         сверяется в PHP: номер — устойчиво к латинице/кириллице (гомоглифы),
+ *         сверяется в PHP: номер — устойчиво к латинице/кириллице (гомоглифы) и к хвостовой
+ *         «(основной)»-приписке через пробел,
  *         дата — по отображаемому d.m.Y.
  * При нескольких совпадениях возвращается запись с минимальным ID.
  */
@@ -45,8 +46,9 @@ class ProcureContract
 	 * Ищет договор закупки по компании-поставщику.
 	 *
 	 * @param int    $supplierId ID компании (CLIENT = CO_<id>)
-	 * @param string $number     Номер договора из документа (опц.); совпадение
-	 *                           устойчиво к латинице/кириллице (напр. 243Э20)
+	 * @param string $number     Номер договора из документа (опц.); совпадение устойчиво к
+	 *                           латинице/кириллице (напр. 243Э20) и к хвостовой аннотации
+	 *                           в скобках через пробел («789-22/24 (основной)»)
 	 * @param string $date       Дата договора из документа, формат d.m.Y (опциональный)
 	 * @return array|null { id, number, date } | { id: null } при не найдено
 	 */
@@ -121,7 +123,7 @@ class ProcureContract
 			'select' => ['ID', $numProp, $dateProp],
 		]);
 
-		$wantNumber = $number !== '' ? Config::foldHomoglyphs($number) : '';
+		$wantNumber = $number !== '' ? self::matchableNumber($number) : '';
 		$wantDate   = trim($date);
 
 		foreach($rows as $row)
@@ -129,7 +131,7 @@ class ProcureContract
 			$rowNumber = (string)($row[$numProp.'_VALUE'] ?? '');
 			$rowDate   = (string)($row[$dateProp.'_VALUE'] ?? '');
 
-			if($wantNumber !== '' && Config::foldHomoglyphs($rowNumber) !== $wantNumber)
+			if($wantNumber !== '' && self::matchableNumber($rowNumber) !== $wantNumber)
 			{
 				continue;
 			}
@@ -147,5 +149,20 @@ class ProcureContract
 		}
 
 		return ['id' => null];
+	}
+
+	/**
+	 * Приводит номер договора к сопоставимому виду перед сравнением:
+	 *  - срезает хвостовую аннотацию в скобках, ОТДЕЛЁННУЮ ПРОБЕЛОМ — в Б24 к номеру часто
+	 *    дописывают « (основной)», « (доп.)» и т.п., тогда как в документе номер чистый
+	 *    («789-22/24»). Требование пробела (\s+) защищает легитимный суффикс без пробела
+	 *    (напр. «ТМ-100(А)») от случайного среза; скобку в теле номера не трогаем ($-якорь);
+	 *  - убирает крайние пробелы;
+	 *  - сворачивает гомоглифы (латиница/кириллица).
+	 */
+	private static function matchableNumber(string $n): string
+	{
+		$stripped = preg_replace('/\s+(?:\([^)]*\)\s*)+$/u', '', $n);
+		return Config::foldHomoglyphs(trim($stripped ?? $n));
 	}
 }

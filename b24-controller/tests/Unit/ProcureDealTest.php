@@ -213,13 +213,32 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame('passwd.bin', \CRestUtil::$lastArg[0]);
 	}
 
-	/** #103: легитимное имя (вкл. кириллицу) проходит без искажений. */
-	public function testLegitFileNamePreserved(): void
+	/** Кириллица в имени транслитерируется в латиницу: Б24 (CFile) выкидывает не-ASCII из
+	 *  имени вложения, поэтому приводим к осмысленному ASCII заранее («Профтейп» → «Profteyp»). */
+	public function testCyrillicFileNameTransliterated(): void
 	{
 		\CRestUtil::$saveFileReturn = ['ID' => 6, 'name' => 'x'];
 		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'Профтейп-byn.pdf', base64_encode('data'), 'log', $this->items());
+		$this->assertSame('Profteyp-byn.pdf', \CRestUtil::$lastArg[0]);
+	}
+
+	/** Транслит смешанного имени: кириллица → латиница, не-ASCII («№») срезается, цифры/пробел целы. */
+	public function testMixedCyrillicLatinFileNameTransliterated(): void
+	{
+		\CRestUtil::$saveFileReturn = ['ID' => 61, 'name' => 'x'];
+		$c = new ProcureDeal();
 		$c->createAction(1, 2, 'Счёт №5.pdf', base64_encode('data'), 'log', $this->items());
-		$this->assertSame('Счёт №5.pdf', \CRestUtil::$lastArg[0]);
+		$this->assertSame('Schet 5.pdf', \CRestUtil::$lastArg[0]);
+	}
+
+	/** Имя только из непереводимых символов (Ъ/Ь) → base схлопывается в пустоту → fallback «document». */
+	public function testFileNameCollapsingToEmptyFallsBackToDocument(): void
+	{
+		\CRestUtil::$saveFileReturn = ['ID' => 62, 'name' => 'x'];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'ъъь.pdf', base64_encode('data'), 'log', $this->items());
+		$this->assertSame('document.pdf', \CRestUtil::$lastArg[0]);
 	}
 
 	/** #103: двойное расширение — итоговое (последнее) решает; .php → .bin. */
