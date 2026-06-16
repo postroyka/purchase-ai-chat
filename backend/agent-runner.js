@@ -237,12 +237,18 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
 /**
  * Build the MCP server config object written to the `--mcp-config` temp file.
  *
- * @param {string} mcpUrl - HTTP(S) URL of the MCP server endpoint
+ * `type: 'http'` is REQUIRED. Claude Code only connects to a remote MCP server when its
+ * entry declares an explicit transport type; a bare `{ url }` is silently skipped, so the
+ * agent starts with ZERO MCP tools and every call fails with "No such tool available". That
+ * looks like the tool is missing on the server, but in fact the server was never connected.
+ * `http` = Streamable HTTP transport (what the bx24 MCP server speaks at `/mcp`).
+ *
+ * @param {string} mcpUrl - HTTP(S) URL of the MCP server endpoint (Streamable HTTP)
  * @param {string|null|undefined} mcpToken - Bearer token; omitted when falsy
- * @returns {{ mcpServers: { 'procure-ai': { url: string, headers?: object } } }}
+ * @returns {{ mcpServers: { 'procure-ai': { type: 'http', url: string, headers?: object } } }}
  */
 export function buildMcpConfig(mcpUrl, mcpToken) {
-  const server = { url: mcpUrl };
+  const server = { type: 'http', url: mcpUrl };
   if (mcpToken) {
     server.headers = { Authorization: `Bearer ${mcpToken}` };
   }
