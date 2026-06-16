@@ -318,4 +318,88 @@ final class ProcureDealTest extends TestCase
 
 		$this->assertArrayNotHasKey('warnings', $res);
 	}
+
+	/**
+	 * Позиция с артикулом поставщика, но без сопоставленного товара (productId пуст), —
+	 * «не найдено в каталоге» — в сделку НЕ кладётся (см. prompts/main.md, Шаг 4).
+	 * Сопоставленная позиция (productId>0) остаётся.
+	 */
+	public function testUnmatchedArticleItemExcludedFromDeal(): void
+	{
+		\CCrmDeal::$addReturn = 700;
+		$items = [
+			['name' => 'Найден',    'priceExclVat' => 10.0, 'quantity' => 1, 'vendorCode' => 'A1', 'productId' => '7'],
+			['name' => 'Не найден', 'priceExclVat' => 20.0, 'quantity' => 1, 'vendorCode' => 'A2', 'productId' => null],
+		];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
+
+		$rows = \CCrmDeal::$lastProductRows;
+		$this->assertCount(1, $rows);                  // только сопоставленная позиция
+		$this->assertSame(7, $rows[0]['PRODUCT_ID']);
+		$this->assertSame('Найден', $rows[0]['PRODUCT_NAME']);
+	}
+
+	/**
+	 * Позиция БЕЗ артикула поставщика (свободная строка) остаётся в сделке как товарная
+	 * строка без привязки к каталогу (PRODUCT_ID=0) — фильтр «не найдено» её не трогает.
+	 */
+	public function testItemWithoutArticleKeptAsFreeLine(): void
+	{
+		\CCrmDeal::$addReturn = 701;
+		$items = [
+			['name' => 'Свободная строка', 'priceExclVat' => 50.0, 'quantity' => 3],
+		];
+		$c = new ProcureDeal();
+		$res = $c->createAction(1, 2, 'f.pdf', '', 'log', $items);
+
+		$rows = \CCrmDeal::$lastProductRows;
+		$this->assertCount(1, $rows);
+		$this->assertSame(0, $rows[0]['PRODUCT_ID']);
+		$this->assertSame('Свободная строка', $rows[0]['PRODUCT_NAME']);
+		$this->assertArrayNotHasKey('warnings', $res); // строка сохранена → не no_items_matched
+	}
+
+	/**
+	 * Все позиции имеют артикул, но ни одна не сопоставлена → ни одной товарной строки,
+	 * SaveProductRows не зовём, сделка всё равно создаётся + warning no_items_matched.
+	 */
+	public function testAllItemsWithUnmatchedArticleYieldNoItemsWarning(): void
+	{
+		\CCrmDeal::$addReturn = 702;
+		$items = [
+			['name' => 'X', 'priceExclVat' => 10.0, 'quantity' => 1, 'vendorCode' => 'A1', 'productId' => null],
+			['name' => 'Y', 'priceExclVat' => 20.0, 'quantity' => 1, 'vendorCode' => 'A2', 'productId' => 0],
+		];
+		$c = new ProcureDeal();
+		$res = $c->createAction(1, 2, 'f.pdf', '', 'log', $items);
+
+		$this->assertSame(702, $res['dealId']);
+		$this->assertContains('no_items_matched', $res['warnings']);
+		$this->assertNull(\CCrmDeal::$lastProductRows); // SaveProductRows не вызывался
+	}
+
+	/**
+	 * Заголовок сделки — «Импорт прайса от <название компании>». Имя поставщика берётся из
+	 * CRM по COMPANY_ID (CCrmCompany::GetListEx); имя файла в заголовок больше не идёт.
+	 */
+	public function testTitleIsImportPriceFromSupplierName(): void
+	{
+		\CCrmCompany::$resultQueue[] = [['ID' => 1, 'TITLE' => 'ООО Ромашка']];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'invoice.pdf', '', 'log', $this->items());
+
+		$this->assertSame('Импорт прайса от ООО Ромашка', \CCrmDeal::$lastAddFields['TITLE']);
+		$this->assertSame(1, \CCrmCompany::$calls[0]['filter']['=ID']); // искали по ID поставщика
+	}
+
+	/** Компания не найдена/без названия → фолбэк «поставщик #N» в заголовке. */
+	public function testTitleFallsBackToSupplierIdWhenCompanyMissing(): void
+	{
+		\CCrmCompany::$resultQueue[] = []; // курсор без строк
+		$c = new ProcureDeal();
+		$c->createAction(5, 2, 'invoice.pdf', '', 'log', $this->items());
+
+		$this->assertSame('Импорт прайса от поставщик #5', \CCrmDeal::$lastAddFields['TITLE']);
+	}
 }
