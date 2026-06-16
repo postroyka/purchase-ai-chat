@@ -172,8 +172,8 @@ describe('b24_pst_crm_create_deal', () => {
     await expect((tool as any).handler({ ...baseInput, filePath: pdfPath })).rejects.toThrow()
   })
 
-  it('rejects empty items array via Zod schema', () => {
-    expect((tool as any).inputSchema.items.safeParse([]).success).toBe(false)
+  it('allows an empty items array (deal created без позиций + warning no_items_matched)', () => {
+    expect((tool as any).inputSchema.items.safeParse([]).success).toBe(true)
   })
 
   it('rejects negative priceExclVat via Zod schema', () => {

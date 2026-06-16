@@ -82,7 +82,7 @@ export default defineMcpTool({
       // any real procurement unit price; rounded to 2 decimals in the handler (#101).
       priceExclVat: z.number().positive().max(1_000_000_000).describe('Price per unit excluding VAT, as stated in document (rounded to 2 decimals at this boundary)'),
       quantity: z.number().int().positive().describe('Quantity from document (integer — unit is always шт)'),
-    })).min(1).describe('Line items. Unit is always шт regardless of document.'),
+    })).describe('Line items. Unit is always шт. Может быть пустым: если ни одна позиция не сопоставлена с каталогом (все артикулы не найдены), сделка создаётся без позиций с warning no_items_matched, а позиции уходят в processingLog.'),
   },
   handler: async ({ supplierId, contractId, responsibleUserId, filePath, documentDate, processingLog, items }) => {
     let fileContent: string

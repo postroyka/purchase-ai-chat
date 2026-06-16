@@ -42,11 +42,16 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame(['deal:010'], $c->errorCodes());
 	}
 
-	public function testEmptyItemsReturnDeal020(): void
+	public function testEmptyItemsCreatesDealWithNoItemsWarning(): void
 	{
+		// Пустой items[] больше НЕ ошибка (deal:020 снят): сделка создаётся, позиций нет →
+		// warning no_items_matched. Поставщик/договор валидны, оператор заведёт позиции вручную.
+		\CCrmDeal::$addReturn = 555;
 		$c = new ProcureDeal();
-		$this->assertNull($c->createAction(1, 1, 'f.pdf', '', 'log', []));
-		$this->assertSame(['deal:020'], $c->errorCodes());
+		$res = $c->createAction(1, 2, 'f.pdf', '', 'log', []);
+		$this->assertSame(555, $res['dealId']);
+		$this->assertContains('no_items_matched', $res['warnings']);
+		$this->assertNotContains('deal:020', $c->errorCodes());
 	}
 
 	public function testTooManyItemsReturnDeal021(): void
