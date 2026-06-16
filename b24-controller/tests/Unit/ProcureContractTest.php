@@ -92,6 +92,31 @@ final class ProcureContractTest extends TestCase
 		$this->assertSame('789-22/24 (основной)', $res['number']);
 	}
 
+	public function testNumberMatchStripsMultipleSpacedSuffixes(): void
+	{
+		// Несколько хвостовых скобок подряд (через пробел) — срезаются все.
+		DogovorEntity::$rows = [$this->row(11, '789-22/24 (доп.) (основной)', '01.01.2020')];
+		$c = new ProcureContract();
+		$this->assertSame(11, $c->findAction(5, '789-22/24')['id']);
+	}
+
+	public function testNumberMatchKeepsParenthesisInBody(): void
+	{
+		// Скобка В ТЕЛЕ номера (не на хвосте) НЕ срезается ($-якорь): «789-(22)/24».
+		DogovorEntity::$rows = [$this->row(12, '789-(22)/24', '01.01.2020')];
+		$c = new ProcureContract();
+		$this->assertSame(12, $c->findAction(5, '789-(22)/24')['id']);
+	}
+
+	public function testNumberSuffixWithoutSpaceNotStripped(): void
+	{
+		// Хвостовая скобка БЕЗ пробела — часть номера, а не аннотация: «ТМ-100(А)» НЕ
+		// срезается (\s+), поэтому чистый «ТМ-100» с ним НЕ совпадает (защита от ложного матча).
+		DogovorEntity::$rows = [$this->row(13, 'ТМ-100(А)', '01.01.2020')];
+		$c = new ProcureContract();
+		$this->assertSame(['id' => null], $c->findAction(5, 'ТМ-100'));
+	}
+
 	public function testDateNarrowsToCorrectContract(): void
 	{
 		DogovorEntity::$rows = [
