@@ -213,9 +213,16 @@ export function createApp(config = {}) {
   // XSS — TODO: nonce-based CSP (drop 'unsafe-inline') as a #105 follow-up; do not consider P2
   // fully closed by this. The lever that still bites here is `connect-src 'self'`: it blocks an
   // XSS payload from POSTing the (currently client-visible) backend token to an attacker origin.
-  // object-src/base-uri/frame-ancestors close clickjacking and base-tag injection.
+  // object-src/base-uri close base-tag injection. frame-ancestors allowlists who may iframe the
+  // app: our own origin + Bitrix24 portals (the app runs inside the portal's iframe as a local
+  // app). For a self-hosted Bitrix24 box set B24_FRAME_ANCESTORS to your portal origin(s),
+  // space-separated. X-Frame-Options is intentionally NOT sent — it only speaks SAMEORIGIN/DENY
+  // and would block the cross-origin Bitrix24 frame; modern browsers use CSP frame-ancestors as
+  // its replacement.
   // HSTS (#105): force HTTPS for 2y incl. subdomains (the TLS-terminating proxy must serve it).
   // NOTE: after deploy, smoke-check that the dashboard still renders under this CSP.
+  const frameAncestors = process.env.B24_FRAME_ANCESTORS
+    || 'https://*.bitrix24.ru https://*.bitrix24.com https://*.bitrix24.by';
   const csp = [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",
@@ -225,12 +232,11 @@ export function createApp(config = {}) {
     "connect-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
-    "frame-ancestors 'self'",
+    `frame-ancestors 'self' ${frameAncestors}`,
   ].join('; ');
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-DNS-Prefetch-Control', 'off');
     res.setHeader('Content-Security-Policy', csp);

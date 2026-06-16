@@ -1,6 +1,6 @@
 # b24-controller
 
-`Last reviewed: 2026-06-15`
+`Last reviewed: 2026-06-16`
 
 REST-контроллеры для procure-ai, размещаемые внутри **существующего** модуля
 `shef.purchase` коробки Bitrix24 (`b24.postroyka.by`).
@@ -89,8 +89,10 @@ REST-контроллеры для procure-ai, размещаемые внутр
 каталог-iBlock со свойствами `PURCHASE_ARTICLE` / `PURCHASE_69_PARENT_PRODUCT`, воронка
 «Закупки» (`CATEGORY_ID`/стадия), список договоров (`shef.iblock`), реквизит `RQ_INN`.
 
-Вызывается дашбордом при первом открытии приложения. Деплоится как обычный `procure*.php`
-(`make deploy-b24`).
+В процесс установки приложения метод **пока не подключён** — это самостоятельный примитив
+(страница установки `/install` его не вызывает, поля при установке не создаются; см.
+[`docs/BITRIX24_APP_SETUP.md`](../docs/BITRIX24_APP_SETUP.md)). Деплоится как обычный
+`procure*.php` (`make deploy-b24`).
 
 ## Структура (= путь на сервере)
 
