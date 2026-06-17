@@ -58,6 +58,16 @@ services:
     volumes:
       # Свежий код eval (baseline.js, score.js) поверх образа; node_modules образа не прячем.
       - ./backend/eval:/app/backend/eval:ro
+      # baseline.js дёргает runAgent из ../agent-runner.js, а тот читает промпт из
+      # ../prompts/main.md. Их тоже кладём поверх образа — иначе eval гоняет агента из
+      # СТАРОГО образа (релиз :latest гейтится тегом v*), и при отставании от main ловим
+      # «No such tool available»: в старой (до #144) версии agent-runner.js нет type:'http'
+      # в MCP-конфиге, и Claude CLI молча не подключает MCP-сервер. Оверлей делает прогон
+      # честным — тестируем текущий agent-runner.js и промпт, а не снимок релиза.
+      # NB: это только app-сторона; инструменты MCP живут в собранном .output mcp-образа —
+      # при их отставании mcp-образ нужно пересобрать (PUSH=0 make deploy-images).
+      - ./backend/agent-runner.js:/app/backend/agent-runner.js:ro
+      - ./prompts/main.md:/app/prompts/main.md:ro
       # Счета внутрь по тому же пути, что и у mcp-eval; сюда же пишутся черновики *.expected.json
       # (контейнер под appuser — папка на хосте должна быть доступна ему на запись).
       - ./scripts/samples:/work/samples
