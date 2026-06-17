@@ -1,15 +1,20 @@
 name: Deploy b24-controller
 
-# Авто-выкладка PHP-контроллеров shef.purchase на коробку Bitrix24 (ОДНА цель).
+# Выкладка PHP-контроллеров shef.purchase на коробку Bitrix24 (ОДНА цель) — СИНХРОННО
+# с прод-образами (.github/workflows/deploy.yml). Контроллеры не входят в Docker-образы
+# (едут по SSH/rsync), поэтому это отдельный workflow, но с тем же релизным триггером:
 #
-#   - push в main → после ЗЕЛЁНОГО CI, если менялись b24-controller/**, деплой
-#     автоматически;
-#   - workflow_dispatch → ручной запуск; можно включить dry_run (симуляция, без
-#     записи на сервер).
+#   - тег v* (релиз) → деплой контроллеров на коробку (APPLY=1). Тот же момент, когда
+#     deploy.yml двигает образы на :latest → прод-PHP и прод-образы идут вместе.
+#   - workflow_dispatch → ручной запуск; можно включить dry_run (симуляция, без записи).
 #
-# Цель задаётся через Repository secrets — это упрощённый вариант (одно окружение),
-# чтобы настроить без admin-доступа к Environments. Полноценное разделение на 2
-# окружения (staging + production по approval) — issue #112.
+# Авто-деплой на каждый push в main УБРАН намеренно: он рассинхронивал PHP (катился сразу)
+# с образами (:latest только по тегу v*). Локальный `make deploy-b24 APPLY=1` остаётся
+# рабочим как ручной путь без CI-гейта (отладка/ad-hoc).
+#
+# Цель задаётся через Repository secrets — упрощённый вариант (одно окружение), чтобы
+# настроить без admin-доступа к Environments. Разделение на 2 окружения (staging +
+# production по approval) — issue #112.
 #
 # Бэкап, php -l, авто-rollback при провале и read-only health-чек встроены в
 # scripts/deploy-b24-controller.sh (#100/#110). Здесь — только транспорт.
@@ -25,10 +30,8 @@ name: Deploy b24-controller
 #   Опц. (рекомендуется): B24_SSH_HOST_KEY — строка known_hosts сервера (пиннинг).
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       dry_run:
@@ -45,62 +48,44 @@ permissions:
   contents: read
 
 jobs:
-  detect:
-    name: Нужен ли деплой
+  # Тег v* можно повесить на ЛЮБОЙ коммит (в т.ч. не прошедший CI), а workflow_dispatch
+  # сам по себе CI не гоняет — поэтому, как и deploy.yml перед :latest, требуем ЗЕЛЁНЫЙ CI
+  # на этом коммите. (CI бежит только на push в main и PR, не на теге.)
+  verify-ci:
+    name: Зелёный CI на этом коммите
     runs-on: ubuntu-latest
-    # workflow_dispatch — всегда; workflow_run — только при успешном CI И из ЭТОГО
-    # репозитория (не из форка — иначе чужой PR мог бы инициировать деплой).
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository) }}
-    outputs:
-      changed: ${{ steps.f.outputs.changed }}
+    permissions:
+      actions: read   # читаем conclusions прогонов CI для этого SHA
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-
-      - id: f
+      - name: Требуем зелёный CI на этом SHA (тег v* / ручной запуск)
         env:
-          EVENT: ${{ github.event_name }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Ручной запуск — деплоим всегда.
-          if [ "$EVENT" = "workflow_dispatch" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Ручной запуск → деплой."
-            exit 0
+          sha="${{ github.sha }}"
+          # Берём ПОСЛЕДНИЙ завершённый прогон CI для коммита — re-run мог переключить
+          # результат, поэтому важно «последний зелёный», а не «когда-либо зелёный».
+          latest="$(gh api -X GET \
+            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs" \
+            -f head_sha="$sha" -f status=completed \
+            --jq '[.workflow_runs[]] | sort_by(.created_at) | last | .conclusion // ""')"
+          echo "Последний завершённый CI для ${sha}: ${latest:-<нет>}"
+          if [ "$latest" != "success" ]; then
+            echo "::error::CI для ${sha} не зелёный (последний: ${latest:-нет}). Деплой контроллеров отклонён."
+            exit 1
           fi
-          # Авто после CI — только если менялись наши PHP-файлы. Без '|| true':
-          # сбой git diff должен валить detect, а не тихо пропускать деплой.
-          # Первый коммит репо (нет HEAD~1) → считаем, что менялось всё.
-          if git rev-parse --verify -q "${HEAD_SHA}~1" >/dev/null; then
-            changed=$(git diff --name-only "${HEAD_SHA}~1" "${HEAD_SHA}" -- \
-              'b24-controller/lib/controllers/procure*.php' \
-              'b24-controller/lib/config.php')
-          else
-            changed="initial-commit"
-          fi
-          if [ -n "$changed" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Изменены b24-controller — деплой:"; echo "$changed" | sed 's/^/  - /'
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "b24-controller не менялся — деплой не нужен."
-          fi
+          echo "CI зелёный для ${sha} — деплой контроллеров разрешён."
 
   deploy:
     name: Деплой b24-controller
-    needs: detect
-    # Только если detect успешна И есть изменения (сбой detect ≠ молчаливый skip).
-    if: ${{ needs.detect.result == 'success' && needs.detect.outputs.changed == 'true' }}
+    needs: [verify-ci]
     runs-on: ubuntu-latest   # коробка за firewall → замените на self-hosted (см. шапку)
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 1
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Установить sshpass
         run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
@@ -130,6 +115,6 @@ jobs:
           B24_SSH_PASS: ${{ secrets.B24_SSH_PASS }}
           B24_CONTROLLERS_PATH: ${{ secrets.B24_CONTROLLERS_PATH }}
           WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
-          # dry_run (только из workflow_dispatch) → APPLY=0 (симуляция); иначе APPLY=1.
+          # dry_run (только из workflow_dispatch) → APPLY=0 (симуляция); тег v* → APPLY=1.
           APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '0' || '1' }}
         run: bash scripts/deploy-b24-controller.sh
