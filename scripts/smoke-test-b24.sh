@@ -22,8 +22,13 @@ set -euo pipefail
 # отредактируйте файл (он gitignored).
 _ENV_FILE="$(dirname "$0")/.env.deploy"
 if [ -f "$_ENV_FILE" ]; then
-  # shellcheck disable=SC1090
-  set -a; . "$_ENV_FILE"; set +a
+  # Путь к .env.deploy динамический (рядом со скриптом) — shellcheck не следует за source.
+  # Директиву ставим вплотную к `.`: на общей строке `set -a; . …; set +a` она привязывалась
+  # к `set -a`, и SC1090 всё равно срабатывал — поэтому source вынесен на отдельную строку.
+  set -a
+  # shellcheck source=/dev/null
+  . "$_ENV_FILE"
+  set +a
 fi
 
 # Принимаем и WEBHOOK_URL, и PAI_WEBHOOK_URL (procure-ai namespace) как алиас.

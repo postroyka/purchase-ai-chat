@@ -163,6 +163,19 @@ jobs:
       - name: PHPUnit
         run: php -d memory_limit=512M vendor/bin/phpunit
 
+  lint-shell:
+    name: Lint deploy shell scripts (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # shellcheck предустановлен на ubuntu-latest — без сторонних actions (репо
+      # минимизирует supply-chain-поверхность). Линтуем деплой-скрипты с нетривиальной
+      # bash-логикой (валидация путей, rollback, health-чек) — раньше не линтовались.
+      # -S warning: только warning+error (стиль/info не валят CI на мелочах).
+      - name: shellcheck
+        run: shellcheck -S warning scripts/deploy-b24-controller.sh scripts/smoke-test-b24.sh
+
   changes:
     name: Detect Docker-relevant changes
     runs-on: ubuntu-latest
