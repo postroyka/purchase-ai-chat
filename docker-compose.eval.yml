@@ -58,6 +58,23 @@ services:
     volumes:
       # Свежий код eval (baseline.js, score.js) поверх образа; node_modules образа не прячем.
       - ./backend/eval:/app/backend/eval:ro
+      # Свежий app-код агента поверх образа: baseline.js → runAgent (../agent-runner.js),
+      # а тот читает промпт ../prompts/main.md и импортит ./extract-text.js (извлечение
+      # текста — гоняется на КАЖДОЙ фикстуре). Кладём все три: импорт-замыкание
+      # agent-runner.js = {agent-runner, extract-text} (extract-text тянет только
+      # node:-встроенные) плюс промпт — это вся app-сторона прогона.
+      # Иначе eval тестирует СТАРЫЙ код образа: :latest обновляется только по тегу v* или
+      # ручному dispatch (push в main даёт лишь sha-образы), поэтому :latest отстаёт от main.
+      # На отставшем образе → «No such tool available» (до #144 в agent-runner.js нет
+      # type:'http' → Claude CLI молча не подключает MCP) и устаревшее извлечение текста
+      # (extract-text.js менялся в #130: лимит памяти OCR, XXE-гейт).
+      # NB: только app-сторона — MCP-инструменты живут в .output mcp-образа; при их
+      # отставании пересобрать mcp (PUSH=0 make deploy-images).
+      # NB: оверлей тестирует ТЕКУЩЕЕ рабочее дерево, а не выложенный :latest-образ — это
+      # сигнал dev-цикла, не релизный гейт (для проверки «чистого» образа — снять эти три mount'а).
+      - ./backend/agent-runner.js:/app/backend/agent-runner.js:ro
+      - ./backend/extract-text.js:/app/backend/extract-text.js:ro
+      - ./prompts/main.md:/app/prompts/main.md:ro
       # Счета внутрь по тому же пути, что и у mcp-eval; сюда же пишутся черновики *.expected.json
       # (контейнер под appuser — папка на хосте должна быть доступна ему на запись).
       - ./scripts/samples:/work/samples
