@@ -52,7 +52,7 @@
       (`procure-app`, `procure-mcp`, `procure-redis`, `procure-watchtower`,
       `nginx-proxy`, `acme-companion`).
 - [ ] **Бэкенд жив.** `app /health` отвечает `{"ok":true,"redis":"ok"}`.
-- [ ] **MCP жив.** `mcp /api/health` отвечает.
+- [ ] **MCP жив.** `mcp /api/health` отвечает `{"status":"ok",...}` (поле `service` убрано в шаблоне v0.3.0 — проверяем только живость).
 - [ ] **Redis жив.** `redis-cli ping` отвечает `PONG`.
 - [ ] **Сертификат выпущен.** В логах `acme-companion` есть «Certificate deployed»,
       сертификат имеет срок действия.

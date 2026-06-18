@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
-import { useBitrix24 } from '~/server/utils/bitrix24'
+import { useBitrix24Tenant } from '~/server/utils/bitrix24-tenant'
 import { callV2 } from '~/server/utils/sdk-helpers'
 
 interface ProductResult {
@@ -27,7 +27,7 @@ export default defineMcpTool({
     vendorCode: z.string().min(1).describe('Vendor article/code from the supplier document — pass verbatim (Latin/Cyrillic letters are matched interchangeably server-side, e.g. "тех 100х25х6000")'),
   },
   handler: async ({ vendorCode }) => {
-    const b24 = useBitrix24()
+    const b24 = useBitrix24Tenant()
     const result = await callV2<ProductResult>(
       b24,
       'shef:purchase.api.procureproduct.findbyvendorcode',

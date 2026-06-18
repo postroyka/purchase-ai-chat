@@ -38,6 +38,11 @@ FROM node:22.16.0-alpine3.22 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NITRO_PORT=3000
+# Закрепляем webhook-only режим на уровне образа (#154 review): мультитенантный
+# OAuth/DXT из v0.3.0 нам не нужен, и его нельзя случайно включить, забыв строку в
+# .env. Чтобы включить осознанно — переопредели на рантайме (нужен том под SQLite
+# token-store, иначе токены теряются при рестарте; см. mcp/.env.example).
+ENV NUXT_BITRIX24_OAUTH_ENABLED=false
 COPY --from=builder /app/.output ./.output
 USER node
 EXPOSE 3000

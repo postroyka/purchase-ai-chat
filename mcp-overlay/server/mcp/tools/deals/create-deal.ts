@@ -2,7 +2,7 @@ import { basename, resolve, sep } from 'node:path'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
-import { useBitrix24 } from '~/server/utils/bitrix24'
+import { useBitrix24Tenant } from '~/server/utils/bitrix24-tenant'
 import { callV2 } from '~/server/utils/sdk-helpers'
 
 interface DealResult {
@@ -110,7 +110,7 @@ export default defineMcpTool({
       }
     }
 
-    const b24 = useBitrix24()
+    const b24 = useBitrix24Tenant()
     const params: Record<string, unknown> = {
       supplierId,
       responsibleUserId,

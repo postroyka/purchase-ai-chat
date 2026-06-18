@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
-import { useBitrix24 } from '~/server/utils/bitrix24'
+import { useBitrix24Tenant } from '~/server/utils/bitrix24-tenant'
 import { callV2 } from '~/server/utils/sdk-helpers'
 
 interface ContractResult {
@@ -30,7 +30,7 @@ export default defineMcpTool({
     date: z.string().max(10).regex(/^\d{2}\.\d{2}\.\d{4}$/).optional().describe('Contract date from the document, format d.m.Y (e.g. "15.03.2025") — exact match'),
   },
   handler: async ({ supplierId, number, date }) => {
-    const b24 = useBitrix24()
+    const b24 = useBitrix24Tenant()
     const params: Record<string, string> = { supplierId }
     if (number) params.number = number
     if (date) params.date = date

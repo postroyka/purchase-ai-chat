@@ -6,7 +6,7 @@ vi.mock('@nuxtjs/mcp-toolkit/server', () => ({
 }))
 
 const fake = makeFakeBitrix24()
-vi.mock('~/server/utils/bitrix24', () => ({ useBitrix24: () => fake.b24 }))
+vi.mock('~/server/utils/bitrix24-tenant', () => ({ useBitrix24Tenant: () => fake.b24 }))
 
 const { default: tool } = await import('../../../../server/mcp/tools/deals/find-supplier')
 

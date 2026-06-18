@@ -1,0 +1,45 @@
+# Вендоринг `mcp/` (bx24-template-mcp)
+
+`mcp/` — **вендоренная копия** upstream-шаблона MCP-сервера. Напрямую её не правим:
+всё своё (procurement-инструменты `b24_pst_crm_*`) живёт в `mcp-overlay/` и
+накладывается поверх при сборке образа (см. `Dockerfile.mcp`).
+
+## Текущий снимок
+
+| | |
+|---|---|
+| Upstream | https://github.com/bitrix24/templates-mcp |
+| Версия | **v0.3.0** |
+| Тег → коммит | `v0.3.0` = `a65b8bbefc86df118b827cff1420c3ecfbd345b2` |
+| Снят | 2026-06-18 (PR #154) |
+
+## Как обновлять (ре-вендор)
+
+1. Снять новый релиз upstream **по тегу** (не `main` — он движется без ревью):
+   ```bash
+   git clone --depth 1 --branch <vX.Y.Z> https://github.com/bitrix24/templates-mcp /tmp/tpl
+   ```
+2. Зеркалировать в `mcp/`, не трогая артефакты/зависимости:
+   ```bash
+   rsync -a --delete \
+     --exclude .git --exclude node_modules --exclude .nuxt --exclude .output \
+     /tmp/tpl/ mcp/
+   ```
+3. Сверить дельту с записанным выше SHA — видно только реальные изменения upstream:
+   ```bash
+   git -C /tmp/tpl diff a65b8bbefc86df118b827cff1420c3ecfbd345b2..<vX.Y.Z> -- .
+   ```
+4. Локальных правок **внутри** `mcp/` быть не должно — всё в `mcp-overlay/`
+   (единственный исторический патч #127 уже влит в upstream и растворился).
+5. Проверить совместимость overlay: скопировать deals в `mcp/server/mcp/tools/deals`,
+   `pnpm typecheck`, затем убрать. Полную сборку образа валидирует CI-джоб
+   «Validate Docker builds».
+6. Обновить **этот файл** (версия/SHA/дата) и при необходимости `Dockerfile.mcp`
+   (напр. v0.3.0 добавил нативный `better-sqlite3` → `apk add python3 make g++`).
+
+## Что мы меняем относительно upstream (в сборке, не в `mcp/`)
+
+- `Dockerfile.mcp` удаляет `server/mcp/tools/{tasks,users,meta}` — нужны только
+  `b24_pst_crm_*` (overlay). Срез подтверждается assert'ом в Dockerfile.
+- OAuth/DXT-мультитенант выключен и закреплён на уровне образа
+  (`ENV NUXT_BITRIX24_OAUTH_ENABLED=false`). Мы — webhook-only (`NUXT_MCP_AUTH_TOKEN`).
