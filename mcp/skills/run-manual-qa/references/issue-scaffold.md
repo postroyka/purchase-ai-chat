@@ -1,5 +1,7 @@
 # Issue scaffold
 
+`Last reviewed: 2026-06-14`
+
 Canonical English source for the non-block parts of the tracking issue: preamble, the "how to work" section (GitHub Convert-to-issue flow), the preparation/access section, and the placeholder data table. Render these into the test repo at issue-creation time. Operator-facing phrasing may be translated into the chosen language; structure and labels stay English.
 
 > **Keep this file honest.** The prep section mirrors live project structure — `.env.example`, `nuxt.config.ts` (`runtimeConfig`, `NITRO_PORT`), the `/mcp` auth middleware, and the webhook-scope requirements in `README`. **Whenever any of those change, update this file in the same PR.** Triggers: a new/renamed/removed `NUXT_*` or `NITRO_*` variable, a changed default port or endpoint path, a new required webhook scope, a changed connector header, or a new upfront-seed requirement (a new tool that needs pre-existing portal data to test). The data table and parts of the prep are otherwise **generated/trimmed per run** (see below) — only the structural facts are hard-coded here, and those are what must stay in sync.
@@ -58,7 +60,7 @@ The checklist item becomes a clickable link to that issue. Closing the issue aut
 
 ### 2. Local environment
 
-- Node.js 20+ (`node -v`), pnpm (`pnpm -v`).
+- Node.js 22+ (`node -v`; matches `package.json#engines` and the CI / Docker images), pnpm (`pnpm -v`).
 - `bitrix24/templates-mcp` cloned.
 - For PR scope: the PR branch checked out. For whole-project: the merge-target branch, with all in-scope PRs merged (else their tools are absent and the startup tool count won't match).
 
@@ -87,6 +89,17 @@ Optional, only if the run includes integration tests or evals (see `.env.example
 `NUXT_BITRIX24_TEST_WEBHOOK_URL` (live integration suite — staging portal only),
 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` (eval LLM),
 `NUXT_AUDIT_DIR` (OAuth/Bearer audit log destination; default `/data/audit/`, webhook-only manual QA ignores it).
+
+OAuth multi-tenant (opt-in, landed and off by default — webhook-only manual QA leaves these unset/false; operator guide in `docs/DEPLOYMENT.md` → "OAuth 2.0 multi-tenant"):
+`NUXT_BITRIX24_OAUTH_ENABLED` (default `false`; with `=true` the OAuth surface is end-to-end live — install/callback mint a Bearer, `/mcp` accepts it via the toolkit middleware in `server/mcp/index.ts`, and `NUXT_MCP_AUTH_TOKEN` is bypassed on `/mcp`. Three `/mcp` Bearer deny branches — `BEARER-UNKNOWN` (covers an absent or unminted Bearer) / `BEARER-REVOKED` / `BEARER-ORPHAN` — all 401 with a `WWW-Authenticate` header carrying the errorCode. Two more deny branches join the taxonomy when the flag is on, both 429 + `Retry-After` + errorCode `RATE-LIMITED` (the only 429 codes in §11): `oauth.install.deny.rate-limited` once a source IP exceeds **10 install** requests within a **60-second sliding window**, and `oauth.callback.deny.rate-limited` at **30 callback** requests in the same window. A QA pass that hammers `/api/oauth/install` from one host should expect a 429 after the 10th hit; hammering `/api/oauth/callback` after the 30th. The windows are per-route and per-IP, so QA scripts hitting both endpoints in one run don't pollute each other's counter, and a run that takes longer than 60s rolls the window forward — for a deterministic 429 test, fire the probes within the same minute),
+`NUXT_BITRIX24_OAUTH_CLIENT_ID` / `NUXT_BITRIX24_OAUTH_CLIENT_SECRET` (from a registered Bitrix24 Marketplace application, needed only when ENABLED=true),
+`NUXT_BITRIX24_OAUTH_REDIRECT_URL` (no default — must be set to the exact URL registered on the Bitrix24 side when `ENABLED=true`; `.env.example` shows `https://prod.example.com/api/oauth/callback` as a placeholder shape, not a value to copy verbatim),
+`NUXT_BITRIX24_OAUTH_SCOPE` (default `user,task`),
+`NUXT_BITRIX24_OAUTH_DB_DIR` (directory that holds the SQLite token store; default `/data`, filename `oauth.sqlite` is fixed in code),
+`NUXT_BITRIX24_OAUTH_ADMIN_TOKEN` (operator-only token gating `GET /api/oauth/_health`; deliberately separate from `NUXT_MCP_AUTH_TOKEN`. Leave empty for localhost-only access via nginx allow/deny; the route fails closed (`503 NOT-CONFIGURED`) for a non-localhost request when unset. Once set, the Bearer is required uniformly — even a localhost request needs it).
+
+Docker-only (not consumed by the Nuxt server, no `process.env` exposure under Vitest because `envPrefix` excludes it):
+`COMPOSE_PROJECT_NAME` (#189; default `bx24-mcp` in `.env.example`. Prefixes both the named volume `bx24_data` and the parameterised `container_name: ${COMPOSE_PROJECT_NAME:-bx24-mcp}-app`. Set distinct values per environment to run multiple stacks on one host. **⚠ Upgrading from a pre-#189 stack with OAuth data**: orphan-ing the volume silently loses `oauth.sqlite` AND the audit log — see CHANGELOG and `docs/RUNBOOK.md` § "Container naming after #189" for the migration recipe).
 
 ### 4. On the Bitrix24 portal — seed upfront
 

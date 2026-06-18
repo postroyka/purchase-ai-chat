@@ -1,6 +1,6 @@
 # bx24-template-mcp — Agent Skill
 
-`Last reviewed: 2026-06-03`
+`Last reviewed: 2026-06-14`
 
 You are working on a Bitrix24 MCP server built on Nuxt + `@nuxtjs/mcp-toolkit`. Read this before making changes.
 
@@ -9,16 +9,16 @@ You are working on a Bitrix24 MCP server built on Nuxt + `@nuxtjs/mcp-toolkit`. 
 - **Repo**: https://github.com/bitrix24/templates-mcp
 - **Prod**: `<YOUR_PROD_URL>/mcp` — replace with your deployed instance URL
 - **Stack**: Nuxt 4 (Nitro `node-server`), `@nuxtjs/mcp-toolkit`, `@bitrix24/b24jssdk-nuxt`
-- **Auth to Bitrix24**: incoming webhook (Phase 1), OAuth (Phase 3)
+- **Auth to Bitrix24**: incoming webhook (default), or OAuth 2.0 multi-tenant (opt-in, landed — `NUXT_BITRIX24_OAUTH_ENABLED`)
 - **Auth from Claude to us**: Bearer token via middleware
-- **Deployment**: Docker behind `nginx-proxy` + `acme-companion` on shared `proxy-net` network. CI builds and pushes the image to GHCR on `v*` tag; the operator deploys via Watchtower (auto) or `make redeploy` on the host (manual)
+- **Deployment**: Docker behind `nginx-proxy` + `acme-companion` on shared `proxy-net` network. CI builds and pushes the image to GHCR on `v*` tag; the operator deploys via Watchtower in **monitor-only** mode by default (it notifies on a new `:latest` but does NOT restart — opt into auto-apply by removing `WATCHTOWER_MONITOR_ONLY`) or via `make redeploy` on the host (manual)
 - **Dependency updates**: npm & GitHub Actions — Renovate Bot (see `renovate.json`); Dockerfile base images — Dependabot; docker-compose infra images — Renovate's `docker-compose` manager (see `renovate.json`). Transitive-dependency security advisories are patched manually via `overrides` in `pnpm-workspace.yaml` (pnpm v11 location) — Dependabot/Renovate don't open PRs for nested deps. A blocking `pnpm audit --audit-level=moderate` CI job guards against regressions.
 - **License**: MIT
 
 ## Ground rules
 
 1. **One tool per file** in `server/mcp/tools/<group>/<name>.ts`. Discovery is automatic.
-2. **Never call Bitrix24 directly.** Always go through `useBitrix24()`, and from there through the typed helpers in `server/utils/sdk-helpers.ts`: `callV2<T>(b24, method, params, errorContext)` — the **default** for classic methods (`tasks.task.add/list/update/` + the seven lifecycle verbs, `user.*`, `task.commentitem.*`, …), `callV3<T>(…)` — **only** for methods that are v3-only (currently `tasks.task.get`, `tasks.task.result.*`), and `batchV2<T>` / `batchV3<T>(b24, calls, errorContext)` for bulk operations. See the **transport-convention block at the top of `sdk-helpers.ts`** for how to pick v2 vs v3. The helpers own the `isSuccess` / `getErrorMessages` / transport-error funnel — tool handlers stay short and uniform. Calling `b24.actions.*.{call,batch}.make` directly from a tool handler is forbidden (it duplicates that funnel and drifts over time); the deprecated `b24.callMethod` is doubly forbidden — it disappears in SDK 2.0. See [`adding-tools.md`](./adding-tools.md) for the canonical template.
+2. **Never call Bitrix24 directly.** Always go through `useBitrix24Tenant()` (the OAuth-aware dispatcher in `~/server/utils/bitrix24-tenant` — see [`../../docs/OAUTH-DESIGN.md`](../../docs/OAUTH-DESIGN.md) §6). With `NUXT_BITRIX24_OAUTH_ENABLED=false` (the production default) it falls back to the webhook singleton, so behaviour is byte-identical to a direct `useBitrix24()` call. When the flag is on, the same call resolves to a per-tenant `B24OAuth` from the request-scoped ALS. **Never call `useBitrix24()` directly from a tool handler** — it bypasses the dispatcher and pins the tool to webhook forever. From the dispatcher result go through the typed helpers in `server/utils/sdk-helpers.ts`: `callV2<T>(b24, method, params, errorContext)` — the **default** for classic methods (`tasks.task.add/list/update/` + the seven lifecycle verbs, `user.*`, `task.commentitem.*`, …), `callV3<T>(…)` — **only** for methods that are v3-only (currently `tasks.task.get`, `tasks.task.result.*`), and `batchV2<T>` / `batchV3<T>(b24, calls, errorContext)` for bulk operations. See the **transport-convention block at the top of `sdk-helpers.ts`** for how to pick v2 vs v3. The helpers own the `isSuccess` / `getErrorMessages` / transport-error funnel — tool handlers stay short and uniform. Calling `b24.actions.*.{call,batch}.make` directly from a tool handler is forbidden (it duplicates that funnel and drifts over time); the deprecated `b24.callMethod` is doubly forbidden — it disappears in SDK 2.0. See [`adding-tools.md`](./adding-tools.md) for the canonical template.
 3. **Every tool must have a unit test** in `tests/unit/tools/<group>/<name>.test.ts` with the Bitrix24 client mocked.
 4. **Every Zod field must have `.describe()`** — the LLM reads it at runtime.
 5. **No secrets in code or tests.** Use `useRuntimeConfig()` and `.env`. When you add/rename/remove a `NUXT_*` / `NITRO_*` variable, change the default port or `/mcp` endpoint, change the connector auth header name/format, alter required webhook scopes, or add a tool needing upfront-seeded portal data, also update the manual-QA scaffold at [`../run-manual-qa/references/issue-scaffold.md`](../run-manual-qa/references/issue-scaffold.md) in the same PR — it mirrors these structural facts. A CI gate enforces the `.env.example` ↔ scaffold pairing.
@@ -114,12 +114,12 @@ The bar here is lower than for the SDK (no credential-leak surface to defend), b
 
 ## When asked to add a new tool
 
-1. Identify the group: `tasks` / `users` / `meta` — or, if your tool covers a domain the template hasn't touched yet (CRM is the planned post-pilot expansion; calendars, disk, im, … are also fair game), create the directory yourself; that's the explicit "fork and extend" path.
+1. Identify the group: `tasks` / `users` / `meta` — or, if your tool covers a domain the template hasn't touched yet (CRM is the demand-driven post-release expansion zone; calendars, disk, im, … are also fair game), create the directory yourself; that's the explicit "fork and extend" path.
 2. Create `server/mcp/tools/<group>/<kebab-name>.ts`.
 3. Use `defineMcpTool({ name, description, inputSchema, handler })`.
 4. Name pattern: `b24_<domain>(_<entity>)*_<action>` for Bitrix24 tools (e.g. `b24_task_create`, `b24_task_checklist_item_add`, `b24_task_list`); `bx24mcp_<verb>` for meta-tools (use `bx24mcp_` ONLY for tools that don't call the Bitrix24 REST API). **Action is always the trailing token; all tokens are singular** — including before `_list`. Identity-style `b24_<domain>_me` (currently only `b24_user_me`) is an allowed shape where `me` covers both entity and action. The pattern + the singular-everywhere rule + the prefix split are enforced by `tests/unit/mcp-stdio/tool-naming-convention.test.ts`.
-5. Handler uses `useBitrix24()` and returns a string or rich content.
-6. Add a unit test mocking `useBitrix24`.
+5. Handler uses `useBitrix24Tenant()` (the OAuth-aware dispatcher — falls back to the webhook singleton when OAuth is disabled, see [`../../docs/OAUTH-DESIGN.md`](../../docs/OAUTH-DESIGN.md) §6). Never call `useBitrix24()` directly from a tool handler. Return a string or rich content.
+6. Add a unit test mocking `useBitrix24Tenant` (see `adding-tools.md` "Tests" for the canonical pattern).
 7. Optionally add an eval case in `tests/evals/tool-selection.eval.ts`.
 8. Run `pnpm lint && pnpm typecheck && pnpm test`.
 9. Commit: `feat(tools): add b24_<name>`.
@@ -157,7 +157,7 @@ Use the typed helpers from `server/utils/sdk-helpers.ts`: `callV2<T>(b24, method
 
 ## Things you must NOT do without asking
 
-- Bypass `useBitrix24()` and call HTTP directly.
+- Bypass `useBitrix24Tenant()` and call HTTP directly (or call `useBitrix24()` directly from a tool handler — also forbidden, it pins the tool to webhook).
 - Bind the container to a host port (`ports:` in production compose).
 - Change the MCP transport.
 - Replace the Bitrix24 SDK with a custom HTTP client.
@@ -182,4 +182,4 @@ Use the typed helpers from `server/utils/sdk-helpers.ts`: `callV2<T>(b24, method
 - [`feedback.md`](./feedback.md) — agent feedback prompts and policy.
 - `docs/EVALS.md`, `docs/FEEDBACK.md`, `docs/MANUAL-TEST-PHRASES.md` at the project root — operator-facing guides.
 
-Operator docs for deploy, on-call, security, and architecture now live at [`docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md), [`docs/RUNBOOK.md`](../../docs/RUNBOOK.md), [`docs/SECURITY.md`](../../docs/SECURITY.md), and [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md). For post-deploy verification — health, Bearer-auth contract, placeholder-token gate — point the operator (or run yourself if you have shell access) at [`scripts/verify-deployment.sh`](../../scripts/verify-deployment.sh); see [`docs/DEPLOYMENT.md#verifying-your-deployment`](../../docs/DEPLOYMENT.md#verifying-your-deployment). The remaining unwritten slots tracked in [`docs/README.md`](../../docs/README.md) are `TROUBLESHOOTING.md` (dev/laptop incident slice) and a dedicated `TESTING.md`; if a session needs one of those, open an issue rather than improvising local docs that drift from `PROJECT-BRIEF.md`.
+Operator docs for deploy, on-call, security, and architecture now live at [`docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md), [`docs/RUNBOOK.md`](../../docs/RUNBOOK.md), [`docs/SECURITY.md`](../../docs/SECURITY.md), and [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md). First-time host setup is driven by [`scripts/bootstrap.sh`](../../scripts/bootstrap.sh) (sparse-clones the deploy file set for a pinned tag; its `FILES` array is the canonical list) followed by `make bootstrap-check`. For post-deploy verification — health, Bearer-auth contract, placeholder-token gate — point the operator (or run yourself if you have shell access) at [`scripts/verify-deployment.sh`](../../scripts/verify-deployment.sh); see [`docs/DEPLOYMENT.md#verifying-your-deployment`](../../docs/DEPLOYMENT.md#verifying-your-deployment). The remaining unwritten slots tracked in [`docs/README.md`](../../docs/README.md) are `TROUBLESHOOTING.md` (dev/laptop incident slice) and a dedicated `TESTING.md`; if a session needs one of those, open an issue rather than improvising local docs that drift from `PROJECT-BRIEF.md`.

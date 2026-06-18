@@ -27,6 +27,45 @@ export default defineNuxtConfig({
     // the Nitro app context exists), so setting this field programmatically does
     // not change the log level — set the env var instead.
     logLevel: 'info',
+    // OAuth 2.0 / multi-tenant scaffolding (`docs/OAUTH-DESIGN.md`). All
+    // empty/false by default — webhook flow stays the canonical path until
+    // an operator explicitly opts in. The full surface (token store, install
+    // / callback routes, refresh logic) lands in PR-2b/c; the flag and
+    // dispatcher are wired now so existing tools migrate via a mechanical
+    // `useBitrix24()` → `useBitrix24Tenant()` swap later.
+    bitrix24OauthEnabled: false,
+    bitrix24OauthClientId: '',
+    bitrix24OauthClientSecret: '',
+    bitrix24OauthRedirectUrl: '',
+    bitrix24OauthScope: 'user,task',
+    bitrix24OauthDbDir: '/data',
+    // PR-2c: admin token guarding `/api/oauth/_health` (operator-tier
+    // observability endpoint per OAUTH-DESIGN.md §11). When empty, the
+    // route fails closed unless the request comes from localhost
+    // (e.g. an nginx `proxy_pass` inside the same network namespace).
+    // NEVER fall back to `bitrix24OauthEnabled` or `mcpAuthToken` here —
+    // the privilege levels differ (agent token vs operator token).
+    bitrix24OauthAdminToken: '',
+    // Operator-UX brand-styled landing (#233). Both default empty/false
+    // → identical to v0.2.0 strict-CSP unstyled output. When
+    // `bitrix24OauthBrandStyles=true` the install + callback HTML pages
+    // ship a minimal inline stylesheet under a per-response CSP nonce
+    // (`style-src 'nonce-<base64>'`) — the strict baseline (`default-src
+    // 'none'; frame-ancestors 'none'`) is preserved for everything else.
+    // `bitrix24OauthAppDisplayName` lets fork operators rebrand the
+    // landing heading from "Connect your Bitrix24 portal" to e.g.
+    // "Connect your Acme Bitrix24" without forking the template.
+    bitrix24OauthBrandStyles: false,
+    bitrix24OauthAppDisplayName: '',
+    // DXT-only OAuth surface (#207, OOB code-paste). Always empty on the
+    // HTTP server — the stdio shim populates them from build-time defines
+    // and `user_config`. Declared here so the `runtimeConfig` type
+    // contract matches the shim's `RuntimeConfig` interface and shared
+    // server utils that destructure these names type-check uniformly.
+    dxtOauthClientId: '',
+    dxtOauthClientSecret: '',
+    dxtPortalHost: '',
+    dxtDataDir: '',
   },
 
   nitro: {

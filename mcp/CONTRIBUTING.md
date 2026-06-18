@@ -1,5 +1,7 @@
 # Contributing to bx24-template-mcp
 
+`Last reviewed: 2026-06-13`
+
 Thanks for considering a contribution. This document describes how to land code.
 
 ## Quick start
@@ -81,7 +83,11 @@ On every PR:
 6. Integration tests run only when `NUXT_BITRIX24_TEST_WEBHOOK_URL` secret is present
 7. `ShellCheck` for `scripts/*.sh` — **advisory**: findings are visible on the PR but do not block merge while the bash→TypeScript migration question (#163) is open. Reproduce locally with `shellcheck -x scripts/*.sh` if you touch a shell script.
 
-> **CI authoring rule (closes #171):** Never interpolate `${{ … }}` directly inside a `run:` block — GitHub substitutes the expression into the script source before the shell parses it, so a malicious PR title or comment can execute commands on the runner. Bind the value through `env:` and reference it with `$VAR` in the script body (see the `commitlint` and `build` jobs for the canonical shape). The same pattern applies to `vars.*` and `secrets.*` — even repo-controlled values benefit from env-binding for defence-in-depth and readability. The `lint` job has a regex guard that fails the build if a user-controllable event field (title / body / message) is reintroduced inline. Broader coverage — including `${{ vars.* }}` / `${{ secrets.* }}` in scripts, multi-line `run: |` interpolation, mutable `uses:` refs, missing or over-broad `permissions:` — lives in the `actionlint` and `zizmor` jobs (see #175). Both are in advisory mode today; once #178 closes and the `main` branch stays clean for one release cycle, they flip to blocking and this regex guard is removed (it becomes a strict subset of what `actionlint`/`zizmor` cover).
+> **CI authoring rule (closes #171, #179):** Never interpolate `${{ … }}` directly inside a `run:` block — GitHub substitutes the expression into the script source before the shell parses it, so a malicious PR title or comment can execute commands on the runner. Bind the value through `env:` and reference it with `$VAR` in the script body (see the `commitlint` and `build` jobs for the canonical shape). The same pattern applies to `vars.*` and `secrets.*` — even repo-controlled values benefit from env-binding for defence-in-depth and readability.
+>
+> **Primary defence: the `actionlint` + `zizmor` jobs (both blocking since #179).** They cover the full injection class — `${{ vars.* }}` / `${{ secrets.* }}` in scripts, multi-line `run: |` interpolation, mutable `uses:` refs, missing or over-broad `permissions:`, artifact/cache poisoning, dangerous triggers. `actionlint` owns workflow *correctness* (schema, expression validity, shellcheck on `run:` blocks); `zizmor` owns workflow *security* (template injection, credential persistence). They are complementary, not redundant — don't delete one as duplication (the rationale is captured in an ADR-style comment at the top of the analyser jobs in `ci.yml`). The earlier single-line regex guard in the `lint` job was removed in #179 once both analysers flipped to blocking — it had become a strict subset of what they enforce.
+>
+> **Secondary discipline (author-time):** the `env:`-binding pattern above is still the convention to write by hand, so a `run:` block reads safely at review time without waiting for the CI analysers to flag it.
 
 Branch protection on `main` requires every gate green.
 
@@ -106,8 +112,8 @@ Short version:
 3. Use `defineMcpTool({ name, description, inputSchema, handler })`.
 4. Name pattern: `b24_<domain>(_<entity>)*_<action>` for Bitrix24 tools (action LAST, all tokens singular including before `_list` — see `skills/manage-bx24-template-mcp/adding-tools.md`); `bx24mcp_<verb>` for meta-tools (use ONLY for tools that don't call Bitrix24).
 5. Every Zod field gets `.describe()` — the LLM reads it at runtime.
-6. Call Bitrix24 via `useBitrix24()`. Never bypass.
-7. Add a unit test in `tests/unit/tools/<group>/<name>.test.ts` mocking `useBitrix24`.
+6. Call Bitrix24 via `useBitrix24Tenant()` (the OAuth-aware dispatcher in `~/server/utils/bitrix24-tenant`; falls back to the webhook singleton when OAuth is disabled — see `docs/OAUTH-DESIGN.md` §6). Never call `useBitrix24()` directly from a tool handler. Never bypass.
+7. Add a unit test in `tests/unit/tools/<group>/<name>.test.ts` mocking `useBitrix24Tenant`.
 8. Optionally add an eval case in `tests/evals/tool-selection.eval.ts`.
 9. Commit: `feat(tools): add b24_<name>`.
 

@@ -1,8 +1,8 @@
 import type {
   AjaxResult,
-  B24Hook,
   BatchCommandsArrayUniversal,
   CallBatchResult,
+  TypeB24,
   TypeCallParams,
 } from '@bitrix24/b24jssdk'
 import { Bitrix24ToolError, toToolError } from '~/server/utils/errors'
@@ -58,7 +58,8 @@ import { Bitrix24ToolError, toToolError } from '~/server/utils/errors'
 /**
  * Call a v3 REST method and return its `result` payload.
  *
- * @param b24 — client from `useBitrix24()`.
+ * @param b24 — client from `useBitrix24Tenant()` (the tenant-aware dispatcher;
+ *   falls back to the webhook singleton when OAuth is disabled).
  * @param method — REST method name (e.g. `tasks.task.get`).
  * @param params — params object (passed straight to `actions.v3.call.make`).
  * @param errorContext — fallback error message when the SDK gives nothing
@@ -69,7 +70,7 @@ import { Bitrix24ToolError, toToolError } from '~/server/utils/errors'
  * @throws {Bitrix24ToolError} on `!isSuccess` or transport failure.
  */
 export async function callV3<T>(
-  b24: B24Hook,
+  b24: TypeB24,
   method: string,
   params: TypeCallParams,
   errorContext: string,
@@ -99,7 +100,7 @@ export async function callV3<T>(
  * cast-free.
  */
 export async function callV2<T>(
-  b24: B24Hook,
+  b24: TypeB24,
   method: string,
   params: TypeCallParams | unknown[],
   errorContext: string,
@@ -162,7 +163,7 @@ export type BatchCall = [method: string, params: TypeCallParams | unknown[]]
  *   failures do NOT throw — they land in the returned array.
  */
 export async function batchV3<T>(
-  b24: B24Hook,
+  b24: TypeB24,
   calls: BatchCall[],
   errorContext: string,
 ): Promise<Array<AjaxResult<T>>> {
@@ -190,7 +191,7 @@ export async function batchV3<T>(
  * "@warning The maximum number of commands in one batch request is 50.").
  */
 export async function batchV2<T>(
-  b24: B24Hook,
+  b24: TypeB24,
   calls: BatchCall[],
   errorContext: string,
 ): Promise<Array<AjaxResult<T>>> {

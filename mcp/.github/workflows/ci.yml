@@ -104,6 +104,35 @@ jobs:
           docker compose -f docker-compose.server.yml config --quiet
           docker compose -f docker-compose.example.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.watchtower.yml config --quiet
+      - name: Assert project + container name plumbing (#189)
+        # `config --quiet` catches YAML syntax and unresolvable substitutions,
+        # but happily accepts a typo'd default (`bx24_mcp` vs `bx24-mcp`) or a
+        # removed `name:` field. Pin the resolved values so a future PR that
+        # silently drops either fails CI loud. Also confirms the
+        # `COMPOSE_PROJECT_NAME` override path that the v0.3.0 migration depends
+        # on (set it to your current dir-name to keep the named volume bound).
+        run: |
+          set -euo pipefail
+          # Default project name resolves to `bx24-mcp`.
+          name=$(docker compose -f docker-compose.yml config | awk '/^name:/{print $2; exit}')
+          test "$name" = "bx24-mcp" \
+            || { echo "::error::docker-compose.yml resolved name=$name, expected bx24-mcp"; exit 1; }
+          # Default container name resolves to `bx24-mcp-app` (parameterised, not the legacy literal).
+          cname=$(docker compose -f docker-compose.yml config | awk -F': *' '/container_name:/{print $2; exit}')
+          test "$cname" = "bx24-mcp-app" \
+            || { echo "::error::docker-compose.yml resolved container_name=$cname, expected bx24-mcp-app"; exit 1; }
+          # COMPOSE_PROJECT_NAME override flows through to BOTH name AND container_name.
+          override_name=$(COMPOSE_PROJECT_NAME=bx24-mcp-staging docker compose -f docker-compose.yml config | awk '/^name:/{print $2; exit}')
+          test "$override_name" = "bx24-mcp-staging" \
+            || { echo "::error::COMPOSE_PROJECT_NAME override broken at the project level"; exit 1; }
+          override_cname=$(COMPOSE_PROJECT_NAME=bx24-mcp-staging docker compose -f docker-compose.yml config | awk -F': *' '/container_name:/{print $2; exit}')
+          test "$override_cname" = "bx24-mcp-staging-app" \
+            || { echo "::error::COMPOSE_PROJECT_NAME override broken at the container level"; exit 1; }
+          # Reverse-proxy stack stays fixed (host singleton — see compose comment + #189 design).
+          proxy_name=$(docker compose -f docker-compose.server.yml config | awk '/^name:/{print $2; exit}')
+          test "$proxy_name" = "bx24-mcp-proxy" \
+            || { echo "::error::docker-compose.server.yml resolved name=$proxy_name, expected bx24-mcp-proxy (fixed singleton)"; exit 1; }
+          echo "OK — project, container, and proxy names plumb correctly."
       - name: Verify pinned infra image digests resolve in the registry
         run: |
           # Catch a typo'd or nonexistent @sha256 pin at PR time, instead of on a
@@ -116,24 +145,32 @@ jobs:
             docker buildx imagetools inspect "$ref" >/dev/null
           done
 
-  # Static analysers for the workflow files themselves. Advisory mode while
-  # the first runs settle and findings are triaged — the existing `lint` job
-  # below has a narrow regex guard ("Guard against expression-injection")
-  # that only catches `${{ github.event.*.(title|body|message) }}` inlined
-  # in `run:`. These two analysers close the class:
-  #   - actionlint: workflow syntax, expression validation, permissions
-  #     auditing, deprecated/mutable `uses:` refs, shellcheck integration.
-  #   - zizmor: security-focused — template injection across all event
+  # Static analysers for the workflow files themselves. BOTH now ENFORCING
+  # (issue #179 close-out): zizmor flipped at the v0.1.0 cut (#178), actionlint
+  # flips here after its first-run findings came back clean (verified against
+  # the pinned 1.6.24 binary + shellcheck integration on every `run:` block).
+  #
+  # ADR — why TWO workflow analysers, not one (do not delete one as "duplication"):
+  #   - actionlint: workflow *correctness* — YAML schema, `${{ }}` expression
+  #     validation, `permissions:` auditing, deprecated/mutable `uses:` refs,
+  #     and shellcheck integration on embedded `run:` scripts. Catches the
+  #     "this workflow is wrong" class.
+  #   - zizmor: workflow *security* — template injection across all event
   #     paths and `vars.*` / `secrets.*`, artifact poisoning, dangerous
-  #     triggers, excessive permissions, secrets exposure.
-  # See #175. Acceptance (concrete): flip `continue-on-error: false` and
-  # remove the regex guard in the `lint` job once issue #178 closes (all
-  # zizmor findings either fixed or annotated) AND no new findings have
-  # appeared on `main` for one release cycle (≥ 2 weeks of merged PRs).
+  #     triggers, excessive permissions, credential persistence. Catches the
+  #     "this workflow is exploitable" class.
+  # The two overlap only at the edges (both notice some injection shapes); each
+  # owns a class the other doesn't cover. Removing either reopens a gap. See
+  # #175 (gate added) → #178 (zizmor triage) → #179 (this close-out).
+  #
+  # The `lint`-job custom regex guard that used to backstop these two was
+  # DELETED in #179: with both analysers blocking, it became a strict subset of
+  # what they cover (it only caught single-line `github.event.*.(title|body|
+  # message)` interpolation; actionlint + zizmor cover the multi-line and
+  # `vars.*`/`secrets.*` cases too).
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       # Match `zizmor` job below: explicit read-only.
       contents: read
@@ -161,10 +198,14 @@ jobs:
           tar xzf "$tarball" actionlint
           ./actionlint -color
 
+  # zizmor is ENFORCING (issue #178): all findings on the checked-in
+  # workflows are either fixed (deploy.yml cache-poisoning — caching removed
+  # from the publish pipeline) or annotated with an inline justification
+  # (`# zizmor: ignore[...]`). The version is pinned so a CI run reproduces
+  # exactly what was triaged locally; bump it deliberately and re-triage.
   zizmor:
     name: zizmor
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       # zizmor reads workflow files from the checkout only.
       contents: read
@@ -174,6 +215,20 @@ jobs:
           # Same hygiene as the actionlint job above.
           persist-credentials: false
       - uses: zizmorcore/zizmor-action@e639db99335bc9038abc0e066dfcd72e23d26fb4 # v0.3.0
+        with:
+          # Pin the zizmor binary to the version findings were triaged against.
+          # Determinism: a floating `latest` could surface a new audit mid-PR
+          # and break an unrelated branch's gate.
+          version: "1.25.2"
+          # OFFLINE only. The action defaults `online-audits: true`, which runs
+          # GitHub-API-backed checks (e.g. known-vulnerable-actions against a
+          # live advisory DB). For a BLOCKING gate that's a footgun: a new
+          # upstream advisory could fail a PR that didn't touch any workflow,
+          # and it makes the gate non-reproducible against the local
+          # `zizmor --offline` triage. Keep it offline so CI == local; the
+          # advisory-DB sweep belongs in a separate, non-blocking scheduled job
+          # if we want it later.
+          online-audits: false
 
   lint:
     name: Lint
@@ -198,33 +253,14 @@ jobs:
             echo "If not, revert your change — widening invalidates the unit-suite isolation contract (see #144)."
             exit 1
           fi
-      - name: Guard against expression-injection in `run:` blocks (security #171)
-        # Catches the canonical single-line script-injection pattern: a
-        # `run` step that interpolates a user-controllable event field
-        # (title / body / message) directly inline. Those fields belong in
-        # `env:` (see the commitlint job above and CONTRIBUTING.md
-        # "CI authoring rule"). Hex-only fields (`.sha`, `.ref`, `.actor`)
-        # can't carry shell metacharacters and are not flagged.
-        #
-        # Self-match guard: the grep pipeline below filters out comment
-        # lines (lines whose first non-whitespace character is `#`) so the
-        # rule can describe itself without tripping itself.
-        #
-        # Known blind spot: multi-line `run: |` blocks where the
-        # interpolation lives on a later line escape this regex; same for
-        # `${{ vars.* }}` and `${{ secrets.* }}` inlined in scripts. The
-        # `actionlint` and `zizmor` jobs above (added by #175) close that
-        # gap. Once they flip from advisory to blocking, delete this
-        # guard — it becomes a strict subset of what they cover.
-        run: |
-          pattern='run:.*\$\{\{[^}]*github\.event\.[^}]*\.(title|body|message)[^}]*\}\}'
-          hits=$(grep -rnE "$pattern" .github/workflows/ | grep -vE ':[[:space:]]*#' || true)
-          if [ -n "$hits" ]; then
-            echo "::error::Direct interpolation of a user-controllable GitHub-event field into a run: block detected. Bind it through env: instead (see #171 and CONTRIBUTING.md 'CI authoring rule')."
-            echo "$hits"
-            exit 1
-          fi
-          echo "OK: no script-injection patterns in run: blocks."
+      # NOTE (#179): a custom "Guard against expression-injection in run:
+      # blocks" step lived here from #171 until the workflow-hardening series
+      # closed out. It was deleted once `actionlint` + `zizmor` both flipped
+      # to blocking (see the analyser-job comment above) — its single-line
+      # `github.event.*.(title|body|message)` regex was a strict subset of
+      # what those two analysers enforce, and keeping it risked a contributor
+      # "fixing" a false sense of two-layer coverage. The injection class is
+      # now owned by zizmor (template-injection audit) end-to-end.
       - uses: pnpm/action-setup@08c4be7e2e672a47d11bd04269e27e5f3e8529cb # v6.0.0
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
@@ -516,23 +552,120 @@ jobs:
             exit 1
           fi
           echo "OK — /mcp correctly returned 503 with the placeholder token."
+      - name: Boot a third `oauth-on` container on port 3002 (issue #224)
+        id: oauth-on
+        env:
+          # Re-uses the Bearer minted (and ::add-mask::'d) in the `start`
+          # step — the mask registered there applies to every later step of
+          # this job, so the value renders as `***` here too. The OAuth-on
+          # path bypasses NUXT_MCP_AUTH_TOKEN on /mcp entirely; the value
+          # only needs to be a non-placeholder so the legacy 503
+          # "not configured" gate doesn't fire and mask the OAuth-on
+          # behaviour.
+          NUXT_MCP_AUTH_TOKEN: ${{ steps.start.outputs.token }}
+        # Pins the contract that's flipped on when an operator sets
+        # NUXT_BITRIX24_OAUTH_ENABLED=true (issue #224 — the flag-on path
+        # was previously NEVER booted in CI, so a schema-migration cold-
+        # boot failure or an auth-bypass regression in the toolkit
+        # middleware would have shipped through `docker-smoke` undetected).
+        #
+        # Different host port (3002) for the same kernel-port-reuse reason
+        # the placeholder container uses 3001. CLIENT_ID/CLIENT_SECRET/
+        # REDIRECT_URL are dummies — nothing in the boot or the assertions
+        # below reaches a real Bitrix24 portal, and the install handler's
+        # PORTAL-FORMAT gate fires (and is checked) before any outbound
+        # request would be made. NUXT_BITRIX24_OAUTH_DB_DIR points at a
+        # writable tmpfs path inside the container (`/tmp/oauthtest`); the
+        # token-store auto-creates the directory at 0700.
+        run: |
+          set -euo pipefail
+          docker run -d --name bx24-smoke-oauth \
+            -e NUXT_BITRIX24_WEBHOOK_URL=https://example.invalid/rest/1/x/ \
+            -e NUXT_MCP_AUTH_TOKEN="$NUXT_MCP_AUTH_TOKEN" \
+            -e NUXT_BITRIX24_OAUTH_ENABLED=true \
+            -e NUXT_BITRIX24_OAUTH_CLIENT_ID=ci.smoke.client \
+            -e NUXT_BITRIX24_OAUTH_CLIENT_SECRET=ci-smoke-secret-not-real \
+            -e NUXT_BITRIX24_OAUTH_REDIRECT_URL=https://ci.example.invalid/api/oauth/callback \
+            -e NUXT_BITRIX24_OAUTH_DB_DIR=/tmp/oauthtest \
+            -e NITRO_PORT=3000 \
+            -p 3002:3000 \
+            bx24-template-mcp:smoke
+
+          # Health-wait — also implicitly asserts the oauth-schema plugin
+          # bootstrap ran without crashing the Nitro process (a failed
+          # `mkdirSync(/tmp/oauthtest, 0o700)` or a SQL syntax error in
+          # the schema would make the container exit before /api/health
+          # ever responds 200).
+          HEALTHY="no"
+          for _ in $(seq 1 30); do
+            STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3002/api/health || echo "error")
+            if [ "$STATUS" = "200" ]; then HEALTHY="yes"; break; fi
+            sleep 2
+          done
+          if [ "$HEALTHY" != "yes" ]; then
+            echo "::error::oauth-on container never returned /api/health=200; the oauth-schema plugin may have crashed at boot."
+            docker logs bx24-smoke-oauth 2>&1 | tail -200 || true
+            exit 1
+          fi
+      - name: Assert the SQLite token-store materialised on cold boot
+        # Direct evidence that `server/plugins/oauth-schema.ts` ran and
+        # the token-store ran its WAL setup + CREATE TABLE statements
+        # against a fresh DB. A regression in the schema migration would
+        # leave the file missing (or leave the container crash-looped,
+        # caught one step earlier).
+        run: |
+          set -euo pipefail
+          if ! docker exec bx24-smoke-oauth ls -la /tmp/oauthtest/oauth.sqlite >/dev/null 2>&1; then
+            echo "::error::oauth.sqlite was not created in /tmp/oauthtest — the schema-bootstrap plugin did not run, or its mkdir failed."
+            docker exec bx24-smoke-oauth ls -la /tmp/oauthtest 2>&1 || true
+            exit 1
+          fi
+          echo "OK — oauth.sqlite materialised."
+      - name: Run scripts/manual-qa-pr2c.sh against the `oauth-on` container
+        # The script auto-detects "Scenario B" by probing /api/oauth/install
+        # without ?portal= and matching `errorCode:"PORTAL-FORMAT"`. With
+        # the OAuth surface fully configured, it asserts: install allow-list
+        # rejection + happy 302 + CSRF cookie attrs, callback PARAMS-MISSING
+        # + STATE-MISSING gates, /mcp 401 BEARER-UNKNOWN (with AND without
+        # a random Bearer), /api/oauth/_health 503 NOT-CONFIGURED for
+        # non-localhost requests (fails-closed). One bash run covers the
+        # full §11 contract on the flag-on boot.
+        #
+        # The grep below pins WHICH scenario the script detected. Without
+        # it, a regression that points the probe at the wrong container
+        # (or an env-var typo that boots the third container flag-off)
+        # would let the script happily assert Scenario A's 503 gates and
+        # come back green — silently un-testing everything this job
+        # exists to test. Review round-1 caught exactly that shape of bug
+        # (the script used to ignore its positional URL argument).
+        run: |
+          set -euo pipefail
+          OUT=$(./scripts/manual-qa-pr2c.sh http://localhost:3002 | tee /dev/stderr)
+          if ! echo "$OUT" | grep -q "Detected: Scenario B"; then
+            echo "::error::manual-qa-pr2c.sh did not detect Scenario B against port 3002 — the oauth-on container is misconfigured (or the probe hit the wrong container)."
+            exit 1
+          fi
       - name: Container logs (on failure only)
         if: failure()
         # 500-line tail handles a Nitro cold-boot stack trace + the route
-        # table dump that the toolkit emits at materialisation. Dump BOTH
-        # containers' logs so a cascading failure across the two boots is
-        # reconstructable from a single CI run.
+        # table dump that the toolkit emits at materialisation. Dump ALL
+        # three containers' logs so a cascading failure across the boots
+        # is reconstructable from a single CI run.
         run: |
           echo "=== bx24-smoke (valid-token, port 3000) ==="
           docker logs bx24-smoke 2>&1 | tail -500 || true
           echo
           echo "=== bx24-smoke-placeholder (placeholder-token, port 3001) ==="
           docker logs bx24-smoke-placeholder 2>&1 | tail -500 || true
+          echo
+          echo "=== bx24-smoke-oauth (oauth-on, port 3002) ==="
+          docker logs bx24-smoke-oauth 2>&1 | tail -500 || true
       - name: Cleanup
         if: always()
         run: |
           docker rm -f bx24-smoke 2>/dev/null || true
           docker rm -f bx24-smoke-placeholder 2>/dev/null || true
+          docker rm -f bx24-smoke-oauth 2>/dev/null || true
 
   # Aggregate gate. The `main` branch protection rule requires a single
   # status check named `ci` — this job is that gate. It depends on every
