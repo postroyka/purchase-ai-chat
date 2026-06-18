@@ -10,6 +10,7 @@
  * on error — operators reading container logs should not be able to recover
  * the credential from a failure.
  */
+import { getTenantContext } from '~/server/utils/request-context'
 
 const GITHUB_API = 'https://api.github.com'
 
@@ -127,23 +128,92 @@ export async function createGithubIssue(input: CreateIssueInput): Promise<Create
 
 // --- Rate limit ---------------------------------------------------------------
 //
-// Sliding-window counter. Cheap, in-memory, single-instance. Phase 3 will move
-// this to a shared store when we go multi-tenant — until then it's adequate.
+// Sliding-window counter. Cheap, in-memory, single-instance.
 //
 // Counts ATTEMPTS, not successes: a failed call (auth, network, 5xx) still
 // consumes one slot. This is the deliberate trade-off — it discourages tight
 // retry loops at the cost of being unfair on flaky networks. See FEEDBACK.md.
+//
+// Multi-tenant (issue #221): under OAuth, the window is keyed on the
+// caller's `memberId` from the request's ALS tenant context — one noisy
+// (or prompt-injected) tenant exhausting the quota must not block every
+// other tenant's feedback for the rest of the hour. Outside a tenant
+// scope (webhook mode, stdio bundle) everything shares the `__global__`
+// bucket, which is the pre-#221 behaviour exactly: a webhook deployment
+// has a single identity, so a single bucket is correct there.
 
 const WINDOW_MS = 60 * 60 * 1000 // 1 hour
+// 5/hour/tenant. Sits well below GitHub's per-token REST limit (5000/hr)
+// even if a shared bot token serves hundreds of tenants — see FEEDBACK.md
+// for the trade-off rationale (anti-spam ≫ per-tenant generosity). Keep
+// in lockstep with the same constant doc'd in the agent-facing
+// `skills/manage-bx24-template-mcp/feedback.md` quota paragraph.
 const MAX_REQUESTS_PER_WINDOW = 5
+// Bound on distinct tenant buckets. Matches the OAuth factory's LRU cap
+// order-of-magnitude; insertion-order eviction (Map iteration order) is
+// fine — an evicted bucket just resets that tenant's window early, which
+// fails OPEN for the tenant and never blocks anyone. NOTE: unlike the IP
+// map in `oauth-rate-limit.ts` (which IS true-LRU — see the contrasting
+// rationale there) this is NOT true-LRU — no MRU promotion on access —
+// so an active tenant can be evicted early if 200 others interleave.
+// Intentional divergence: a feedback over-quota is a soft annoyance (the
+// user just submits next session), so a premature quota reset
+// (fails-open) is the right corner; the install rate limiter cannot
+// afford fails-open (it would let an attacker reset their own bucket
+// by rotating IPs), so it pays the delete-then-set cost.
+const MAX_BUCKETS = 200
 
-const timestamps: number[] = []
+const buckets = new Map<string, number[]>()
 
+/**
+ * Consume one feedback-quota slot for the current request's tenant.
+ *
+ * The window is keyed on the caller's `memberId` (from the ALS tenant
+ * context) under OAuth, or `__global__` outside a tenant scope (webhook /
+ * stdio). Counts ATTEMPTS, not successes — a failed `createGithubIssue`
+ * still consumes a slot (see the comment above + `FEEDBACK.md`).
+ *
+ * **Fails-open under eviction.** At `MAX_BUCKETS` distinct tenants the
+ * OLDEST bucket is evicted (insertion order, NOT true-LRU). An evicted
+ * tenant's window resets early on its next call — the trade-off is
+ * intentional (worst case: an extra GitHub issue; never unfair
+ * blocking). See the `MAX_BUCKETS` comment above and the contrast with
+ * the true-LRU IP map in `server/middleware/oauth-rate-limit.ts`.
+ *
+ * **ALS-outside fall-through.** When called outside a `runWithTenant`
+ * scope (webhook mode, stdio bundle), all callers share the
+ * `__global__` bucket. This is deliberate — those deployments have a
+ * single identity — but means a misuse of this function from a new
+ * code path that forgets to wrap its caller in `runWithTenant` would
+ * silently land in the global bucket. The unit test
+ * `outside a tenant scope the global bucket behaves exactly as before`
+ * pins the fallback.
+ *
+ * @param now — injectable clock for tests; defaults to `Date.now()`.
+ * @returns `{ ok }` — `false` when the per-tenant window is exhausted;
+ *   `remaining` slots left in the window; `resetInSeconds` until the
+ *   oldest slot frees up.
+ */
 export function consumeFeedbackQuota(now: number = Date.now()): {
   ok: boolean
   remaining: number
   resetInSeconds: number
 } {
+  const key = getTenantContext()?.memberId ?? '__global__'
+  let timestamps = buckets.get(key)
+  if (!timestamps) {
+    if (buckets.size >= MAX_BUCKETS) {
+      // Insertion-order eviction (fails open — see MAX_BUCKETS comment
+      // above): a Map iterates keys in insertion order, so `.next()`
+      // returns the oldest insertion, NOT the least-recently-used.
+      // Deliberate divergence from oauth-rate-limit.ts (true LRU).
+      const oldest = buckets.keys().next().value
+      if (oldest !== undefined) buckets.delete(oldest)
+    }
+    timestamps = []
+    buckets.set(key, timestamps)
+  }
+
   const cutoff = now - WINDOW_MS
   // Drop expired entries in place to avoid unbounded growth.
   while (timestamps.length > 0 && timestamps[0]! < cutoff) {

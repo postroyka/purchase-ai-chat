@@ -9,7 +9,7 @@ vi.mock('@nuxtjs/mcp-toolkit/server', () => ({
 }))
 
 const fake = makeFakeBitrix24()
-vi.mock('~/server/utils/bitrix24', () => ({ useBitrix24: () => fake.b24 }))
+vi.mock('~/server/utils/bitrix24-tenant', () => ({ useBitrix24Tenant: () => fake.b24 }))
 
 // The tool reads NUXT_UPLOADS_DIR at module load to build the containment base,
 // so set it to a temp dir BEFORE importing the tool.

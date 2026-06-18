@@ -45,9 +45,19 @@ jobs:
           persist-credentials: false
       - uses: pnpm/action-setup@08c4be7e2e672a47d11bd04269e27e5f3e8529cb # v6.0.0
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        # zizmor: ignore[cache-poisoning]
         with:
           node-version: 22
-          cache: pnpm
+          # No `cache: pnpm` on this PUBLISH pipeline (zizmor cache-poisoning,
+          # #178). A same-repo branch push can populate the shared pnpm cache
+          # key that a later tag/dispatch build would restore — a path to
+          # slipping a poisoned dependency into the published image / DXT.
+          # `pnpm install --frozen-lockfile` from a clean store is the safe
+          # choice; the few extra seconds on a rare release run are worth
+          # removing the vector. CI (`ci.yml`) keeps the cache — it never
+          # publishes artifacts. The residual zizmor flag is conservative
+          # (it flags setup-node's mere presence in a publish flow even with
+          # caching off); ignored with the vector already removed above.
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
@@ -122,16 +132,60 @@ jobs:
           persist-credentials: false
       - uses: pnpm/action-setup@08c4be7e2e672a47d11bd04269e27e5f3e8529cb # v6.0.0
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        # zizmor: ignore[cache-poisoning]
         with:
           node-version: 22
-          cache: pnpm
+          # No `cache: pnpm` on this PUBLISH pipeline (zizmor cache-poisoning,
+          # #178). A same-repo branch push can populate the shared pnpm cache
+          # key that a later tag/dispatch build would restore — a path to
+          # slipping a poisoned dependency into the published image / DXT.
+          # `pnpm install --frozen-lockfile` from a clean store is the safe
+          # choice; the few extra seconds on a rare release run are worth
+          # removing the vector. CI (`ci.yml`) keeps the cache — it never
+          # publishes artifacts. The residual zizmor flag is conservative
+          # (it flags setup-node's mere presence in a publish flow even with
+          # caching off); ignored with the vector already removed above.
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build:dxt
+      - name: Build DXT bundle
+        # No repo secrets needed (#247). OAuth credentials are NOT baked
+        # into the bundle at build time anymore — they flow at runtime
+        # from Claude Desktop's `user_config` block (the manifest maps
+        # `user_config.bitrix24_oauth_client_id` / `_client_secret` to
+        # env vars the bundle reads via `mcp-stdio/nuxt-shims.ts`). One
+        # upstream `.dxt` covers webhook-only AND OAuth use cases; the
+        # operator picks at install time by leaving the OAuth fields
+        # empty (webhook mode) or pasting their Bitrix24 Marketplace
+        # app's CLIENT_ID / CLIENT_SECRET (OAuth mode).
+        run: pnpm build:dxt
+      - name: Compute DXT sha256 (#201)
+        # Pin the artifact content between `dxt-build` and `dxt-release`.
+        # GHA artifact storage is scoped to one workflow run — the trust
+        # boundary is reasonable, but non-zero: a future regression that
+        # widens the artifact scope, or a compromised `download-artifact`
+        # version, could land a swapped `.dxt` on the GitHub Release. The
+        # companion `.sha256` rides with the bundle in the artifact AND is
+        # re-checked in `dxt-release` BEFORE the attach step; mismatch
+        # fails the release loud rather than silently shipping a tampered
+        # bundle to operators.
+        #
+        # The hash is also surfaced in the GitHub Release (attached
+        # alongside the `.dxt`) so any downstream operator can confirm
+        # what they downloaded matches what CI built — useful for
+        # SOC2 / supply-chain attestation in regulated forks.
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum bx24-template-mcp.dxt > bx24-template-mcp.dxt.sha256
+          # Echo the hash so an operator scanning the run log sees it
+          # without expanding the artifact tab.
+          echo "sha256:$(awk '{print $1}' bx24-template-mcp.dxt.sha256)"
       - name: Upload DXT artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bx24-template-mcp-dxt
-          path: dist/bx24-template-mcp.dxt
+          path: |
+            dist/bx24-template-mcp.dxt
+            dist/bx24-template-mcp.dxt.sha256
           if-no-files-found: error
 
   dxt-release:
@@ -150,10 +204,39 @@ jobs:
         with:
           name: bx24-template-mcp-dxt
           path: dist
-      - name: Attach DXT to release
+      - name: Verify DXT sha256 matches the value computed in dxt-build (#201)
+        # Re-hash the downloaded `.dxt` and compare against the companion
+        # `.sha256` written by `dxt-build`. `sha256sum --check` fails
+        # non-zero on mismatch, which stops the workflow BEFORE the
+        # `softprops/action-gh-release` step attaches anything — a tamper
+        # window in GHA artifact storage can't silently ship a swapped
+        # bundle to operators. The companion file then also rides onto
+        # the GitHub Release so downstream operators verify what they
+        # downloaded matches what CI built.
+        run: |
+          set -euo pipefail
+          cd dist
+          ls -la bx24-template-mcp.dxt bx24-template-mcp.dxt.sha256
+          sha256sum --check bx24-template-mcp.dxt.sha256
+          echo "verified:$(awk '{print $1}' bx24-template-mcp.dxt.sha256)"
+      - name: Attach DXT (+ sha256) to release
+        # zizmor: ignore[superfluous-actions]
+        # Info-level: zizmor suggests `gh release upload` in a script step
+        # instead of this action. We keep the SHA-pinned action deliberately —
+        # it handles the create-or-update-release semantics (the release may
+        # not exist yet on a fresh tag) that a bare `gh release upload` would
+        # need extra scripting to replicate. Pinned by digest, so the
+        # supply-chain surface is bounded.
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
-          files: dist/bx24-template-mcp.dxt
+          # Attach the bundle AND its sha256 so operators downloading the
+          # DXT from the Release page can verify integrity offline
+          # (`sha256sum -c bx24-template-mcp.dxt.sha256`). Matches the
+          # standard practice for signed release artefacts (postgres,
+          # nginx, etc.).
+          files: |
+            dist/bx24-template-mcp.dxt
+            dist/bx24-template-mcp.dxt.sha256
           fail_on_unmatched_files: true
 
 # NOTE: This workflow ends at publishing to GHCR — it does NOT SSH into

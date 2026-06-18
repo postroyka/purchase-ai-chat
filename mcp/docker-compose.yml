@@ -1,9 +1,28 @@
+# Project name (#189). Defaults to `bx24-mcp` so the stack's containers,
+# networks and volumes get a stable, directory-independent prefix; override
+# per environment via `COMPOSE_PROJECT_NAME` in `.env` (e.g. `bx24-mcp-staging`)
+# so a second environment on the same host can't collide with production.
+# Mechanics: the `${COMPOSE_PROJECT_NAME:-bx24-mcp}` substitution is resolved
+# BEFORE Compose reads this file, so an env value of `bx24-mcp-staging`
+# becomes the literal `name:` here. The Compose `-p` flag and the
+# `COMPOSE_PROJECT_NAME` env separately also override at the Compose layer —
+# all three converge on the same value by design.
+name: ${COMPOSE_PROJECT_NAME:-bx24-mcp}
+
 services:
   bx24-template-mcp:
     # BX24_IMAGE lets operators pin a specific tag/digest (e.g. for rollback).
     # Default is :latest, which is what GH Actions pushes on every v* tag.
     image: ${BX24_IMAGE:-ghcr.io/bitrix24/templates-mcp:latest}
-    container_name: bx24-template-mcp
+    # Container name (#189). Parameterised against `COMPOSE_PROJECT_NAME` so
+    # a second environment on the same host doesn't hit
+    # `Conflict. The container name "/<name>" is already in use`. Default
+    # resolves to `bx24-mcp-app`; staging becomes `bx24-mcp-staging-app`.
+    # Operators reaching for the container by name (`docker logs <name>`,
+    # `docker exec <name>`, `docker cp <name>:/data/audit …`) use the
+    # resolved value — check yours with `docker compose ps` or
+    # `docker inspect $(docker compose ps -q) --format '{{.Name}}'`.
+    container_name: ${COMPOSE_PROJECT_NAME:-bx24-mcp}-app
     restart: always
     # Hardening: drop all Linux capabilities (the Node server binds an
     # unprivileged port and runs as USER node, so it needs none) and forbid
@@ -30,13 +49,49 @@ services:
       VIRTUAL_PORT: ${VIRTUAL_PORT}
       LETSENCRYPT_HOST: ${LETSENCRYPT_HOST}
       LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+      NUXT_AUDIT_DIR: ${NUXT_AUDIT_DIR:-/data/audit}
+      # OAuth 2.0 multi-tenant — empty/false by default; webhook-only forks
+      # see no behaviour change. Enable per docs/DEPLOYMENT.md → "OAuth 2.0
+      # multi-tenant" once the Marketplace app is registered.
+      NUXT_BITRIX24_OAUTH_ENABLED: ${NUXT_BITRIX24_OAUTH_ENABLED:-false}
+      NUXT_BITRIX24_OAUTH_CLIENT_ID: ${NUXT_BITRIX24_OAUTH_CLIENT_ID:-}
+      NUXT_BITRIX24_OAUTH_CLIENT_SECRET: ${NUXT_BITRIX24_OAUTH_CLIENT_SECRET:-}
+      NUXT_BITRIX24_OAUTH_REDIRECT_URL: ${NUXT_BITRIX24_OAUTH_REDIRECT_URL:-}
+      NUXT_BITRIX24_OAUTH_SCOPE: ${NUXT_BITRIX24_OAUTH_SCOPE:-user,task}
+      NUXT_BITRIX24_OAUTH_DB_DIR: ${NUXT_BITRIX24_OAUTH_DB_DIR:-/data}
+      # Gates GET /api/oauth/_health. Leave empty for localhost-only access;
+      # set to an `openssl rand -hex 32` value to token-gate the route.
+      NUXT_BITRIX24_OAUTH_ADMIN_TOKEN: ${NUXT_BITRIX24_OAUTH_ADMIN_TOKEN:-}
     networks:
       - proxy-net
+    # Persistent storage for the audit log (`/data/audit/*.jsonl`, written
+    # by `server/utils/audit-log.ts`) and the OAuth token store
+    # (`oauth.sqlite`). Without this volume both are lost
+    # on container recreate — silently breaking compliance/forensics and,
+    # once OAuth is on, every installed tenant. Webhook-only forks gain
+    # durable audit logs as a side-effect. The named volume survives
+    # `docker compose down` — but NOT `docker compose down -v`, which
+    # deletes ALL named volumes including the audit log and OAuth tokens.
+    #
+    # UPGRADE WARNING: deployments that ran an earlier image without this
+    # volume kept audit JSONL files in the container's ephemeral layer at
+    # `/data/audit/`. After `docker compose pull && up -d`, the named
+    # volume mounts over `/data` and those files become invisible — for
+    # compliance you MUST copy them out first:
+    #     docker cp $(docker compose ps -q bx24-template-mcp):/data/audit ./audit-backup-$(date +%F)
+    # Then `docker compose pull && docker compose up -d`. If you have no
+    # earlier audit history (fresh install, or a webhook-only deploy where
+    # the audit logger never ran), no action needed.
+    volumes:
+      - bx24_data:/data
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/api/health']
       interval: 30s
       timeout: 5s
       retries: 3
+
+volumes:
+  bx24_data:
 
 networks:
   proxy-net:

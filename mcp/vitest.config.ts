@@ -32,13 +32,25 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // Nuxt auto-imports (`useRuntimeConfig`, `defineNitroPlugin`) become
+    // globals at runtime but are undefined under Vitest. The shared setup
+    // stubs them with safe defaults so every tool that goes through the
+    // OAuth-aware dispatcher (`useBitrix24Tenant`) can load in tests
+    // without each file repeating the boilerplate. See `tests/_setup.ts`.
+    setupFiles: ['tests/_setup.ts'],
     // Unit + integration tests live in *.test.ts. Evals live in *.eval.ts
     // and are picked up by the `evalite` CLI separately (see evalite.config.ts).
     include: ['tests/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
-      include: ['server/**/*.ts'],
+      // `mcp-stdio/**` included (issue #223): the shims / register / toolkit-shim
+      // are exercised by `tests/unit/mcp-stdio/*` but were invisible to the 80%
+      // gate. `server.ts` (the stdio entrypoint — wires stdin/stdout transport,
+      // not unit-testable without spawning a process) and `build.mjs` (esbuild
+      // bundler script, not shipped code) are excluded.
+      include: ['server/**/*.ts', 'mcp-stdio/**/*.ts'],
+      exclude: ['mcp-stdio/server.ts', 'mcp-stdio/build.mjs'],
       thresholds: {
         lines: 80,
         functions: 80,

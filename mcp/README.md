@@ -2,17 +2,18 @@
 
 [![CI](https://github.com/bitrix24/templates-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/bitrix24/templates-mcp/actions/workflows/ci.yml)
 [![Deploy](https://github.com/bitrix24/templates-mcp/actions/workflows/deploy.yml/badge.svg)](https://github.com/bitrix24/templates-mcp/actions/workflows/deploy.yml)
+[![Release](https://img.shields.io/github/v/release/bitrix24/templates-mcp?sort=semver&display_name=tag&logo=github)](https://github.com/bitrix24/templates-mcp/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Nuxt](https://img.shields.io/badge/Nuxt-4-00DC82?logo=nuxt&logoColor=white)](https://nuxt.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Bitrix24 JS](https://img.shields.io/badge/Made%20with-Bitrix24%20JS-2fc6f6?logo=bitrix24&labelColor=020420)](https://bitrix24.github.io/b24jssdk/)
 
-A starter template for building Model Context Protocol (MCP) servers on top of Bitrix24. Ships example tools for tasks and users behind a single Bearer-protected `/mcp` endpoint over HTTP, or a `.dxt` bundle Claude Desktop installs in two clicks — plus the auth, throttling, logging, and test scaffolding you need to fork it and add your own.
+Give AI assistants (Claude, Cursor, Claude Code, …) real access to a Bitrix24 portal you already operate. Install in one of three shapes — a one-file Claude Desktop bundle for solo operators, a local HTTP server for developers, or a Docker container with TLS + per-user OAuth for SaaS teams. Ships **29 production-grade Bitrix24 tools** — 27 in the **tasks** domain (create / update / lifecycle / checklists / results / elapsed time / dependencies) and 2 user-lookup helpers — plus a `bx24mcp_submit_feedback` meta-tool and the auth, throttling, logging, and test scaffolding you need to fork it and add your own (CRM is the demand-driven next zone).
 
 > **What is Bitrix24?** An all-in-one CRM + task management + comms suite, ~12 million organisations. Strongest in Russia/CIS, Brazil/LatAm, Eastern Europe, and SMB segments globally. Competes with HubSpot/Pipedrive on the CRM side and Asana/Monday on tasks. This project gives AI assistants access to a Bitrix24 portal you already operate — it is **not** a Bitrix24 alternative.
 
-> **Status**: stable template, currently at **v0.1.0-alpha.1** (see [`CHANGELOG.md`](./CHANGELOG.md)); Phase 2 in progress. **Pilot scope is tasks only** — CRM (deals / contacts / leads) is the planned post-pilot expansion, see [`PROJECT-BRIEF.md`](./PROJECT-BRIEF.md). Tasks (CRUD + lifecycle + checklists + results + elapsed time + dependencies) are shipped. Fork it and extend with your own tools. This README will be rewritten for end-users on the first non-alpha `v0.1.0` tag.
+> **Status**: stable, released. The current version is on the [Releases page](https://github.com/bitrix24/templates-mcp/releases) (Release badge above), with the full change log in [`CHANGELOG.md`](./CHANGELOG.md). The pre-1.0 contract may still shift between minor versions (e.g. `0.1` → `0.2` here renamed every tool, see the **BREAKING** bullets in the changelog) — pin a tag if you want exact reproducibility. The pilot scope is **tasks**; CRM and any wider Bitrix24 surface land post-release, one tool per PR, demand-driven by the `bx24mcp_submit_feedback` signal — see [`PROJECT-BRIEF.md`](./PROJECT-BRIEF.md).
 
 ## Choose your path
 
@@ -20,9 +21,22 @@ A starter template for building Model Context Protocol (MCP) servers on top of B
 |---|---|---|
 | **A non-technical Bitrix24 operator** (HR, accountant, foreman) on a single workstation | **DXT bundle** → [Desktop Extension](#desktop-extension--claude-desktop-one-file-two-clicks) | One file, two clicks. No terminal, no port, no Bearer. Webhook stored in the OS keychain. Локализованный гайд: [`INSTALL.ru.md`](./mcp-stdio/INSTALL.ru.md) · em PT-BR: [`INSTALL.pt-BR.md`](./mcp-stdio/INSTALL.pt-BR.md). |
 | **A developer** running an AI agent on your laptop (Claude Code / Cursor / Claude Desktop) | **Local HTTP** → [Local MCP](#local-mcp--your-own-machine-claude-desktop-cursor-claude-code-cline) | `pnpm start`, point the client at `localhost:3000`. No public domain. Stays inside your machine. |
-| **A team / SaaS deploying for many users** | **Docker production** → [Remote MCP](#remote-mcp--production-server-claudeai-web) | Public URL with TLS, Bearer-protected `/mcp`, GHCR image, GitHub-Actions deploy + rollback. |
+| **A team / SaaS deploying for many users** | **Docker production** → [Remote MCP](#remote-mcp--production-server-claudeai-web) | Public URL with TLS, Bearer-protected `/mcp`, GHCR image, GitHub-Actions deploy + rollback. Optional **per-user [OAuth 2.0](#multi-tenant-oauth-20--per-user-identity-opt-in)** so each user acts under their own Bitrix24 identity. |
 
 The three paths share **the same tool code** — same files in `server/mcp/tools/**`, same auth model, same logger redaction. Only the transport and packaging differ.
+
+## Try it
+
+Once connected, ask the assistant in plain language. Examples that exercise the full toolchain:
+
+- *"Show me my Bitrix24 current user."* — sanity check; the assistant calls `b24_user_me`.
+- *"Find a user named Ivan Petrov."* — the assistant calls `b24_user_find`, then surfaces the numeric id every other tool needs (operators speak in names, not ids).
+- *"Create a task: 'Prep Q3 budget review', responsible Ivan Petrov, deadline next Friday 18:00, priority high."* — name-to-id resolve, then `b24_task_create`.
+- *"List my open high-priority tasks and tell me which ones are overdue."* — `b24_task_list` with a filter, then the assistant reasons over the result.
+- *"Start task #4214, add a comment 'Picked this up, ETA Wed', and log 90 minutes of work on it."* — three tools in one turn (`b24_task_start` → `b24_task_comment_add` → `b24_task_elapsed_time_add`).
+- *"Add a checklist to task #4214 with: draft outline / review with @petrov / send for sign-off; mark the first one done."* — `b24_task_checklist_item_add` (4×) + `b24_task_checklist_item_complete`.
+
+The assistant decides which tools to call from their descriptions — no special prompt syntax. Time zones: Bitrix24 deadlines are portal-local, so be explicit when phrasing dates (`"DEADLINE 2026-05-20T18:00:00+03:00"`) if your portal's TZ differs from yours — see the [Time zones and deadlines](#time-zones-and-deadlines) note below.
 
 ## Why
 
@@ -36,13 +50,15 @@ Off-the-shelf Bitrix24 MCP servers are either toy demos or vendor-locked. This p
 - Renovate for automated dependency updates.
 - Three test layers: unit, integration (real test portal), and Evalite + DeepSeek for tool-selection evals.
 
-## Quick start (local)
+## Quick start — developer / local dev
+
+> Non-technical operator? Skip this section. The [Desktop Extension](#desktop-extension--claude-desktop-one-file-two-clicks) path is two clicks; the [Remote MCP](#remote-mcp--production-server-claudeai-web) path is a connector URL — neither needs a checkout, a terminal, or `pnpm`.
 
 **Prerequisite — mint an incoming webhook in your Bitrix24 portal.** In the portal: *Developer resources → Other → Inbound webhook* (or "Applications → Developer resources" on some skins). Grant the scopes you plan to call (at minimum `user` + `task` for the current tool set), save, and copy the URL of the form `https://<your-portal>.bitrix24.com/rest/<user-id>/<webhook-code>/` — that is `NUXT_BITRIX24_WEBHOOK_URL`.
 
 > **Create the webhook under a dedicated service user**, not a real employee's account. The webhook inherits the creator's permissions for every call, so binding it to a personal account ties the integration to that person's role, department visibility, and tenure — anyone who leaves the company or loses rights silently breaks the MCP. Grant the service user the **minimum rights the tool set actually needs** (admin only if you need cross-user task visibility and want to avoid "task not found" / `ACCESS_DENIED` surprises on entities a non-admin user happens not to see).
 >
-> This is a webhook-era trade-off only. When the template moves to **OAuth 2.0** in a future release, each end user logs in with their own Bitrix24 account and every REST call is executed under that user's identity and permissions — the service-user shortcut goes away, and access becomes per-user by design.
+> This is a webhook-era trade-off only. The template now also ships **OAuth 2.0 multi-tenant** auth (opt-in, behind `NUXT_BITRIX24_OAUTH_ENABLED`): each end user logs in with their own Bitrix24 account and every REST call is executed under that user's identity and permissions — the service-user shortcut goes away, and access becomes per-user by design. It stays **off by default**, so webhook-only deployments are unaffected. See [`docs/OAUTH-DESIGN.md`](./docs/OAUTH-DESIGN.md) and the [OAuth 2.0 multi-tenant](./docs/DEPLOYMENT.md#oauth-20-multi-tenant-opt-in) operator guide.
 
 ```bash
 git clone https://github.com/bitrix24/templates-mcp.git
@@ -119,6 +135,12 @@ The 8 task-mutation tools above (`start_task` / `pause_task` / `complete_task` /
 5. Save, enable in chat, ask "Show me my Bitrix24 current user".
 
 For production deployment, see [`docs/REVERSE-PROXY.md`](./docs/REVERSE-PROXY.md) — covers nginx-proxy (the default), Caddy, plain nginx + certbot, and Traefik. Pick whichever your hosting provider already runs.
+
+#### Multi-tenant OAuth 2.0 — per-user identity (opt-in)
+
+The Remote setup above shares one `NUXT_MCP_AUTH_TOKEN` and runs every call under one webhook service user — right for a single team. For a **multi-user / SaaS** deployment, flip on OAuth (`NUXT_BITRIX24_OAUTH_ENABLED=true`) and each end user authorises once at `https://<your-mcp>/api/oauth/install?portal=<theirportal>`, then pastes the per-user Bearer they receive into their connector. Every REST call then runs under *that* user's Bitrix24 identity and permissions — no shared service user.
+
+> ⚠️ **When the flag is on, `NUXT_MCP_AUTH_TOKEN` is bypassed on `/mcp`** — the endpoint accepts only per-user OAuth Bearers. Migrate every connected client to its own Bearer **before** flipping the flag. It stays **off by default**, so existing webhook deployments are unaffected. Full operator guide: [`docs/DEPLOYMENT.md` → OAuth 2.0 multi-tenant](./docs/DEPLOYMENT.md#oauth-20-multi-tenant-opt-in); design + threat model: [`docs/OAUTH-DESIGN.md`](./docs/OAUTH-DESIGN.md).
 
 ### Local MCP — your own machine (Claude Desktop, Cursor, Claude Code, Cline, …)
 

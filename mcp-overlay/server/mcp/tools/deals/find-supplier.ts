@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
-import { useBitrix24 } from '~/server/utils/bitrix24'
+import { useBitrix24Tenant } from '~/server/utils/bitrix24-tenant'
 import { callV2 } from '~/server/utils/sdk-helpers'
 
 interface SupplierResult {
@@ -32,7 +32,7 @@ export default defineMcpTool({
       .describe('UNP — 9-digit Belarusian taxpayer number (spaces/dashes are tolerated and stripped)'),
   },
   handler: async ({ unp }) => {
-    const b24 = useBitrix24()
+    const b24 = useBitrix24Tenant()
     const result = await callV2<SupplierResult>(
       b24,
       'shef:purchase.api.procuresupplier.findbyunp',

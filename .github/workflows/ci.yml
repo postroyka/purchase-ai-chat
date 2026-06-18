@@ -116,6 +116,12 @@ jobs:
 
       - run: cp -r ../mcp-overlay/server/mcp/tools/deals server/mcp/tools/deals
 
+      # Typecheck the overlay TOOLS against the vendored framework (#154 review): catches
+      # signature drift between our b24_pst_crm_* tools and mcp/server/utils on a re-vendor.
+      # BEFORE the test copy — the vitest-style overlay test files aren't nuxt-typechecked.
+      - name: Typecheck overlay tools against vendored mcp
+        run: pnpm typecheck
+
       # Copy overlay tests into mcp/tests/ so vitest's default include
       # pattern (tests/**/*.test.ts) picks them up without config overrides.
       - run: cp -r ../mcp-overlay/tests/unit tests/overlay
@@ -185,10 +191,11 @@ jobs:
           # Без '|| true': если git diff упадёт (например, origin/BASE_REF
           # недостижим), джоба должна громко упасть, а не тихо вернуть docker=false
           # и молча пропустить валидацию. prompts/ включён — он копируется в образ
-          # (Dockerfile.app: COPY prompts/). Каталог mcp/ покрывает и mcp/Dockerfile.
+          # (Dockerfile.app: COPY prompts/). Каталоги mcp/ и mcp-overlay/ покрывают и
+          # mcp/Dockerfile, и overlay-инструменты (Dockerfile.mcp: COPY mcp-overlay/server/).
           changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- \
             Dockerfile.app Dockerfile.mcp \
-            backend ui mcp prompts \
+            backend ui mcp mcp-overlay prompts \
             docker-compose.prod.yml docker-compose.nginxproxy.yml \
             .github/workflows/ci.yml)
           if [ -n "$changed" ]; then

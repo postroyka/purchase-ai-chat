@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { Bitrix24ErrorCode } from '../../../../server/utils/errors'
 import { fakeOk, makeFakeBitrix24 } from '../../_helpers/bitrix24-mock'
 
 vi.mock('@nuxtjs/mcp-toolkit/server', () => ({
@@ -128,10 +129,18 @@ describe('b24_user_find', () => {
     })
   })
 
-  it('returns a guidance message and does not call Bitrix24 when no filter is supplied', async () => {
-    const result = await tool.handler({})
+  it('throws INVALID_INPUT (not a soft message) and does not call Bitrix24 when no filter is supplied', async () => {
+    // Semantic-validation failures throw so the agent sees isError:true,
+    // consistent with every other tool (issue #222). Reject ONE invocation's
+    // promise twice — a rejected promise can be awaited repeatedly — so we
+    // don't double-invoke the handler.
+    const rejection = tool.handler({})
+    await expect(rejection).rejects.toMatchObject({
+      name: 'Bitrix24ToolError',
+      code: Bitrix24ErrorCode.INVALID_INPUT,
+    })
+    await expect(rejection).rejects.toThrow(/Provide at least one of/i)
     expect(fake.v2Call).not.toHaveBeenCalled()
-    expect(result.content[0]!.text).toMatch(/Provide at least one of/i)
   })
 
   it('caps the result count to `limit` (default 10) and reports truncation', async () => {
@@ -160,10 +169,14 @@ describe('b24_user_find', () => {
     expect('truncatedAt' in payload).toBe(false)
   })
 
-  it('rejects mixing free-text query with structured filters', async () => {
-    const result = await tool.handler({ query: 'Игорь', lastName: 'Шевченко' })
+  it('throws INVALID_INPUT when free-text query is mixed with structured filters', async () => {
+    const rejection = tool.handler({ query: 'Игорь', lastName: 'Шевченко' })
+    await expect(rejection).rejects.toMatchObject({
+      name: 'Bitrix24ToolError',
+      code: Bitrix24ErrorCode.INVALID_INPUT,
+    })
+    await expect(rejection).rejects.toThrow(/Use either `query`/i)
     expect(fake.v2Call).not.toHaveBeenCalled()
-    expect(result.content[0]!.text).toMatch(/Use either `query`/i)
   })
 
   it('returns `id: null` instead of NaN when Bitrix24 emits a non-numeric ID', async () => {

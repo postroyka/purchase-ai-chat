@@ -14,7 +14,7 @@
         init-network server-up server-down \
         up down pull redeploy logs ps \
         watchtower-up watchtower-down watchtower-stop watchtower-start \
-        build-dxt verify verify-local clean
+        build-dxt verify verify-local bootstrap-check clean
 
 WATCHTOWER_COMPOSE := docker-compose.watchtower.yml
 
@@ -117,6 +117,17 @@ watchtower-stop:
 # Resume Watchtower after the rollback is verified stable.
 watchtower-start:
 	docker compose -f docker-compose.yml -f $(WATCHTOWER_COMPOSE) start watchtower
+
+# ─── Bootstrap check ─────────────────────────────────────────────────────────
+
+# Verify that the deploy directory contains all required files.
+# Run after first-time bootstrap (or git sparse-checkout) to confirm the setup
+# is complete before proceeding to `make redeploy`.
+bootstrap-check:
+	@test -f docker-compose.yml || { echo "ERROR: docker-compose.yml not found — run scripts/bootstrap.sh (see docs/DEPLOYMENT.md)"; exit 1; }
+	@test -n "$(VERIFY_SCRIPT)" && test -x "$(VERIFY_SCRIPT)" || { echo "ERROR: verify-deployment.sh not found or not executable in scripts/ (or src/scripts/) — run: chmod +x scripts/verify-deployment.sh"; exit 1; }
+	@test -f .env || { echo "ERROR: .env not found — copy from .env.example and fill in values"; exit 1; }
+	@echo "Bootstrap check passed."
 
 # ─── Smoke test ───────────────────────────────────────────────────────────────
 
