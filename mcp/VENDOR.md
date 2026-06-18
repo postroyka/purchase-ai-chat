@@ -15,9 +15,14 @@
 
 ## Как обновлять (ре-вендор)
 
-1. Снять новый релиз upstream **по тегу** (не `main` — он движется без ревью):
+`mcp/` исторически импортирован через `git subtree`, но ре-вендор делаем **зеркалированием**
+(rsync) — надёжнее и без конфликтов при крупных скачках версий. Это каноническая процедура
+(корневой `README.md` ссылается сюда). Всегда по ТЕГУ (не `main` — он движется без ревью):
+
+1. Снять новый релиз upstream **полным** клоном (НЕ `--depth 1` — на шаге 3 нужна история
+   до записанного SHA, иначе `git diff` упадёт с `fatal: invalid object`):
    ```bash
-   git clone --depth 1 --branch <vX.Y.Z> https://github.com/bitrix24/templates-mcp /tmp/tpl
+   git clone --branch <vX.Y.Z> https://github.com/bitrix24/templates-mcp /tmp/tpl
    ```
 2. Зеркалировать в `mcp/`, не трогая артефакты/зависимости:
    ```bash
@@ -43,3 +48,6 @@
   `b24_pst_crm_*` (overlay). Срез подтверждается assert'ом в Dockerfile.
 - OAuth/DXT-мультитенант выключен и закреплён на уровне образа
   (`ENV NUXT_BITRIX24_OAUTH_ENABLED=false`). Мы — webhook-only (`NUXT_MCP_AUTH_TOKEN`).
+  ⚠️ Включать OAuth только с **постоянным томом** под SQLite-token-store (`better-sqlite3`):
+  без тома Bearer-токены лежат в эфемерном слое контейнера и теряются при рестарте
+  (пользователи получат 401). Детали флага — в `mcp/.env.example` (блок OAUTH).
