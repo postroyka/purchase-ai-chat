@@ -18,7 +18,7 @@
     "@bitrix24/b24jssdk": "^1.2.0",
     "@bitrix24/b24jssdk-nuxt": "^1.2.0",
     "@bitrix24/b24ui-nuxt": "^2.8.0",
-    "@internationalized/date": "^3.12.1",
+    "@internationalized/date": "^3.12.2",
     "@nuxtjs/i18n": "^10.2.4",
     "@tanstack/table-core": "^8.21.3",
     "@tanstack/vue-table": "^8.21.3",
