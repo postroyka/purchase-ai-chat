@@ -108,16 +108,12 @@ export function createSessionAuth(config = {}) {
     } catch {
       return null;
     }
-    const expected = sign(bodyStr);
-    let provided;
-    try {
-      provided = fromB64url(sigB64);
-    } catch {
-      return null;
-    }
-    // safeCompare hashes both sides, so a length mismatch between provided/expected can't throw
-    // and doesn't leak length — a forged signature of any length is rejected in constant time.
-    if (!safeCompare(provided, expected)) return null;
+    // Compare the CANONICAL base64url signature STRINGS (ASCII), not the raw HMAC bytes: safeCompare
+    // hashes both sides, and feeding it binary Buffers would round-trip them through utf8 (lossy for
+    // non-UTF8 bytes). Our issue() always emits canonical unpadded base64url, so a legit token's
+    // sigB64 equals b64url(expected); a forgery can't reproduce it without the secret. Constant-time.
+    const expectedB64 = b64url(sign(bodyStr));
+    if (!safeCompare(sigB64, expectedB64)) return null;
 
     let payload;
     try {
