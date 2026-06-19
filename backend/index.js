@@ -242,8 +242,10 @@ export function createApp(config = {}) {
   // CSP (#105): pragmatic, not maximal. 'unsafe-inline' is retained for script/style because
   // the Nuxt production bundle emits inline hydration/styles, so this does NOT stop inline-script
   // XSS — TODO: nonce-based CSP (drop 'unsafe-inline') as a #105 follow-up; do not consider P2
-  // fully closed by this. The lever that still bites here is `connect-src 'self'`: it blocks an
-  // XSS payload from POSTing the (currently client-visible) backend token to an attacker origin.
+  // fully closed by this. connect-src allows 'self' + the Bitrix24 portals: the b24jssdk loads
+  // app/profile/currency by XHR-ing the portal REST (batch) directly, so locking it to 'self' breaks
+  // the in-frame SDK init (block:csp) and with it installFinish + helper data. The backend token is
+  // no longer in the browser (#133/#173), so widening connect-src doesn't reopen a token-exfil path.
   // object-src/base-uri close base-tag injection. frame-ancestors allowlists who may iframe the
   // app: our own origin + Bitrix24 portals (the app runs inside the portal's iframe as a local
   // app). For a self-hosted Bitrix24 box set B24_FRAME_ANCESTORS to your portal origin(s),
@@ -260,7 +262,7 @@ export function createApp(config = {}) {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self' data:",
-    "connect-src 'self'",
+    `connect-src 'self' ${frameAncestors}`,
     "object-src 'none'",
     "base-uri 'self'",
     `frame-ancestors 'self' ${frameAncestors}`,

@@ -758,7 +758,10 @@ describe('Security headers', () => {
     const res = await request(app).get('/health');
     const csp = res.headers['content-security-policy'];
     expect(csp).toContain("default-src 'self'");
-    expect(csp).toContain("connect-src 'self'");      // anti-exfil lever
+    // connect-src must include the Bitrix24 portals, not just 'self': the b24jssdk loads
+    // app/profile/currency by XHR-ing the portal REST (batch) directly, so 'self' alone is
+    // block:csp and breaks the in-frame SDK init (installFinish + helper data).
+    expect(csp).toMatch(/connect-src 'self' https:\/\/\*\.bitrix24\.ru/);
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("frame-ancestors 'self'");  // clickjacking: same-origin…
     expect(csp).toContain('https://*.bitrix24.ru');   // …+ порталы Bitrix24 (работа во фрейме)
