@@ -617,7 +617,7 @@ export function createApp(config = {}) {
     return res.json({
       jobId: job.jobId,
       status: job.status,
-      files: job.files.map(({ name, status, result, error }) => ({ name, status, result, error })),
+      files: job.files.map(({ name, status, result, error, problem }) => ({ name, status, result, error, problem })),
     });
   });
 
@@ -749,6 +749,26 @@ export function createApp(config = {}) {
 // status transitions (pending → processing → done/error) to the jobs store.
 // NOTE: assumes single-process deployment — no distributed locking. Multi-instance
 // deployments would need a queue (e.g. BullMQ) to prevent duplicate processing.
+// Human-readable RU reason shown on the result page when a file finished WITHOUT a created deal
+// (issue #192) — keyed by the agent's business-error code (prompts/main.md). We do NOT echo the
+// agent's result.message (it derives from untrusted document text); a fixed message per code keeps
+// it safe and clear. Unknown code / no-error-but-no-deal fall back to a generic line.
+const PROBLEM_MESSAGES = {
+  unreadable_document: 'Не удалось распознать документ — нет читаемого текста. Загрузите чёткий скан или PDF счёта.',
+  foreign_supplier: 'Поставщик не из РБ (российские реквизиты ИНН/КПП) — сделка не создаётся.',
+  unsupported_currency: 'Валюта документа не BYN — сделка не создаётся.',
+  supplier_not_found: 'Поставщик не найден в Битрикс24 по УНП из документа.',
+  contract_not_found: 'У поставщика не найден активный договор закупки.',
+  missing_responsible: 'Не задан ответственный пользователь — сделку некому назначить.',
+  tool_unavailable: 'Сервис Битрикс24 временно недоступен. Повторите попытку позже.',
+};
+function problemMessage(result) {
+  const code = result && typeof result === 'object' && typeof result.error === 'string' ? result.error : null;
+  if (code && Object.prototype.hasOwnProperty.call(PROBLEM_MESSAGES, code)) return PROBLEM_MESSAGES[code];
+  if (code) return 'Не удалось обработать документ — сделка не создана.';
+  return 'Сделка не создана — проверьте, что это счёт/спецификация (PDF или изображение).';
+}
+
 // Process the agent result's optional `feedback[]` (developer feedback about our MCP tools/prompt,
 // issue #182 channel «агент»): count each by kind in metrics and hand it to the deduping reporter,
 // which decides whether to open a GitHub issue. Bounded (≤10/file) against a prompt-injected document
@@ -802,6 +822,14 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       const outcome = (result && typeof result === 'object' && typeof result.error === 'string')
         ? result.error
         : 'ok';
+      // issue #192: if the file finished WITHOUT a created deal (a business error, or an
+      // unrecognised document that yielded no deal), attach a human-readable reason so the result
+      // page shows WHY instead of a bare green "Готово". Status stays 'done' — it was processed.
+      const dealId = result && typeof result === 'object' && result.deal && typeof result.deal === 'object'
+        ? result.deal.dealId : undefined;
+      fileEntry.problem = (dealId == null || String(dealId).trim() === '')
+        ? problemMessage(result).slice(0, MAX_ERROR_CHARS)
+        : null;
       // Count recognised line items + those missing a supplier article (vendorCode) for the
       // savings estimate (#75). Items are present even when the deal couldn't be created
       // (e.g. tool_unavailable) — the recognition/matching work was still done.
