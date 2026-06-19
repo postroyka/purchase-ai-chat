@@ -157,14 +157,35 @@
                 </B24Button>
               </div>
 
+              <!-- К какому файлу относится отзыв (только если файлов больше одного). Выбранный файл
+                   и его сделка уезжают в issue — иначе по jobId триажить пакет из 5 файлов тяжело. -->
+              <div v-if="job.files.length > 1" class="mt-3">
+                <p class="text-xs text-base-500">
+                  К какому файлу относится?
+                </p>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <B24Button
+                    v-for="file in job.files"
+                    :key="file.name"
+                    :color="feedbackFileName === file.name ? 'air-primary' : 'air-tertiary'"
+                    size="xs"
+                    class="max-w-full"
+                    @click="feedbackFileName = file.name"
+                  >
+                    <span class="truncate">{{ file.name }}</span>
+                  </B24Button>
+                </div>
+              </div>
+
               <B24Textarea
                 v-model="feedbackComment"
                 class="mt-3 w-full"
                 :rows="3"
                 :maxrows="8"
+                :maxlength="5000"
                 autoresize
                 :disabled="feedbackSubmitting"
-                placeholder="Что было не так или что понравилось? Можно указать файл/позицию."
+                placeholder="Что было не так или что понравилось? Можно указать позицию."
               />
 
               <div class="mt-3 flex justify-end">
@@ -458,6 +479,7 @@ function resetState() {
   feedbackComment.value = ''
   feedbackSent.value = false
   feedbackSubmitting.value = false
+  feedbackFileName.value = null
 }
 
 // ── Обратная связь сотрудника (issue #182) ─────────────────────────────────────
@@ -477,6 +499,16 @@ const feedbackKind = ref<FeedbackKind | null>(null)
 const feedbackComment = ref('')
 const feedbackSubmitting = ref(false)
 const feedbackSent = ref(false)
+// Файл, к которому относится отзыв (по имени — устойчиво к смене объектов между опросами).
+// Для пакета из нескольких файлов пользователь выбирает один; для одного файла — он же по умолчанию.
+const feedbackFileName = ref<string | null>(null)
+
+// Целевой файл отзыва: выбранный по имени, иначе первый из задания. Его имя и сделка уезжают в issue.
+const feedbackTarget = computed<FileEntry | null>(() => {
+  const files = job.value?.files ?? []
+  if (!files.length) return null
+  return files.find(f => f.name === feedbackFileName.value) ?? files[0]!
+})
 
 // Отправляем, только когда выбран тип и есть текст (бэкенд требует непустой комментарий).
 const canSubmitFeedback = computed(() =>
@@ -487,7 +519,12 @@ async function submitFeedback() {
   if (!feedbackKind.value || !canSubmitFeedback.value || !job.value) return
   feedbackSubmitting.value = true
   try {
-    await submitFeedbackApi(feedbackKind.value, feedbackComment.value.trim(), { jobId: job.value.jobId })
+    const target = feedbackTarget.value
+    await submitFeedbackApi(feedbackKind.value, feedbackComment.value.trim(), {
+      jobId: job.value.jobId,
+      fileName: target?.name,
+      dealId: target ? dealOf(target)?.dealId : undefined
+    })
     feedbackSent.value = true
     toast.add({ title: 'Спасибо за отзыв!', color: 'air-primary-success', duration: 4000 })
   } catch (e: unknown) {

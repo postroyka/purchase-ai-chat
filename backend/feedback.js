@@ -99,7 +99,10 @@ export function formatIssueBody({ kind, comment, context = {} }) {
     contextLine('User-Agent', context.userAgent),
   ].filter(Boolean);
 
-  const safeComment = escapeHtml(comment).trim() || '(без текста)';
+  // Strip hostile chars here too (not only in sanitizeComment): formatIssueBody is exported and may
+  // be called directly with raw input (e.g. tests), so it must neutralise Trojan-Source/zero-widths
+  // on its own rather than assume a pre-sanitised comment. escapeHtml then makes HTML/Markdown inert.
+  const safeComment = escapeHtml(stripHostileChars(comment)).trim() || '(без текста)';
 
   return [
     '## Контекст',
@@ -139,17 +142,19 @@ export function buildIssue({ kind, comment, context = {} }) {
  * token, the URL, or the upstream body in the thrown message — the route logs only the code.
  *
  * @param {{ repo: string, token: string, title: string, body: string, labels?: string[],
- *           fetchImpl?: typeof fetch }} input
+ *           fetchImpl?: typeof fetch, timeoutMs?: number }} input
  * @returns {Promise<{ url: string, number: number }>}
  */
-export async function createGithubIssue({ repo, token, title, body, labels = [], fetchImpl = fetch }) {
+export async function createGithubIssue({ repo, token, title, body, labels = [], fetchImpl = fetch, timeoutMs = 10000 }) {
   if (!token) {
     throw new GithubFeedbackError('GitHub feedback token is not configured on the server.', 'NOT_CONFIGURED');
   }
   // Guard the operator-supplied repo before it lands in the request path. The host is fixed (no
   // SSRF), but an unvalidated value like `../../users/x` would still let a misconfiguration retarget
-  // the API call. GitHub repo slugs are `owner/repo` over a conservative charset.
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repo))) {
+  // the API call. GitHub repo slugs are `owner/repo` over a conservative charset, and neither segment
+  // may be `.`/`..` (which the charset above would otherwise admit — defence-in-depth path-traversal).
+  const slug = String(repo);
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(slug) || /(^|\/)\.\.?(\/|$)/.test(slug)) {
     throw new GithubFeedbackError('GitHub feedback repo is misconfigured — expected "owner/repo".', 'NOT_CONFIGURED');
   }
 
@@ -168,7 +173,8 @@ export async function createGithubIssue({ repo, token, title, body, labels = [],
       body: JSON.stringify({ title, body, labels }),
       // Bound a hung GitHub so a /feedback POST can't pin a request; redirect:'error' is
       // defence-in-depth (the host is fixed, but never follow a 3xx to an unintended address).
-      signal: AbortSignal.timeout(10000),
+      // timeoutMs is injectable so tests can exercise the abort→NETWORK path without a real 10s wait.
+      signal: AbortSignal.timeout(timeoutMs),
       redirect: 'error',
     });
   } catch {

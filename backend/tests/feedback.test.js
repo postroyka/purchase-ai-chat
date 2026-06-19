@@ -122,6 +122,15 @@ describe('buildIssue / formatIssueBody', () => {
     expect(title).toContain('ab');
     expect(title).not.toContain(RLO);
   });
+
+  it('formatIssueBody strips hostile chars from the comment even when called directly (raw input)', () => {
+    // formatIssueBody is exported and may be called without buildIssue's sanitizeComment, so it must
+    // neutralise Trojan-Source/zero-widths on its own.
+    const body = formatIssueBody({ kind: 'problem', comment: `a${RLO}b${ZWSP}c` });
+    expect(body).toContain('abc');
+    expect(body).not.toContain(RLO);
+    expect(body).not.toContain(ZWSP);
+  });
 });
 
 // ── Module: createGithubIssue ─────────────────────────────────────────────────
@@ -174,6 +183,32 @@ describe('createGithubIssue', () => {
       .rejects.toMatchObject({ code: 'UPSTREAM' });
     await expect(createGithubIssue({ repo: 'owner/repo', token: GH_TOKEN, title: 't', body: 'b', fetchImpl: fakeFetch({ json: { number: 1 } }) }))
       .rejects.toMatchObject({ code: 'UPSTREAM' }); // missing html_url
+  });
+
+  it('maps a non-401/404 error status (e.g. 500) to UPSTREAM (generic branch)', async () => {
+    await expect(createGithubIssue({ repo: 'owner/repo', token: GH_TOKEN, title: 't', body: 'b', fetchImpl: fakeFetch({ ok: false, status: 500 }) }))
+      .rejects.toMatchObject({ code: 'UPSTREAM' });
+  });
+
+  it('rejects a repo slug with . or .. segments BEFORE any network call (path-traversal defence)', async () => {
+    const fetchImpl = fakeFetch();
+    await expect(createGithubIssue({ repo: 'owner/..', token: GH_TOKEN, title: 't', body: 'b', fetchImpl }))
+      .rejects.toMatchObject({ code: 'NOT_CONFIGURED' });
+    await expect(createGithubIssue({ repo: './repo', token: GH_TOKEN, title: 't', body: 'b', fetchImpl }))
+      .rejects.toMatchObject({ code: 'NOT_CONFIGURED' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('maps an aborted (timed-out) request to NETWORK', async () => {
+    // fetchImpl that never resolves but rejects when the injected AbortSignal fires — exercises the
+    // real timeout→abort→NETWORK path (distinct from a synchronous throw). Small timeoutMs = fast test.
+    const fetchImpl = (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    });
+    const err = await createGithubIssue({ repo: 'owner/repo', token: GH_TOKEN, title: 't', body: 'b', fetchImpl, timeoutMs: 5 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(GithubFeedbackError);
+    expect(err.code).toBe('NETWORK');
   });
 });
 
@@ -254,6 +289,48 @@ describe('POST /feedback', () => {
       .send({ kind: 'problem', comment: 'boom' });
     expect(res.status).toBe(502);
     expect(JSON.stringify(res.body)).not.toContain(GH_TOKEN);
+  });
+
+  it('drops malformed context fields but still creates the issue (201)', async () => {
+    const fetchImpl = fakeFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const res = await request(appWith())
+      .post('/feedback')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'x', context: { jobId: 'bad id!', dealId: 'NaN', fileName: 'f'.repeat(500) } });
+    expect(res.status).toBe(201);
+    const payload = JSON.parse(fetchImpl.calls[0].init.body);
+    // Bad jobId/dealId fail the charset regexes → dropped → their context lines are absent entirely.
+    expect(payload.body).not.toContain('bad id!');
+    expect(payload.body).not.toContain('Задача (jobId)');
+    expect(payload.body).not.toContain('Сделка');
+    // fileName is kept but capped at 300 chars (not the full 500).
+    expect(payload.body).toContain('f'.repeat(300));
+    expect(payload.body).not.toContain('f'.repeat(301));
+  });
+
+  it('records the cookie session sub as the issue reporter (drives the real verify→sub path)', async () => {
+    const fetchImpl = fakeFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const app = appWith({ basicAuthUser: 'jane-operator', basicAuthPass: 'secret-pass' });
+    const cookie = (await request(app).post('/login').set('X-PAI-Auth', '1')
+      .send({ username: 'jane-operator', password: 'secret-pass' })).headers['set-cookie'];
+    const res = await request(app).post('/feedback').set('Cookie', cookie).set('X-PAI-Auth', '1')
+      .send({ kind: 'positive', comment: 'ok' });
+    expect(res.status).toBe(201);
+    const payload = JSON.parse(fetchImpl.calls[0].init.body);
+    expect(payload.body).toContain('jane-operator'); // «Кто сообщил: jane-operator»
+  });
+
+  it('a FAILED GitHub attempt still consumes a rate-limit slot (discourages retry loops)', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 500 })); // every GitHub call fails → 502
+    const app = appWith({ feedbackRateLimitMax: 1 });
+    const first = await request(app).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'one' });
+    expect(first.status).toBe(502); // GitHub failed
+    const second = await request(app).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'two' });
+    expect(second.status).toBe(429); // the failed first attempt already burned the only slot
   });
 
   it('enforces the per-client rate limit (default counts attempts)', async () => {

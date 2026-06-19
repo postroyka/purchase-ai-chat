@@ -105,12 +105,15 @@ function decodeOriginalName(name) {
 // flooding /upload can't exhaust the agent subprocess pool, and the raw token never becomes a
 // Redis key). Prefers Redis (shared across instances + survives restart, #105); falls back to
 // an in-memory Map when no Redis client is supplied (dev/tests/single-process).
-function createRateLimiter({ windowMs, max, redisClient = null }) {
+function createRateLimiter({ windowMs, max, redisClient = null, keyFn = null }) {
   const hits = new Map(); // process-local fallback
+  // Bucket identity. Default: the Authorization header (programmatic callers) or the client IP
+  // (cookie sessions carry no Authorization header). A caller may override via keyFn — e.g. /feedback
+  // keys on the verified session `sub` so one portal's staff behind a shared NAT don't share a bucket.
+  // Whatever identity string is returned is hashed uniformly here (the raw value never becomes a key).
+  const identityFor = keyFn || ((req) => String(req.headers['authorization'] || req.ip || 'anon'));
   const keyFor = (req) =>
-    'rl:' + createHash('sha256')
-      .update(String(req.headers['authorization'] || req.ip || 'anon'))
-      .digest('hex').slice(0, 32);
+    'rl:' + createHash('sha256').update(identityFor(req)).digest('hex').slice(0, 32);
 
   // Redis fixed-window: INCR the counter and (re)arm the window TTL. We pexpire on EVERY hit,
   // not just the first: if the process died between INCR and pexpire on the first hit, the key
@@ -237,10 +240,18 @@ export function createApp(config = {}) {
   const githubFeedbackToken = config.githubFeedbackToken ?? process.env.GITHUB_FEEDBACK_TOKEN ?? '';
   const githubFeedbackRepo = config.githubFeedbackRepo
     ?? process.env.GITHUB_FEEDBACK_REPO ?? 'postroyka/purchase-ai-chat';
-  const feedbackRateLimitMax = config.feedbackRateLimitMax
+  // Guard NaN explicitly: a garbled FEEDBACK_RATE_LIMIT_MAX would otherwise become NaN, which the
+  // limiter reads as "disabled" (fail-OPEN) — the wrong direction for an anti-spam-into-our-repo
+  // control. Number.isFinite keeps a deliberate 0 (disable) working while a garbled value → default 5.
+  const parsedFeedbackMax = config.feedbackRateLimitMax
     ?? parseInt(process.env.FEEDBACK_RATE_LIMIT_MAX ?? '5', 10);
-  const feedbackRateLimitWindowMs = config.feedbackRateLimitWindowMs
+  const feedbackRateLimitMax = Number.isFinite(parsedFeedbackMax) ? parsedFeedbackMax : 5;
+  const parsedFeedbackWindow = config.feedbackRateLimitWindowMs
     ?? parseInt(process.env.FEEDBACK_RATE_LIMIT_WINDOW_MS ?? '3600000', 10);
+  // A non-finite or non-positive window breaks the limiter (pexpire(NaN) throws → fails open;
+  // memory path's `now - t < NaN` is always false → never blocks) → fall back to 1h.
+  const feedbackRateLimitWindowMs = Number.isFinite(parsedFeedbackWindow) && parsedFeedbackWindow > 0
+    ? parsedFeedbackWindow : 3600000;
 
   const app = express();
   // Behind nginx-proxy the real client IP is in X-Forwarded-For; without trusting the proxy, req.ip
@@ -363,13 +374,19 @@ export function createApp(config = {}) {
   });
 
   // Feedback anti-spam (issue #182): cap how many issues one client can open into our GitHub repo
-  // per window (default 5/hour). Same Redis-backed limiter as the others (multi-instance-safe);
-  // keyed by auth-header hash or, for cookie sessions with no Authorization header, by IP. Counts
-  // ATTEMPTS — a failed GitHub call still consumes a slot, discouraging tight retry loops.
+  // per window (default 5/hour). Same Redis-backed limiter as the others (multi-instance-safe).
+  // Counts ATTEMPTS — a failed GitHub call still consumes a slot, discouraging tight retry loops.
+  // Keyed on the authenticated identity (session `sub` like `b24:<portal>`, or `api-token`) rather
+  // than IP, so a whole portal's staff behind one office NAT don't share a single bucket (one active
+  // reviewer would otherwise starve the rest). feedbackReporter is hoisted (function declaration).
   const feedbackRateLimit = createRateLimiter({
     windowMs: feedbackRateLimitWindowMs,
     max: feedbackRateLimitMax,
     redisClient: rateLimitRedis,
+    keyFn: (req) => {
+      const who = feedbackReporter(req);
+      return who && who !== 'unknown' ? `fb-sub:${who}` : `fb-ip:${req.ip || 'anon'}`;
+    },
   });
 
   // Track in-flight processJob calls so graceful shutdown can wait for them.
@@ -639,14 +656,16 @@ export function createApp(config = {}) {
   // the browser. Leaks only a boolean (is the GitHub channel configured), never the token or repo.
   app.get('/feedback/config', (_req, res) => res.json({ enabled: Boolean(githubFeedbackToken) }));
 
+  // 503 when the channel is unconfigured — placed BEFORE the rate limiter so hitting a dead endpoint
+  // can't burn a client's quota (and after requireAuth so it doesn't leak config state to anon).
+  const requireFeedbackConfigured = (_req, res, next) =>
+    githubFeedbackToken ? next() : res.status(503).json({ error: 'Feedback channel is not configured' });
+
   // POST /feedback — authenticated employee feedback → a GitHub issue in githubFeedbackRepo. Order of
   // middleware matters: requireAuth (gate to app users — cookie session + X-PAI-Auth, or Bearer) →
-  // feedbackRateLimit (bound spam to our repo) → express.json (small body) → handler. Mounted BEFORE
-  // the static catch-all so the SPA route doesn't shadow it.
-  app.post('/feedback', requireAuth, feedbackRateLimit, express.json({ limit: '32kb' }), async (req, res) => {
-    if (!githubFeedbackToken) {
-      return res.status(503).json({ error: 'Feedback channel is not configured' });
-    }
+  // requireFeedbackConfigured (503 if off) → feedbackRateLimit (bound spam to our repo) → express.json
+  // (small body) → handler. Mounted BEFORE the static catch-all so the SPA route doesn't shadow it.
+  app.post('/feedback', requireAuth, requireFeedbackConfigured, feedbackRateLimit, express.json({ limit: '32kb' }), async (req, res) => {
     const body = req.body ?? {};
     const kind = normalizeKind(body.kind);
     if (!kind) {
