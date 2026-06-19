@@ -109,6 +109,25 @@
             >
               {{ file.error }}
             </p>
+
+            <!-- Созданная сделка: внутри B24 открываем слайдером, иначе ссылкой -->
+            <div
+              v-if="file.status === 'done' && dealOf(file)"
+              class="mt-3 flex items-center justify-between gap-3"
+            >
+              <span class="text-xs text-base-500">
+                Сделка #{{ dealOf(file)!.dealId }}
+              </span>
+              <B24Button
+                v-if="canOpenDeal(dealOf(file)!)"
+                color="air-primary"
+                size="xs"
+                class="shrink-0"
+                @click="openDeal(dealOf(file)!)"
+              >
+                Открыть сделку
+              </B24Button>
+            </div>
           </B24Card>
 
           <div v-if="job.status === 'done' || job.status === 'error'" class="flex justify-center pt-2">
@@ -201,6 +220,45 @@ const JOB_COLORS: Record<StatusKey, BadgeColor> = {
 
 const FILE_LABELS = JOB_LABELS
 const FILE_COLORS = JOB_COLORS
+
+// ── Созданная сделка ───────────────────────────────────────────────────────────
+// Достаём ссылку на сделку из результата файла и открываем её. Внутри Bitrix24 —
+// нативным слайдером (не уводит из приложения); вне портала — ссылкой в новой вкладке
+// (если бэкенд отдал абсолютный deal.url).
+const b24 = useB24()
+
+interface CreatedDeal { dealId: string, url: string | null }
+
+function dealOf(file: FileEntry): CreatedDeal | null {
+  const deal = (file.result as { deal?: { dealId?: string | number | null, url?: string | null } } | undefined)?.deal
+  const id = deal?.dealId
+  if (id == null || String(id).trim() === '') return null
+  return { dealId: String(id), url: deal?.url ?? null }
+}
+
+// Кнопку показываем только когда сделку реально есть чем открыть: внутри B24 (слайдер)
+// или когда есть абсолютная ссылка от бэкенда (standalone).
+function canOpenDeal(deal: CreatedDeal): boolean {
+  return b24.isInit() || Boolean(deal.url)
+}
+
+async function openDeal(deal: CreatedDeal): Promise<void> {
+  const path = `/crm/deal/details/${deal.dealId}/`
+  const frame = b24.get()
+  if (frame) {
+    try {
+      await frame.slider.openPath(frame.slider.getUrl(path))
+      return
+    } catch {
+      // Слайдер не открылся — пробуем ту же ссылку в новой вкладке.
+      try {
+        window.open(frame.slider.getUrl(path).toString(), '_blank', 'noopener')
+        return
+      } catch { /* падаем во фолбэк ниже */ }
+    }
+  }
+  if (deal.url) window.open(deal.url, '_blank', 'noopener')
+}
 
 // ── API ───────────────────────────────────────────────────────────────────────
 // Backend calls go through useApi (#41/#105 P1): no token in the bundle. In prod the app-session
