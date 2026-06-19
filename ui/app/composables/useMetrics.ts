@@ -1,6 +1,6 @@
 // Fetches the lifetime usage snapshot from the backend (GET /metrics/data) and keeps it fresh.
-// Mirrors the upload page: same-origin call with no browser token — auth via the HTTP Basic session.
-// The fetch runs only on the client (onMounted) so prerendering the page never calls the API.
+// Mirrors the upload page: no browser token — auth via the app-session cookie + X-PAI-Auth header
+// (added by useApi). The fetch runs only on the client (onMounted) so prerendering never calls it.
 
 export interface MetricNamedCount { name: string, count: number }
 
@@ -44,6 +44,7 @@ export interface MetricsSnapshot {
 const REFRESH_MS = 30_000
 
 export function useMetrics() {
+  const { apiFetch } = useApi()
   const data = ref<MetricsSnapshot | null>(null)
   const error = ref<string | null>(null)
   const pending = ref(false)
@@ -58,8 +59,9 @@ export function useMetrics() {
     const { signal } = controller
     pending.value = true
     try {
-      // Same-origin, no token (#41/#105 P1): browser HTTP Basic session (prod) / dev-proxy (dev) auth.
-      const snapshot = await $fetch<MetricsSnapshot>('/metrics/data', {
+      // No token in the bundle (#41/#105 P1): app-session cookie + X-PAI-Auth (via useApi) in prod,
+      // dev-proxy Bearer in dev.
+      const snapshot = await apiFetch<MetricsSnapshot>('/metrics/data', {
         cache: 'no-store',
         signal
       })

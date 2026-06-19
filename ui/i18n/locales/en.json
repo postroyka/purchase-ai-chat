@@ -5,6 +5,16 @@
       "description": "Changes will not be applied."
     }
   },
+  "login": {
+    "title": "Sign in",
+    "subtitle": "Enter your credentials to continue.",
+    "username": "Username",
+    "password": "Password",
+    "submit": "Sign in",
+    "failed": "Sign-in failed",
+    "invalid": "Invalid username or password.",
+    "error": "Could not sign in. Please try again."
+  },
   "page": {
     "index": {
       "seo": {

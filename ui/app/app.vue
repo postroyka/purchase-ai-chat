@@ -11,6 +11,8 @@ const config = useRuntimeConfig()
 const toast = useToast()
 const { locale, defaultLocale, locales: localesI18n, setLocale } = useI18n()
 const b24Instance = useB24()
+const appAuth = useAppAuth()
+const { needsLogin } = appAuth
 const { isBitrixMobile } = useDevice()
 
 const isLoading = ref(true)
@@ -74,17 +76,31 @@ onMounted(async () => {
     }
   }
 
+  // Establish the backend app session: inside B24 silently via /session/b24 (from the frame's
+  // auth); standalone via GET /session, flipping needsLogin to show the login overlay if no
+  // cookie session exists yet. The /install page runs its own flow (installFinish) and is not
+  // gated here — see the template guard below.
+  await appAuth.bootstrap(b24Instance.isInit(), b24Instance.get())
+
   // Used to display the connection loading indicator
   await sleepAction(1000)
   isLoading.value = false
 })
+
+// Don't cover the Bitrix24 install handler (/install) with the standalone login overlay — that
+// page is shown by B24 itself and drives installFinish().
+const route = useRoute()
+const showLoginGate = computed(() => needsLogin.value && route.path !== '/install')
 </script>
 
 <template>
   <B24App :toaster="toaster" :locale="locales[locale]">
     <NuxtLoadingIndicator />
 
-    <NuxtLayout>
+    <!-- Standalone login overlay: shown only outside Bitrix24 when no session exists yet. Inside
+         B24 the session is established silently, so this never appears there. -->
+    <LoginGate v-if="showLoginGate" />
+    <NuxtLayout v-else>
       <NuxtPage />
     </NuxtLayout>
   </B24App>

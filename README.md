@@ -41,21 +41,22 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 
 | Переменная | Контейнер | Обязательно | Описание |
 |---|---|---|---|
-| `BACKEND_API_TOKEN` | app | ✅ | Bearer для `/upload`, `/job/:id/status`, `/metrics/data`. **Серверный** — в браузер не попадает: UI авторизуется HTTP Basic (см. `PUBLIC_PAGE_BASIC_AUTH_*`), #41/#105 P1 |
+| `BACKEND_API_TOKEN` | app | ✅ | Bearer для `/upload`, `/job/:id/status`, `/metrics/data`. **Серверный** — в браузер не попадает: UI авторизуется сессией приложения (форма `/login` вне портала или `/session/b24` внутри Bitrix24; см. `PUBLIC_PAGE_BASIC_AUTH_*`), #41/#105 P1 |
 | `REDIS_PASSWORD` | app/redis | ✅ | Пароль Redis (тот же подставляется в `REDIS_URL` в compose) |
 | `NUXT_MCP_AUTH_TOKEN` | mcp | ✅ | Bearer-токен для `/mcp` endpoint |
 | `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Вебхук Bitrix24: вызывает контроллеры `shef:purchase.api.procure*` + стандартные `crm.*` |
-| `PUBLIC_PAGE_BASIC_AUTH_PASS` | app | ✅ | Пароль публичной страницы |
+| `PUBLIC_PAGE_BASIC_AUTH_PASS` | app | ✅ | Пароль формы входа приложения (`/login`); без него `/login` → 503 |
 | `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | app | ✅¹ | Домен приложения для nginx-proxy + acme |
 | `LETSENCRYPT_EMAIL` | acme | ✅¹ | E-mail для Let's Encrypt (глобально в acme-companion) |
 | `REDIS_URL` | app | — | URL Redis (в compose формируется из `REDIS_PASSWORD`) |
 | `MCP_SERVER_URL` | app | — | URL MCP внутри сети (по умолчанию: `http://mcp:3000/mcp`) |
 | `B24_DEAL_CATEGORY_ID` | mcp | — | Воронка сделок (по умолчанию: `1` «Закупки») |
 | `B24_DEAL_DEFAULT_STAGE_ID` | mcp | — | Стадия сделки (по умолчанию: `C1:NEW`) |
-| `B24_FRAME_ANCESTORS` | app | — | Кто вправе встраивать UI во фрейм (CSP `frame-ancestors`). По умолчанию — облачные домены Bitrix24 (`*.bitrix24.ru/.com/.by`); для self-hosted коробки указать origin портала |
-| `PUBLIC_PAGE_ENABLED` | app | — | Включить публичную страницу (по умолчанию: `true`) |
-| `PUBLIC_PAGE_BASIC_AUTH_USER` | app | — | Логин публичной страницы (по умолчанию: `procure`) |
+| `B24_FRAME_ANCESTORS` | app | — | Кто вправе встраивать UI во фрейм (CSP `frame-ancestors`) **и** allowlist доменов для `/session/b24` (проверка `app.info`). По умолчанию — облачные домены Bitrix24 (`*.bitrix24.ru/.com/.by`); для self-hosted коробки **обязательно** указать origin портала |
+| `PUBLIC_PAGE_BASIC_AUTH_USER` | app | — | Логин формы входа (по умолчанию: `procure`) |
 | `PUBLIC_PAGE_RESPONSIBLE_USER_ID` | app | — | ID пользователя Б24 по умолчанию |
+| `SESSION_SECRET` | app | — | Секрет подписи сессионной cookie. Не задан → выводится из токена+пароля. При нескольких инстансах за балансировщиком задать одинаковым на всех |
+| `SESSION_TTL_HOURS` | app | — | Время жизни сессии в часах (по умолчанию: 12) |
 | `JOB_TTL_HOURS` | app | — | Время хранения задач в Redis (по умолчанию: 24) |
 | `MAX_FILE_SIZE_MB` | app | — | Макс. размер файла (по умолчанию: 20) |
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
@@ -140,13 +141,20 @@ curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
 слоя, исходы обработки (включая `tool_unavailable` / `supplier_not_found`), стоимость прогонов модели и **экономика**.
 
 - **Страница `/metrics`** — часть UI (Nuxt + b24ui), пункт сайдбара **«Метрики»** рядом с
-  **«Загрузка счетов»**. Закрыта тем же **HTTP Basic**, что и весь UI (`PUBLIC_PAGE_BASIC_AUTH_*`).
-  Локально (dev) — `http://localhost:3001/metrics`, в проде — `/metrics` того же origin.
-- **`GET /metrics/data`** — JSON-срез для скриптов, принимает **Bearer-токен ИЛИ Basic**:
+  **«Загрузка счетов»**. Закрыта той же **сессией приложения**, что и весь UI (вход —
+  `PUBLIC_PAGE_BASIC_AUTH_*`). Локально (dev) — `http://localhost:3001/metrics`, в проде —
+  `/metrics` того же origin.
+- **`GET /metrics/data`** — JSON-срез для скриптов, принимает **Bearer-токен** (или сессионную
+  cookie приложения + заголовок `X-PAI-Auth` из браузера):
 
 ```bash
 # BASE и TOKEN — как в блоке «Мониторинг задач (API)» выше
-curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"   # либо Basic-логин страницы
+
+# Программный/скриптовый доступ — Bearer-токен:
+curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"
+
+# Из браузера (UI) — cookie pai_sess + заголовок X-PAI-Auth (добавляет useApi автоматически);
+# Bearer-токен в браузер не передаётся.
 ```
 
 Дашборд оценивает **экономию** (сэкономленное время × ставку − стоимость прогона модели) и
@@ -387,4 +395,4 @@ claude
 
 ---
 
-*Last reviewed: 2026-06-18 (PR #154 — ре-вендор шаблона `mcp/` до upstream v0.3.0 (bitrix24/templates-mcp); OAuth/DXT-мультитенант приехал, но **выключен** (`NUXT_BITRIX24_OAUTH_ENABLED=false`, закреплено в `Dockerfile.mcp`) → webhook-only поведение не изменилось; `Dockerfile.mcp` +`apk add python3 make g++` под нативный `better-sqlite3`; overlay-инструменты переведены на `useBitrix24Tenant()`; добавлен `mcp/VENDOR.md` (SHA снимка); CI: typecheck overlay + `mcp-overlay` в path-фильтре docker-валидации; PR #151 — позиции с артикулом, не найденным в каталоге, больше не попадают в сделку (PHP-страховка в `procuredeal.php`, дублирует Шаг 4 промпта); заголовок сделки → «Импорт прайса от <название поставщика>» (из CRM по `COMPANY_ID`, фолбэк «поставщик #N», обрезка до 255 символов); из доки/смоука убран устаревший `deal:020` (пустой `items[]` → сделка + `no_items_matched`, #150); PR #139 — страница установки приложения Bitrix24 (`/install` → `installFinish`, логика в `useInstall()` + юнит-тесты), регистрация локального приложения (`docs/BITRIX24_APP_SETUP.md`); backend разрешает фрейм Bitrix24 (CSP `frame-ancestors`, env `B24_FRAME_ANCESTORS`, убран `X-Frame-Options`); `ensureSchema` — самостоятельный примитив, в установку не подключён; follow-ups #140–#143; PR #133 — #41/#105 P1: API-токен убран из браузера (UI → same-origin HTTP Basic), удалён `NUXT_PUBLIC_BACKEND_TOKEN`, dev-proxy инжектит `Bearer` на стороне сервера; +UI unit-тесты (vitest) и CI-гард на отсутствие токена в публичном бандле; PR #118 — #104: релиз-гейт деплоя (push в main → только `sha-<sha>`; тег `v*` → `:latest`; `workflow_dispatch` → `:latest` только при зелёном CI) + retry агента на транзиентные сбои провайдера (429/5xx/сеть/таймаут); issue #98 — синхронизация статуса фич в доках: 4 PST-инструмента реализованы, формулировки «заглушки/Week 2» убраны; PR #89 — рабочая REST-интеграция закупок: `shef:purchase.api.*` separator, by-ref `CCrmDeal::Update`/таймлайн, `BEGINDATE`/`documentDate`, гомоглиф-устойчивый и быстрый 1-в-1 поиск артикула/договора, кроссплатформенный smoke + эталонный счёт; PR #82 — `make deploy-images` (ручной деплой образов в GHCR без Actions); PR #81 — `workflow_dispatch` для Deploy; PR #79 — переезд дашборда `/metrics` на Nuxt/b24ui + живой курс USD→BYN из НБРБ (фолбэк `USD_BYN_RATE`); PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef:purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
+*Last reviewed: 2026-06-19 (PR #173 — B24-совместимая аутентификация: убран HTTP Basic (несовместим с iframe Bitrix24), доступ к UI — через app-сессию на подписанной cookie `pai_sess`; вне портала — форма входа `/login` (креды = `PUBLIC_PAGE_BASIC_AUTH_*`), внутри B24 — молча через `/session/b24` (бэкенд валидирует портал вызовом `app.info`, SSRF-allowlist из `B24_FRAME_ANCESTORS`); `requireAuth` = Bearer | cookie+`X-PAI-Auth` (CSRF); `POST /`·`/install` отдают SPA-оболочку (фикс «Cannot POST /install» — B24 грузит обработчики POST-ом); `app.set('trust proxy')` + brute-force-лимиты `/login`·`/session/b24`; `SESSION_SECRET` выводится из пароля (не из API-токена); удалён `PUBLIC_PAGE_ENABLED`; **BREAKING**: браузерный Basic-промпт убран, программные клиенты остаются на Bearer; PR #154 — ре-вендор шаблона `mcp/` до upstream v0.3.0 (bitrix24/templates-mcp); OAuth/DXT-мультитенант приехал, но **выключен** (`NUXT_BITRIX24_OAUTH_ENABLED=false`, закреплено в `Dockerfile.mcp`) → webhook-only поведение не изменилось; `Dockerfile.mcp` +`apk add python3 make g++` под нативный `better-sqlite3`; overlay-инструменты переведены на `useBitrix24Tenant()`; добавлен `mcp/VENDOR.md` (SHA снимка); CI: typecheck overlay + `mcp-overlay` в path-фильтре docker-валидации; PR #151 — позиции с артикулом, не найденным в каталоге, больше не попадают в сделку (PHP-страховка в `procuredeal.php`, дублирует Шаг 4 промпта); заголовок сделки → «Импорт прайса от <название поставщика>» (из CRM по `COMPANY_ID`, фолбэк «поставщик #N», обрезка до 255 символов); из доки/смоука убран устаревший `deal:020` (пустой `items[]` → сделка + `no_items_matched`, #150); PR #139 — страница установки приложения Bitrix24 (`/install` → `installFinish`, логика в `useInstall()` + юнит-тесты), регистрация локального приложения (`docs/BITRIX24_APP_SETUP.md`); backend разрешает фрейм Bitrix24 (CSP `frame-ancestors`, env `B24_FRAME_ANCESTORS`, убран `X-Frame-Options`); `ensureSchema` — самостоятельный примитив, в установку не подключён; follow-ups #140–#143; PR #133 — #41/#105 P1: API-токен убран из браузера (UI → same-origin HTTP Basic), удалён `NUXT_PUBLIC_BACKEND_TOKEN`, dev-proxy инжектит `Bearer` на стороне сервера; +UI unit-тесты (vitest) и CI-гард на отсутствие токена в публичном бандле; PR #118 — #104: релиз-гейт деплоя (push в main → только `sha-<sha>`; тег `v*` → `:latest`; `workflow_dispatch` → `:latest` только при зелёном CI) + retry агента на транзиентные сбои провайдера (429/5xx/сеть/таймаут); issue #98 — синхронизация статуса фич в доках: 4 PST-инструмента реализованы, формулировки «заглушки/Week 2» убраны; PR #89 — рабочая REST-интеграция закупок: `shef:purchase.api.*` separator, by-ref `CCrmDeal::Update`/таймлайн, `BEGINDATE`/`documentDate`, гомоглиф-устойчивый и быстрый 1-в-1 поиск артикула/договора, кроссплатформенный smoke + эталонный счёт; PR #82 — `make deploy-images` (ручной деплой образов в GHCR без Actions); PR #81 — `workflow_dispatch` для Deploy; PR #79 — переезд дашборда `/metrics` на Nuxt/b24ui + живой курс USD→BYN из НБРБ (фолбэк `USD_BYN_RATE`); PR #78 — чеклист деплоя MCP ↔ PHP + CI-напоминание; PR #77 — `Shef\Purchase\Config`, централизация конфиг-параметров модуля; PR #74 — дашборд `/metrics` + lifetime-метрики пайплайна; PR #71 — REST-контроллеры `shef:purchase.api.procure*`, MCP deal tools, smoke-тесты, убран `B24_CONTRACTS_API_URL`; PR #53 — OCR + office, DOCUMENT_TEXT; PR #48 — basic-auth, DeepSeek; PR #47/#49)*
