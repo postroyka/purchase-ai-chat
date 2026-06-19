@@ -11,13 +11,14 @@ import { createJobsStore } from './jobs-store.js';
 import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
 import { runAgent, redactToken } from './agent-runner.js';
+import { createSessionAuth } from './auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // The usage dashboard (issue #67) is now a Nuxt page — ui/app/pages/metrics.vue — served as a
-// prerendered static asset by express.static below (behind the same Basic auth as the UI).
-// The backend only owns the data here: GET /metrics/data.
+// prerendered static asset by express.static below (served openly; the app session gates the
+// /metrics/data API). The backend only owns the data here: GET /metrics/data.
 
 // Map a thrown agent error message to a small, stable label for the metrics outcome
 // breakdown (issue #67). Business errors (supplier_not_found, tool_unavailable, …) arrive in
@@ -63,6 +64,23 @@ const MAX_ERROR_CHARS = 300;
 function safeCompare(a, b) {
   const digest = (s) => createHash('sha256').update(Buffer.from(String(s), 'utf8')).digest();
   return timingSafeEqual(digest(a), digest(b));
+}
+
+// Derive bare hostnames from the space-separated CSP frame-ancestors string (e.g.
+// "https://*.bitrix24.by https://portal.example.com" → ["*.bitrix24.by", "portal.example.com"]).
+// Reused for the app.info SSRF allowlist so ops configures only ONE env (B24_FRAME_ANCESTORS):
+// whoever may iframe the app is exactly who we'll trust to establish a B24 session. Wildcard
+// entries ('*.bitrix24.by') are preserved and interpreted by auth.js's allowlist matcher.
+function parseFrameAncestorHosts(frameAncestors) {
+  return String(frameAncestors || '')
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((origin) => origin.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')) // strip scheme
+    .map((s) => s.split('/')[0]) // strip any path
+    .map((s) => s.replace(/:\d+$/, '')) // strip port
+    .map((s) => s.toLowerCase())
+    .filter(Boolean);
 }
 
 // Best-effort removal of multer's temp files. Used on every early-return error
@@ -157,12 +175,18 @@ function createRateLimiter({ windowMs, max, redisClient = null }) {
  *   responsibleUserId?: string,
  *   basicAuthUser?: string,
  *   basicAuthPass?: string,
- *   publicPageEnabled?: boolean,
  *   uiPublicDir?: string,
  *   agentConfig?: import('./agent-runner.js').AgentConfig,
  *   jobs?: object,
  *   metrics?: object,
  *   rateLimitRedis?: object,
+ *   sessionAuth?: object,
+ *   sessionSecret?: string,
+ *   sessionTtlMs?: number,
+ *   portalDomains?: string[],
+ *   appInfo?: (domain: string, authId: string) => Promise<boolean>,
+ *   loginRateLimitMax?: number,
+ *   loginRateLimitWindowMs?: number,
  * }} [config]
  * @returns {import('express').Express}
  *
@@ -195,13 +219,15 @@ export function createApp(config = {}) {
   const ttlHours = config.ttlHours ?? parseInt(process.env.JOB_TTL_HOURS ?? '24', 10);
   const basicAuthUser = config.basicAuthUser ?? process.env.PUBLIC_PAGE_BASIC_AUTH_USER ?? 'procure';
   const basicAuthPass = config.basicAuthPass ?? process.env.PUBLIC_PAGE_BASIC_AUTH_PASS ?? '';
-  const publicPageEnabled = config.publicPageEnabled
-    ?? ((process.env.PUBLIC_PAGE_ENABLED ?? 'true') !== 'false');
   const uiPublicDir = config.uiPublicDir ?? path.join(__dirname, '..', 'ui', 'public');
   const rateLimitMax = config.rateLimitMax
     ?? parseInt(process.env.RATE_LIMIT_MAX ?? '20', 10);
   const rateLimitWindowMs = config.rateLimitWindowMs
     ?? parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? '60000', 10);
+  // App-session lifetime. Default 12h: long enough that a B24 workday doesn't re-prompt, short
+  // enough that a leaked cookie ages out. Injectable for tests (config.sessionTtlMs).
+  const sessionTtlMs = config.sessionTtlMs
+    ?? parseInt(process.env.SESSION_TTL_HOURS ?? '12', 10) * 60 * 60 * 1000;
 
   const app = express();
 
@@ -265,55 +291,71 @@ export function createApp(config = {}) {
   if (rateLimitRedis?.on) rateLimitRedis.on('error', (e) => console.error('[rate-limit] Redis error:', e?.message ?? e));
   const uploadRateLimit = createRateLimiter({ windowMs: rateLimitWindowMs, max: rateLimitMax, redisClient: rateLimitRedis });
 
+  // App-level signed-cookie session (auth.js) — replaces HTTP Basic so the Bitrix24 iframe can
+  // load the UI. The standalone /login form's credentials are the existing PUBLIC_PAGE_BASIC_AUTH_*
+  // values; a placeholder password counts as "not set" (mirrors the old basicAuthConfigured check)
+  // so a forgotten-to-change default never authenticates.
+  const loginPass = (basicAuthPass && basicAuthPass !== BASIC_AUTH_PLACEHOLDER) ? basicAuthPass : '';
+  // SESSION_SECRET signs the cookie; when unset we DERIVE it deterministically from the token +
+  // page password so a single instance is stable across restarts WITHOUT requiring an extra
+  // secret. For multi-instance (shared LB) deployments SESSION_SECRET MUST be set explicitly so
+  // every instance signs/verifies with the same key (documented in .env.prod.example). If neither
+  // token nor password is configured the secret is '' and sessions stay unconfigured — loginHandler
+  // then returns 503, mirroring the existing "service not configured" behaviour.
+  const sessionSecret = config.sessionSecret ?? process.env.SESSION_SECRET ?? (
+    (token || loginPass)
+      ? createHash('sha256').update(`pai-session:${token}:${loginPass}`).digest('hex')
+      : ''
+  );
+  // The B24 app.info allowlist is derived from the SAME frame-ancestors origins as the CSP, so
+  // ops sets only B24_FRAME_ANCESTORS. portalDomains tests can override via config.portalDomains.
+  const sessionAuth = config.sessionAuth ?? createSessionAuth({
+    secret: sessionSecret,
+    user: basicAuthUser,
+    pass: loginPass,
+    secure: process.env.NODE_ENV === 'production',
+    portalDomains: config.portalDomains ?? parseFrameAncestorHosts(frameAncestors),
+    ttlMs: sessionTtlMs,
+    appInfo: config.appInfo, // undefined in prod → auth.js uses its real fetch-based probe
+  });
+  // Dedicated tight brute-force limiter for /login (separate from the upload limiter): a login
+  // form is a credential-guessing target, so cap attempts per IP. Reuses createRateLimiter keyed
+  // by IP (the /login request carries no Authorization header, so keyFor falls back to req.ip).
+  const loginRateLimit = createRateLimiter({
+    windowMs: config.loginRateLimitWindowMs ?? 60_000,
+    max: config.loginRateLimitMax ?? 10,
+    redisClient: rateLimitRedis,
+  });
+
   // Track in-flight processJob calls so graceful shutdown can wait for them.
   let activeJobs = 0;
   app.getActiveJobCount = () => activeJobs;
 
   const bearerConfigured = () => Boolean(token) && token !== AUTH_PLACEHOLDER;
-  const basicAuthConfigured = () =>
-    publicPageEnabled && Boolean(basicAuthPass) && basicAuthPass !== BASIC_AUTH_PLACEHOLDER;
+  // The app session is usable only when a real (non-placeholder) page password is set — it is the
+  // credential the standalone /login form checks and the secret seed for the cookie signature.
+  const sessionConfigured = () => Boolean(loginPass);
 
-  // Validate an HTTP Basic credential against the configured public-page user/pass.
-  // Both fields are compared in constant time; a missing/garbled header returns false.
-  function checkBasicAuth(req) {
-    const auth = req.headers['authorization'] ?? '';
-    if (!auth.startsWith('Basic ')) return false;
-    let decoded;
-    try { decoded = Buffer.from(auth.slice(6), 'base64').toString('utf8'); } catch { return false; }
-    const sep = decoded.indexOf(':');
-    if (sep < 0) return false;
-    // Evaluate both comparisons (no short-circuit) so timing doesn't reveal which half matched.
-    const userOk = safeCompare(decoded.slice(0, sep), basicAuthUser);
-    const passOk = safeCompare(decoded.slice(sep + 1), basicAuthPass);
-    return userOk && passOk;
-  }
-
-  // API auth for /upload and /job/:id/status. Accepts EITHER the Bearer API token
-  // (programmatic / smoke-test clients) OR — when the public page is enabled — a valid
-  // Basic credential. A browser that authenticated for the page resends Basic automatically
-  // on same-origin requests, so the UI needs no API token baked into its bundle.
+  // API auth for /upload, /job/:id/status and /metrics/data. Accepts EITHER the Bearer API token
+  // (programmatic / smoke-test / MCP clients — unchanged) OR a valid app session: a signed
+  // pai_sess cookie (set by /login or /session/b24) PLUS the X-PAI-Auth CSRF header. The browser
+  // UI sends the cookie automatically (it works inside the cross-site B24 iframe because the
+  // cookie is SameSite=None) and adds the header via useApi, so the UI needs no token in its
+  // bundle. HTTP Basic is no longer accepted (incompatible with the B24 iframe). If neither auth
+  // method is configured, fail with 503 (service not configured) rather than locking everyone out.
   function requireAuth(req, res, next) {
     if (bearerConfigured() && safeCompare(req.headers['authorization'] ?? '', `Bearer ${token}`)) {
       return next();
     }
-    if (basicAuthConfigured() && checkBasicAuth(req)) return next();
-    if (!bearerConfigured() && !basicAuthConfigured()) {
+    if (sessionConfigured() && sessionAuth.requireSession(req) && sessionAuth.csrfOk(req)) {
+      return next();
+    }
+    if (!bearerConfigured() && !sessionConfigured()) {
       return res.status(503).json({
         error: 'Service not configured: set BACKEND_API_TOKEN or PUBLIC_PAGE_BASIC_AUTH_USER/PASS',
       });
     }
     return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  // Page-level Basic auth guarding the served UI. Fails closed: if the public page is
-  // enabled but the password is unset/placeholder, returns 503 rather than serving openly.
-  function requirePageAuth(req, res, next) {
-    if (!basicAuthConfigured()) {
-      return res.status(503).send('Service not configured: PUBLIC_PAGE_BASIC_AUTH_PASS is not set');
-    }
-    if (checkBasicAuth(req)) return next();
-    res.setHeader('WWW-Authenticate', 'Basic realm="procure-ai", charset="UTF-8"');
-    return res.status(401).send('Authentication required');
   }
 
   const storage = multer.diskStorage({
@@ -500,8 +542,8 @@ export function createApp(config = {}) {
     }
   });
 
-  // GET /metrics/data — JSON snapshot. Dual auth (Bearer for scripts; Basic for the
-  // in-browser dashboard, which resends the page credentials automatically on same-origin).
+  // GET /metrics/data — JSON snapshot. Auth via requireAuth (Bearer for scripts/MCP; or the app
+  // session cookie + X-PAI-Auth header for the in-browser dashboard).
   app.get('/metrics/data', requireAuth, async (_req, res) => {
     try {
       return res.json(await metrics.snapshot());
@@ -511,14 +553,31 @@ export function createApp(config = {}) {
     }
   });
 
-  // Serve built UI (only present in Docker image), guarded by Basic auth when the public
-  // page is enabled. Mounted only if the build output exists, so dev runs (UI served
-  // separately on :3001) and tests are unaffected.
+  // ── App session (auth.js) ───────────────────────────────────────────────────────────────────
+  // These establish/inspect/clear the pai_sess cookie. express.json is mounted INLINE on the body
+  // routes ONLY (tight limits) — NOT globally — so /upload's multipart parsing is unaffected.
+  // Registered BEFORE the static catch-all so the SPA's own /login etc. don't shadow them.
+  //
+  // /login — standalone (non-B24) credential login. Rate-limited (brute-force guard, per IP).
+  app.post('/login', express.json({ limit: '1kb' }), loginRateLimit, sessionAuth.loginHandler);
+  // /session — "am I logged in?" probe for the standalone UI bootstrap.
+  app.get('/session', sessionAuth.sessionHandler);
+  // /logout — clear the session cookie.
+  app.post('/logout', sessionAuth.logoutHandler);
+  // /session/b24 — establish a session from inside the B24 frame by validating the portal via one
+  // app.info call (SSRF-guarded against the frame-ancestors allowlist). 4kb limit: AUTH_ID tokens
+  // are larger than a login body.
+  app.post('/session/b24', express.json({ limit: '4kb' }), sessionAuth.b24SessionHandler);
+
+  // Serve the built UI (only present in the Docker image) OPENLY so the Bitrix24 iframe can load
+  // `/`, `/install` and assets — the app session (above) is the gate now, not a page-level Basic
+  // prompt (which the cross-site B24 iframe cannot satisfy). Mounted only if the build output
+  // exists, so dev runs (UI served separately on :3001) and tests are unaffected.
   // extensions:['html'] resolves GET /metrics → metrics.html (Nuxt prerenders routes as flat
-  // .html files because nuxt.config sets autoSubfolderIndex:false). /metrics/data is handled
-  // by the route above, so it never reaches the static layer.
-  if (publicPageEnabled && fs.existsSync(uiPublicDir)) {
-    app.use(requirePageAuth, express.static(uiPublicDir, { extensions: ['html'] }));
+  // .html files because nuxt.config sets autoSubfolderIndex:false). /metrics/data and the session
+  // routes are handled above, so they never reach the static layer.
+  if (fs.existsSync(uiPublicDir)) {
+    app.use(express.static(uiPublicDir, { extensions: ['html'] }));
   }
 
   return app;

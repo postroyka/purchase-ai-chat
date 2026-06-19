@@ -17,8 +17,6 @@ function appWith(extra = {}) {
   return createApp({ token: TOKEN, uploadDir: UPLOAD_DIR, rateLimitMax: 0, ...extra });
 }
 
-const basic = (u, p) => 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64');
-
 describe('GET /metrics/data', () => {
   it('returns a well-formed snapshot with Bearer auth', async () => {
     const res = await request(appWith()).get('/metrics/data').set('Authorization', `Bearer ${TOKEN}`);
@@ -217,9 +215,11 @@ describe('metrics pipeline — error & edge paths', () => {
 });
 
 describe('GET /metrics/data — auth & robustness', () => {
-  it('accepts Basic credentials (browser dual-auth)', async () => {
-    const app = appWith({ basicAuthUser: 'op', basicAuthPass: 'secret-pass', publicPageEnabled: true });
-    const res = await request(app).get('/metrics/data').set('Authorization', basic('op', 'secret-pass'));
+  it('accepts an app session cookie + X-PAI-Auth header (in-browser dashboard)', async () => {
+    const app = appWith({ basicAuthUser: 'op', basicAuthPass: 'secret-pass' });
+    const cookie = (await request(app).post('/login').set('X-PAI-Auth', '1')
+      .send({ username: 'op', password: 'secret-pass' })).headers['set-cookie'];
+    const res = await request(app).get('/metrics/data').set('Cookie', cookie).set('X-PAI-Auth', '1');
     expect(res.status).toBe(200);
     expect(res.body.totals).toBeDefined();
   });

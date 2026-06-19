@@ -240,79 +240,111 @@ describe('Auth middleware', () => {
   });
 });
 
-// ── Basic auth (public page) ──────────────────────────────────────────────────
+// ── App session (login → cookie) auth ─────────────────────────────────────────
+// HTTP Basic was REMOVED (incompatible with the cross-site Bitrix24 iframe). The API now accepts
+// either the Bearer token (unchanged, programmatic/MCP) or an app session: a signed pai_sess
+// cookie (from /login or /session/b24) PLUS the X-PAI-Auth CSRF header. The served UI is now open.
 
-describe('Basic auth (public page)', () => {
-  const BASIC_PASS = 'super-secret-page-pass';
-  const basicHeader = (user, pass) =>
-    `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+describe('App session (login → cookie) auth', () => {
+  const PAGE_USER = 'procure';
+  const PAGE_PASS = 'super-secret-page-pass';
 
-  // App with BOTH a Bearer token and Basic page credentials configured.
+  // App with BOTH a Bearer token and standalone login credentials configured.
   const dualAuthApp = createApp({
     token: TOKEN,
     uploadDir: UPLOAD_DIR,
-    basicAuthUser: 'procure',
-    basicAuthPass: BASIC_PASS,
+    basicAuthUser: PAGE_USER,
+    basicAuthPass: PAGE_PASS,
+    rateLimitMax: 0,
   });
 
-  it('accepts a valid Basic credential on /job/:id/status (dual auth)', async () => {
+  // Log in and return the raw Set-Cookie header value (pai_sess=…) for reuse on later requests.
+  async function login(appInstance, user = PAGE_USER, pass = PAGE_PASS) {
+    const res = await request(appInstance)
+      .post('/login')
+      .set('X-PAI-Auth', '1')
+      .send({ username: user, password: pass });
+    return res;
+  }
+
+  it('POST /login with valid credentials sets the pai_sess cookie and returns 200', async () => {
+    const res = await login(dualAuthApp);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    const cookie = res.headers['set-cookie']?.[0] ?? '';
+    expect(cookie).toMatch(/pai_sess=/);
+    expect(cookie).toMatch(/HttpOnly/i);
+    // Dev/test over HTTP → SameSite=Lax, no Secure (NODE_ENV !== production here).
+    expect(cookie).toMatch(/SameSite=Lax/i);
+  });
+
+  it('POST /login with a wrong password returns 401 and sets no cookie', async () => {
+    const res = await login(dualAuthApp, PAGE_USER, 'wrong');
+    expect(res.status).toBe(401);
+    expect(res.body.error).toMatch(/invalid/i);
+    expect(res.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('the login cookie + X-PAI-Auth header authorizes /upload', async () => {
+    const cookie = (await login(dualAuthApp)).headers['set-cookie'];
+    const res = await request(dualAuthApp)
+      .post('/upload')
+      .set('Cookie', cookie)
+      .set('X-PAI-Auth', '1')
+      .attach('files[]', makeValidPdfBuffer(), { filename: 'invoice.pdf' });
+    expect(res.status).toBe(201); // auth passed → upload accepted
+  });
+
+  it('the login cookie WITHOUT the X-PAI-Auth CSRF header → 401', async () => {
+    const cookie = (await login(dualAuthApp)).headers['set-cookie'];
     const res = await request(dualAuthApp)
       .get('/job/nope/status')
-      .set('Authorization', basicHeader('procure', BASIC_PASS));
-    expect(res.status).toBe(404); // auth passed → job simply not found
+      .set('Cookie', cookie); // cookie present, CSRF header missing
+    expect(res.status).toBe(401);
   });
 
-  it('still accepts the Bearer token when Basic is also configured', async () => {
+  it('still accepts the Bearer token (programmatic path unchanged)', async () => {
     const res = await request(dualAuthApp)
       .get('/job/nope/status')
       .set('Authorization', `Bearer ${TOKEN}`);
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(404); // auth passed → job simply not found
   });
 
-  it('rejects a wrong Basic password with 401', async () => {
-    const res = await request(dualAuthApp)
-      .get('/job/nope/status')
-      .set('Authorization', basicHeader('procure', 'wrong'));
-    expect(res.status).toBe(401);
+  it('GET /session reports authenticated state from the cookie', async () => {
+    const before = await request(dualAuthApp).get('/session');
+    expect(before.body).toEqual({ authenticated: false });
+
+    const cookie = (await login(dualAuthApp)).headers['set-cookie'];
+    const after = await request(dualAuthApp).get('/session').set('Cookie', cookie);
+    expect(after.body).toEqual({ authenticated: true });
   });
 
-  it('rejects a wrong Basic user with 401', async () => {
-    const res = await request(dualAuthApp)
-      .get('/job/nope/status')
-      .set('Authorization', basicHeader('intruder', BASIC_PASS));
-    expect(res.status).toBe(401);
+  it('POST /logout clears the cookie (Max-Age=0) and returns 204', async () => {
+    const res = await request(dualAuthApp).post('/logout');
+    expect(res.status).toBe(204);
+    expect(res.headers['set-cookie']?.[0]).toMatch(/pai_sess=;.*Max-Age=0/i);
   });
 
-  it('guards the served UI with Basic auth (401 + WWW-Authenticate, then 200)', async () => {
+  it('POST /login returns 503 when no page password is configured', async () => {
+    const noPassApp = createApp({ token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: '' });
+    const res = await request(noPassApp)
+      .post('/login')
+      .set('X-PAI-Auth', '1')
+      .send({ username: 'x', password: 'y' });
+    expect(res.status).toBe(503);
+  });
+
+  it('serves the built UI OPENLY (no auth) so the Bitrix24 iframe can load it', async () => {
     const uiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-public-'));
     fs.writeFileSync(path.join(uiDir, 'index.html'), '<html>ok</html>');
     try {
       const pageApp = createApp({
-        token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: BASIC_PASS, uiPublicDir: uiDir,
-      });
-      const noauth = await request(pageApp).get('/');
-      expect(noauth.status).toBe(401);
-      expect(noauth.headers['www-authenticate']).toMatch(/Basic/);
-
-      const ok = await request(pageApp)
-        .get('/')
-        .set('Authorization', basicHeader('procure', BASIC_PASS));
-      expect(ok.status).toBe(200);
-      expect(ok.text).toContain('ok');
-    } finally {
-      fs.rmSync(uiDir, { recursive: true, force: true });
-    }
-  });
-
-  it('returns 503 for the UI when the public page is enabled but the password is unset', async () => {
-    const uiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-public-'));
-    fs.writeFileSync(path.join(uiDir, 'index.html'), '<html>ok</html>');
-    try {
-      const pageApp = createApp({
-        token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: '', uiPublicDir: uiDir,
+        token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: PAGE_PASS, uiPublicDir: uiDir,
       });
       const res = await request(pageApp).get('/');
-      expect(res.status).toBe(503);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('ok');
+      expect(res.headers['www-authenticate']).toBeUndefined();
     } finally {
       fs.rmSync(uiDir, { recursive: true, force: true });
     }
@@ -808,22 +840,27 @@ describe('rate limiting on /upload', () => {
       rateLimitMax: 2,
       rateLimitWindowMs: 60_000,
       rateLimitRedis: fakeRedis,
-      // A second valid identity (Basic) so we can prove keyFor isolates clients: only one
-      // bearer token is valid, so distinct clients must come via a different auth header.
+      // A second valid identity (app session) so we can prove keyFor isolates clients: only one
+      // bearer token is valid, so a distinct client must authenticate a different way. The
+      // session-cookie client sends NO Authorization header → the limiter keys it by req.ip,
+      // which is a distinct key from the Bearer client's hashed-token key.
       basicAuthUser: 'u',
       basicAuthPass: 'p',
       maxConcurrentJobs: 50,
     });
-    const basic = 'Basic ' + Buffer.from('u:p').toString('base64');
-    const sendWith = (authHeader) => request(redisApp).post('/upload').set('Authorization', authHeader)
+    const uploadWithBearer = () => request(redisApp).post('/upload').set('Authorization', auth())
       .attach('files[]', pdf(), { contentType: 'application/pdf' });
-    // Client A (Bearer): 3 hits, limit 2 → 3rd is 429.
-    const [a1, a2, a3] = [await sendWith(auth()), await sendWith(auth()), await sendWith(auth())];
+    // Client A (Bearer): 3 hits, limit 2 → 3rd is 429. (keyed by hashed Authorization header)
+    const [a1, a2, a3] = [await uploadWithBearer(), await uploadWithBearer(), await uploadWithBearer()];
     expect([a1.status, a2.status, a3.status]).toEqual([201, 201, 429]);
-    // Client B (Basic) has an INDEPENDENT counter → its first request still passes.
-    const b1 = await sendWith(basic);
+    // Client B (app session): establish a cookie, then upload with cookie + CSRF header but NO
+    // Authorization → keyed by req.ip, an INDEPENDENT counter, so its first upload still passes.
+    const cookie = (await request(redisApp).post('/login').set('X-PAI-Auth', '1')
+      .send({ username: 'u', password: 'p' })).headers['set-cookie'];
+    const b1 = await request(redisApp).post('/upload').set('Cookie', cookie).set('X-PAI-Auth', '1')
+      .attach('files[]', pdf(), { contentType: 'application/pdf' });
     expect(b1.status).toBe(201);
-    expect(counters.size).toBe(2);            // two distinct keys (Bearer ≠ Basic)
+    expect(counters.size).toBe(2);            // two distinct keys (Bearer token ≠ req.ip)
     expect(ttls.every((ms) => ms === 60_000)).toBe(true); // pexpire armed with windowMs (ms, not s)
   });
 
