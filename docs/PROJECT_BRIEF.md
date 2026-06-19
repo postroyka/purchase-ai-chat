@@ -97,7 +97,7 @@ procure-ai/
 | `B24_DEAL_CATEGORY_ID` | `1` |
 | `B24_DEAL_DEFAULT_STAGE_ID` | `C1:NEW` |
 | `DEEPSEEK_*` | из ТЗ; в коде не используются. DeepSeek подключён как провайдер модели через Claude Code (`~/.claude/settings.json`, `ANTHROPIC_BASE_URL`), а не через эти переменные |
-| `PUBLIC_PAGE_ENABLED` | `true` (демо) |
+| ~~`PUBLIC_PAGE_ENABLED`~~ | **Убрана.** UI отдаётся открыто; вход через форму `/login` (standalone) или `/session/b24` (внутри B24-фрейма). |
 | `PUBLIC_PAGE_BASIC_AUTH_USER` | `procure` |
 | `PUBLIC_PAGE_BASIC_AUTH_PASS` | только на сервере |
 | `PUBLIC_PAGE_RESPONSIBLE_USER_ID` | `20` |

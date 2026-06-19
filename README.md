@@ -149,7 +149,12 @@ curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
 
 ```bash
 # BASE и TOKEN — как в блоке «Мониторинг задач (API)» выше
-curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"   # из браузера — cookie сессии + X-PAI-Auth
+
+# Программный/скриптовый доступ — Bearer-токен:
+curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"
+
+# Из браузера (UI) — cookie pai_sess + заголовок X-PAI-Auth (добавляет useApi автоматически);
+# Bearer-токен в браузер не передаётся.
 ```
 
 Дашборд оценивает **экономию** (сэкономленное время × ставку − стоимость прогона модели) и
