@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from '@bitrix24/b24ui-nuxt'
 import type { Ref } from 'vue'
-import { computed, ref, inject, onMounted } from 'vue'
+import { computed, ref, inject } from 'vue'
 import UploadIcon from '@bitrix24/b24icons-vue/outline/UploadIcon'
 import GraphsDiagramIcon from '@bitrix24/b24icons-vue/outline/GraphsDiagramIcon'
 import GitHubIcon from '@bitrix24/b24icons-vue/social/GitHubIcon'
 import HamburgerMenuIcon from '@bitrix24/b24icons-vue/outline/HamburgerMenuIcon'
-
-const toast = useToast()
 
 const open = ref(false)
 const isLoading = inject<Ref<boolean>>('isLoading', ref(false))
@@ -41,32 +39,6 @@ const links = computed<NavigationMenuItem[][]>(() => [
     }
   ]
 ])
-
-onMounted(() => {
-  const cookie = useCookie('cookie-consent')
-  if (cookie.value === 'accepted') {
-    return
-  }
-
-  toast.add({
-    title: 'We use first-party cookies to enhance your experience on our app.',
-    duration: 0,
-    close: false,
-    actions: [
-      {
-        label: 'Accept',
-        color: 'air-primary-success',
-        onClick: () => {
-          cookie.value = 'accepted'
-        }
-      },
-      {
-        label: 'Opt out',
-        color: 'air-secondary-no-accent'
-      }
-    ]
-  })
-})
 </script>
 
 <template>
