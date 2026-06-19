@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 import { createSessionAuth, parseCookies } from '../auth.js';
 
 // Unit tests for the dependency-free signed-cookie session module (backend/auth.js). These never
@@ -279,5 +280,101 @@ describe('b24SessionHandler — SSRF allowlist + app.info', () => {
     const res = mockRes();
     await auth.b24SessionHandler({ body: { domain: 'acme.bitrix24.by', authId: 'A' } }, res);
     expect(res.statusCode).toBe(401);
+  });
+});
+
+// ── New tests added for PR #173 ──────────────────────────────────────────────
+
+describe('verify() — expiry boundary (injectable clock)', () => {
+  it('at now===exp the token is still valid; at now===exp+1 it is rejected', () => {
+    const { auth, clock } = makeAuth();
+    const token = auth.issue('grace');
+    // issue() uses clock.t as iat, exp = iat + ttlMs (60_000 ms)
+    const exp = clock.t + 60_000;
+
+    // Exactly at the expiry moment: now() > exp is false (60_000 > 60_000 is false) → valid.
+    clock.t = exp;
+    expect(auth.verify(token)).not.toBeNull();
+
+    // One millisecond past expiry: now() > exp is true → invalid.
+    clock.t = exp + 1;
+    expect(auth.verify(token)).toBeNull();
+  });
+});
+
+describe('verify() — rejects tokens without `sub`', () => {
+  it('a structurally-valid signed token with no sub field returns null', () => {
+    // Build the token manually with the same SECRET as makeAuth() uses.
+    const b64url = (buf) => Buffer.from(buf).toString('base64url');
+    const now = 1_700_000_000_000;
+    const bodyStr = JSON.stringify({ iat: now, exp: now + 9_999_999_999 }); // far future, no `sub`
+    const sig = createHmac('sha256', SECRET).update(bodyStr).digest();
+    const token = `${b64url(bodyStr)}.${b64url(sig)}`;
+
+    const { auth } = makeAuth();
+    expect(auth.verify(token)).toBeNull();
+  });
+
+  it('a token whose sub is an empty string returns null', () => {
+    const b64url = (buf) => Buffer.from(buf).toString('base64url');
+    const now = 1_700_000_000_000;
+    const bodyStr = JSON.stringify({ sub: '', iat: now, exp: now + 9_999_999_999 });
+    const sig = createHmac('sha256', SECRET).update(bodyStr).digest();
+    const token = `${b64url(bodyStr)}.${b64url(sig)}`;
+
+    const { auth } = makeAuth();
+    expect(auth.verify(token)).toBeNull();
+  });
+});
+
+describe('b24SessionHandler — authId edge cases', () => {
+  it('empty authId → 401 WITHOUT calling appInfo', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { auth } = makeAuth({ appInfo });
+
+    // empty string
+    const r1 = mockRes();
+    await auth.b24SessionHandler({ body: { domain: 'acme.bitrix24.by', authId: '' } }, r1);
+    expect(r1.statusCode).toBe(401);
+    expect(appInfo).not.toHaveBeenCalled();
+
+    // missing authId (body has no authId key)
+    const r2 = mockRes();
+    await auth.b24SessionHandler({ body: { domain: 'acme.bitrix24.by' } }, r2);
+    expect(r2.statusCode).toBe(401);
+    expect(appInfo).not.toHaveBeenCalled();
+  });
+
+  it('authId longer than 4096 chars → 401 WITHOUT calling appInfo', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { auth } = makeAuth({ appInfo });
+    const res = mockRes();
+    await auth.b24SessionHandler(
+      { body: { domain: 'acme.bitrix24.by', authId: 'x'.repeat(4097) } },
+      res,
+    );
+    expect(res.statusCode).toBe(401);
+    expect(appInfo).not.toHaveBeenCalled();
+  });
+});
+
+describe('b24SessionHandler — apex domain vs wildcard allowlist', () => {
+  it("bare apex 'bitrix24.by' against allowlist ['*.bitrix24.by'] → 400 WITHOUT calling appInfo", async () => {
+    const appInfo = vi.fn(async () => true);
+    // Build an auth whose allowlist is ONLY the wildcard, not the apex itself.
+    const { auth } = makeAuth({ appInfo, portalDomains: ['*.bitrix24.by'] });
+    const res = mockRes();
+    await auth.b24SessionHandler({ body: { domain: 'bitrix24.by', authId: 'anyId' } }, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual({ error: 'domain not allowed' });
+    expect(appInfo).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseCookies — whitespace around keys and values', () => {
+  it('trims spaces around keys and values (e.g. " pai_sess = x ")', () => {
+    const result = parseCookies(' pai_sess = x ; other = y ');
+    expect(result.pai_sess).toBe('x');
+    expect(result.other).toBe('y');
   });
 });

@@ -125,4 +125,40 @@ describe('useAppAuth — framed (inside Bitrix24)', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  // ── New tests added for PR #173 ─────────────────────────────────────────────
+
+  it('getTargetOrigin throws → falls back to window.name ("acme.bitrix24.by|APP_SID")', async () => {
+    fetchMock.mockResolvedValue({ ok: true })
+    vi.stubGlobal('window', { name: 'acme.bitrix24.by|APP_SID' } as unknown as Window)
+
+    const frame = {
+      auth: { getAuthData: () => ({ access_token: 'AUTH_TOKEN_123', domain: 'https://acme.bitrix24.by' }) },
+      getTargetOrigin: () => { throw new Error('unavailable') } // SDK not ready
+    } as never
+
+    const { bootstrap } = await freshUseAppAuth()
+    await bootstrap(true, frame)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe('/session/b24')
+    // domain must be derived from window.name, not the failing getTargetOrigin
+    expect(opts?.body?.domain).toBe('acme.bitrix24.by')
+  })
+
+  it('getAuthData → { access_token: "", domain } → readFrameAuth=null → no fetch, authed=false, needsLogin=false', async () => {
+    const frame = {
+      auth: { getAuthData: () => ({ access_token: '', domain: 'https://acme.bitrix24.by' }) },
+      getTargetOrigin: () => 'https://acme.bitrix24.by'
+    } as never
+
+    const { bootstrap, authed, needsLogin } = await freshUseAppAuth()
+    await bootstrap(true, frame)
+
+    // access_token is empty → authId is '' → readFrameAuth returns null → no POST
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(authed.value).toBe(false)
+    expect(needsLogin.value).toBe(false)
+  })
 })

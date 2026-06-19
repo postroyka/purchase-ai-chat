@@ -926,3 +926,184 @@ describe('rate limiting on /upload', () => {
     }
   });
 });
+
+// ── New tests added for PR #173 ──────────────────────────────────────────────
+
+describe('login brute-force rate limit', () => {
+  it('3rd POST /login attempt → 429 with Retry-After when loginRateLimitMax=2', async () => {
+    const limitedLoginApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      basicAuthPass: 'somepass',
+      loginRateLimitMax: 2,
+    });
+    const body = { username: 'procure', password: 'wrong' };
+    const r1 = await request(limitedLoginApp)
+      .post('/login').set('X-PAI-Auth', '1')
+      .set('Content-Type', 'application/json')
+      .send(body);
+    const r2 = await request(limitedLoginApp)
+      .post('/login').set('X-PAI-Auth', '1')
+      .set('Content-Type', 'application/json')
+      .send(body);
+    const r3 = await request(limitedLoginApp)
+      .post('/login').set('X-PAI-Auth', '1')
+      .set('Content-Type', 'application/json')
+      .send(body);
+    expect(r1.status).toBe(401); // attempt 1: wrong creds
+    expect(r2.status).toBe(401); // attempt 2: wrong creds
+    expect(r3.status).toBe(429); // 3rd hit → rate limited
+    expect(r3.headers['retry-after']).toBeDefined();
+  });
+});
+
+describe('/session/b24 rate limit', () => {
+  it('2nd POST /session/b24 → 429 when loginRateLimitMax=1', async () => {
+    const limitedB24App = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      loginRateLimitMax: 1,
+      portalDomains: ['*.bitrix24.by'],
+      appInfo: async () => false, // always reject auth, focus on the limiter
+    });
+    const body = { domain: 'x.bitrix24.by', authId: 'a' };
+    const r1 = await request(limitedB24App)
+      .post('/session/b24').set('Content-Type', 'application/json').send(body);
+    const r2 = await request(limitedB24App)
+      .post('/session/b24').set('Content-Type', 'application/json').send(body);
+    expect(r1.status).toBe(401); // 1st attempt: auth failed (appInfo returns false)
+    expect(r2.status).toBe(429); // 2nd hit → rate limited
+  });
+});
+
+describe('session-only mode (no Bearer token)', () => {
+  it('valid cookie without X-PAI-Auth → 401; with X-PAI-Auth → passes auth gate', async () => {
+    const PAGE_PASS = 'session-only-pass';
+    const sessionOnlyApp = createApp({
+      token: '',            // no Bearer token
+      uploadDir: UPLOAD_DIR,
+      basicAuthPass: PAGE_PASS,
+      rateLimitMax: 0,
+    });
+
+    // Login to obtain a cookie
+    const loginRes = await request(sessionOnlyApp)
+      .post('/login')
+      .set('X-PAI-Auth', '1')
+      .set('Content-Type', 'application/json')
+      .send({ username: 'procure', password: PAGE_PASS });
+    expect(loginRes.status).toBe(200);
+    const cookie = loginRes.headers['set-cookie'];
+
+    // Cookie only, no CSRF header → 401 (not 503)
+    const noHeader = await request(sessionOnlyApp)
+      .get('/job/any-id/status')
+      .set('Cookie', cookie);
+    expect(noHeader.status).toBe(401);
+
+    // Cookie + CSRF header → passes auth gate (job simply not found → 404)
+    const withHeader = await request(sessionOnlyApp)
+      .get('/job/any-id/status')
+      .set('Cookie', cookie)
+      .set('X-PAI-Auth', '1');
+    expect(withHeader.status).toBe(404);
+  });
+});
+
+describe('token-without-password (sessionConfigured gates on sessionSecret, not password)', () => {
+  it('POST /session/b24 and subsequent /job status with cookie work even when basicAuthPass is empty', async () => {
+    const tokenOnlyApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      basicAuthPass: '',    // no password — session still keyed from real token
+      portalDomains: ['*.bitrix24.by'],
+      appInfo: async () => true, // appInfo confirms portal
+      rateLimitMax: 0,
+    });
+
+    // POST /session/b24 with CSRF header → should succeed (appInfo returns true)
+    const b24Res = await request(tokenOnlyApp)
+      .post('/session/b24')
+      .set('X-PAI-Auth', '1')
+      .set('Content-Type', 'application/json')
+      .send({ domain: 'x.bitrix24.by', authId: 'a' });
+    expect(b24Res.status).toBe(200);
+    expect(b24Res.body).toEqual({ ok: true });
+
+    const cookie = b24Res.headers['set-cookie'];
+
+    // The session cookie + CSRF header should authorize /job status (404 = auth passed, job not found)
+    const statusRes = await request(tokenOnlyApp)
+      .get('/job/nonexistent/status')
+      .set('Cookie', cookie)
+      .set('X-PAI-Auth', '1');
+    expect(statusRes.status).toBe(404); // not 401 — session was accepted
+  });
+});
+
+describe('SESSION_TTL_HOURS=0 clamp prevents instant cookie expiry', () => {
+  it('clamped TTL keeps the cookie valid for at least 1h, not expired immediately', async () => {
+    const prevEnv = process.env.SESSION_TTL_HOURS;
+    process.env.SESSION_TTL_HOURS = '0';
+    try {
+      // createApp without sessionTtlMs reads SESSION_TTL_HOURS and applies Math.max(1, …)
+      const clampedApp = createApp({
+        token: TOKEN,
+        uploadDir: UPLOAD_DIR,
+        basicAuthPass: 'clamp-test-pass',
+        rateLimitMax: 0,
+        // no sessionTtlMs — lets createApp read env
+      });
+
+      const loginRes = await request(clampedApp)
+        .post('/login')
+        .set('X-PAI-Auth', '1')
+        .set('Content-Type', 'application/json')
+        .send({ username: 'procure', password: 'clamp-test-pass' });
+      expect(loginRes.status).toBe(200);
+
+      const cookie = loginRes.headers['set-cookie'];
+
+      // If TTL was 0 the cookie would be instantly expired → 401.
+      // With the clamp it's 1h → still valid.
+      const res = await request(clampedApp)
+        .get('/session')
+        .set('Cookie', cookie);
+      expect(res.body.authenticated).toBe(true);
+    } finally {
+      if (prevEnv === undefined) delete process.env.SESSION_TTL_HOURS;
+      else process.env.SESSION_TTL_HOURS = prevEnv;
+    }
+  });
+});
+
+describe('login cookie + X-PAI-Auth with mock agent (fixes #288 flake)', () => {
+  it('authorizes /upload when using a cookie session (no real claude binary)', async () => {
+    const PAGE_USER2 = 'procure';
+    const PAGE_PASS2 = 'cookie-upload-pass';
+    const mockSpawn = makeMockAgentSpawn();
+    const dualMockApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      basicAuthUser: PAGE_USER2,
+      basicAuthPass: PAGE_PASS2,
+      rateLimitMax: 0,
+      agentConfig: { spawnFn: mockSpawn, extractFn: async () => null },
+    });
+
+    const loginRes = await request(dualMockApp)
+      .post('/login')
+      .set('X-PAI-Auth', '1')
+      .set('Content-Type', 'application/json')
+      .send({ username: PAGE_USER2, password: PAGE_PASS2 });
+    expect(loginRes.status).toBe(200);
+
+    const cookie = loginRes.headers['set-cookie'];
+    const uploadRes = await request(dualMockApp)
+      .post('/upload')
+      .set('Cookie', cookie)
+      .set('X-PAI-Auth', '1')
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    expect(uploadRes.status).toBe(201);
+  });
+});
