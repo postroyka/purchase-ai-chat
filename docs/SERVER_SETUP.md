@@ -214,8 +214,9 @@ bash agent-e2e-test.sh
 > (25 МБ — с запасом к 20 МБ; согласуется с `NUXT_MAX_ATTACH_MB`.) Затем перезапустите nginx-proxy.
 
 > 🛠️ **Деплой без GitHub Actions.** Обычно прод-образ (`latest`) публикует workflow
-> `Deploy` по релизному тегу `v*` (push в `main` собирает только `sha-<sha>`; #104),
-> и его подхватывает Watchtower. Если раннеры/минуты Actions недоступны —
+> `Publish images` на каждый зелёный push в `main` (continuous deploy; тег `v*` —
+> необязателен, лишь добавляет версию-метку), и его подхватывает Watchtower. Если
+> раннеры/минуты Actions недоступны —
 > собрать и запушить образы вручную с любой машины с Docker:
 > `GHCR_TOKEN=ghp_xxx make deploy-images` (PAT со scope `write:packages`), затем на
 > сервере `make prod-redeploy`.

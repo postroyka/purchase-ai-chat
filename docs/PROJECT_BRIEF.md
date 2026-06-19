@@ -81,7 +81,7 @@ procure-ai/
 │   └── ТЗ_Закупки_PST.md
 └── .github/workflows/
     ├── ci.yml
-    ├── deploy.yml                  # main→sha-<sha>; тег v*→latest (прод #104); Watchtower следит за latest
+    ├── deploy.yml                  # «Publish images»: зелёный main→latest (continuous deploy); тег v*→ +версия-метка; Watchtower следит за latest
     └── deploy-b24.yml              # PHP-контроллеры shef.purchase по тегу v* (синхронно с образами)
 ```
 
