@@ -41,21 +41,22 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 
 | Переменная | Контейнер | Обязательно | Описание |
 |---|---|---|---|
-| `BACKEND_API_TOKEN` | app | ✅ | Bearer для `/upload`, `/job/:id/status`, `/metrics/data`. **Серверный** — в браузер не попадает: UI авторизуется HTTP Basic (см. `PUBLIC_PAGE_BASIC_AUTH_*`), #41/#105 P1 |
+| `BACKEND_API_TOKEN` | app | ✅ | Bearer для `/upload`, `/job/:id/status`, `/metrics/data`. **Серверный** — в браузер не попадает: UI авторизуется сессией приложения (форма `/login` вне портала или `/session/b24` внутри Bitrix24; см. `PUBLIC_PAGE_BASIC_AUTH_*`), #41/#105 P1 |
 | `REDIS_PASSWORD` | app/redis | ✅ | Пароль Redis (тот же подставляется в `REDIS_URL` в compose) |
 | `NUXT_MCP_AUTH_TOKEN` | mcp | ✅ | Bearer-токен для `/mcp` endpoint |
 | `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Вебхук Bitrix24: вызывает контроллеры `shef:purchase.api.procure*` + стандартные `crm.*` |
-| `PUBLIC_PAGE_BASIC_AUTH_PASS` | app | ✅ | Пароль публичной страницы |
+| `PUBLIC_PAGE_BASIC_AUTH_PASS` | app | ✅ | Пароль формы входа приложения (`/login`); без него `/login` → 503 |
 | `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | app | ✅¹ | Домен приложения для nginx-proxy + acme |
 | `LETSENCRYPT_EMAIL` | acme | ✅¹ | E-mail для Let's Encrypt (глобально в acme-companion) |
 | `REDIS_URL` | app | — | URL Redis (в compose формируется из `REDIS_PASSWORD`) |
 | `MCP_SERVER_URL` | app | — | URL MCP внутри сети (по умолчанию: `http://mcp:3000/mcp`) |
 | `B24_DEAL_CATEGORY_ID` | mcp | — | Воронка сделок (по умолчанию: `1` «Закупки») |
 | `B24_DEAL_DEFAULT_STAGE_ID` | mcp | — | Стадия сделки (по умолчанию: `C1:NEW`) |
-| `B24_FRAME_ANCESTORS` | app | — | Кто вправе встраивать UI во фрейм (CSP `frame-ancestors`). По умолчанию — облачные домены Bitrix24 (`*.bitrix24.ru/.com/.by`); для self-hosted коробки указать origin портала |
-| `PUBLIC_PAGE_ENABLED` | app | — | Включить публичную страницу (по умолчанию: `true`) |
-| `PUBLIC_PAGE_BASIC_AUTH_USER` | app | — | Логин публичной страницы (по умолчанию: `procure`) |
+| `B24_FRAME_ANCESTORS` | app | — | Кто вправе встраивать UI во фрейм (CSP `frame-ancestors`) **и** allowlist доменов для `/session/b24` (проверка `app.info`). По умолчанию — облачные домены Bitrix24 (`*.bitrix24.ru/.com/.by`); для self-hosted коробки **обязательно** указать origin портала |
+| `PUBLIC_PAGE_BASIC_AUTH_USER` | app | — | Логин формы входа (по умолчанию: `procure`) |
 | `PUBLIC_PAGE_RESPONSIBLE_USER_ID` | app | — | ID пользователя Б24 по умолчанию |
+| `SESSION_SECRET` | app | — | Секрет подписи сессионной cookie. Не задан → выводится из токена+пароля. При нескольких инстансах за балансировщиком задать одинаковым на всех |
+| `SESSION_TTL_HOURS` | app | — | Время жизни сессии в часах (по умолчанию: 12) |
 | `JOB_TTL_HOURS` | app | — | Время хранения задач в Redis (по умолчанию: 24) |
 | `MAX_FILE_SIZE_MB` | app | — | Макс. размер файла (по умолчанию: 20) |
 | `MAX_FILES_PER_REQUEST` | app | — | Макс. файлов в одном запросе (по умолчанию: 10) |
@@ -140,13 +141,15 @@ curl.exe -i -H "Authorization: Bearer $TOKEN" "$BASE/job/$jobId/status"
 слоя, исходы обработки (включая `tool_unavailable` / `supplier_not_found`), стоимость прогонов модели и **экономика**.
 
 - **Страница `/metrics`** — часть UI (Nuxt + b24ui), пункт сайдбара **«Метрики»** рядом с
-  **«Загрузка счетов»**. Закрыта тем же **HTTP Basic**, что и весь UI (`PUBLIC_PAGE_BASIC_AUTH_*`).
-  Локально (dev) — `http://localhost:3001/metrics`, в проде — `/metrics` того же origin.
-- **`GET /metrics/data`** — JSON-срез для скриптов, принимает **Bearer-токен ИЛИ Basic**:
+  **«Загрузка счетов»**. Закрыта той же **сессией приложения**, что и весь UI (вход —
+  `PUBLIC_PAGE_BASIC_AUTH_*`). Локально (dev) — `http://localhost:3001/metrics`, в проде —
+  `/metrics` того же origin.
+- **`GET /metrics/data`** — JSON-срез для скриптов, принимает **Bearer-токен** (или сессионную
+  cookie приложения + заголовок `X-PAI-Auth` из браузера):
 
 ```bash
 # BASE и TOKEN — как в блоке «Мониторинг задач (API)» выше
-curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"   # либо Basic-логин страницы
+curl "$BASE/metrics/data" -H "Authorization: Bearer $TOKEN"   # из браузера — cookie сессии + X-PAI-Auth
 ```
 
 Дашборд оценивает **экономию** (сэкономленное время × ставку − стоимость прогона модели) и
