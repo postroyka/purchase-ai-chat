@@ -242,6 +242,10 @@ jobs:
           file: Dockerfile.app
           tags: procure-app-validate
           load: true
+          # Exercise the GIT_SHA build-arg path (ТЗ §6) so the footer-version wiring is validated
+          # in CI too; github.sha is the PR/commit being checked (prod build-args live in deploy.yml).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           cache-from: type=gha,scope=validate-app
           cache-to: type=gha,mode=max,scope=validate-app
 

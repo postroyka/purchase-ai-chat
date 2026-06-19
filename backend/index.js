@@ -10,6 +10,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
 import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
+import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
 import { createSessionAuth } from './auth.js';
 import { safeCompare } from './utils.js';
@@ -351,6 +352,9 @@ export function createApp(config = {}) {
   // Track in-flight processJob calls so graceful shutdown can wait for them.
   let activeJobs = 0;
   app.getActiveJobCount = () => activeJobs;
+  // Expose the resolved upload dir so the prod entrypoint's retention sweep targets the SAME
+  // directory createApp uses — the two must never resolve UPLOAD_DIR independently and diverge.
+  app.getUploadDir = () => uploadDir;
 
   const bearerConfigured = () => Boolean(token) && token !== AUTH_PLACEHOLDER;
   // A session is acceptable whenever we have a signing secret — the cookie is HMAC-verified, so its
@@ -711,6 +715,19 @@ if (process.argv[1] === __filename) {
   const server = app.listen(PORT, () => {
     console.log(`[backend] procure-ai backend listening on port ${PORT}`);
   });
+
+  // Retention sweep for uploads/ (ТЗ §5 / day 14): periodically delete job folders older than
+  // UPLOADS_RETENTION_DAYS (default 7, floored at 1). Started here — NOT inside createApp — so the
+  // test suites that import createApp never spawn timers or touch the filesystem. uploadDir is
+  // resolved the same way createApp resolves it; the timer is self-unref'd so it can't block exit.
+  // Parse retention: an unset/garbled value falls back to the documented default (7); a finite but
+  // too-small value (0/negative) is passed through and floored to the 1-day minimum INSIDE
+  // cleanupOldUploads — one source of the floor avoids the `parseInt('0')||7` footgun (0 → 7, not 1).
+  const parsedRetention = parseInt(process.env.UPLOADS_RETENTION_DAYS ?? '7', 10);
+  const uploadsRetentionDays = Number.isFinite(parsedRetention) ? parsedRetention : 7;
+  const uploadsDir = app.getUploadDir();
+  startUploadsCleanup({ dir: uploadsDir, retentionDays: uploadsRetentionDays });
+  console.log(`[backend] uploads retention: deleting uploads older than ${Math.max(1, uploadsRetentionDays)}d (dir: ${uploadsDir})`);
 
   async function shutdown(signal) {
     console.log(`[backend] ${signal} received — graceful shutdown started`);

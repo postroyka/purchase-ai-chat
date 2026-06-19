@@ -140,6 +140,11 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: true
+          # Bake the build version into the UI footer (ТЗ §6). meta.sha is the exact commit being
+          # built (same value as the sha-<sha> tag). Only Dockerfile.app declares GIT_SHA; the mcp
+          # image ignores an unknown build-arg, so passing it to the whole matrix is harmless.
+          build-args: |
+            GIT_SHA=${{ steps.meta.outputs.sha }}
           # sha-<sha> always (rollback); :latest + :<tag> only on release/dispatch (see meta step).
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.name }}
