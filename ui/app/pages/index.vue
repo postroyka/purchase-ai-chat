@@ -69,8 +69,8 @@
               Статус обработки
             </h2>
             <B24Badge
-              :label="JOB_LABELS[job.status] ?? job.status"
-              :color="JOB_COLORS[job.status] ?? 'air-secondary'"
+              :label="jobBadge.label"
+              :color="jobBadge.color"
               size="sm"
             />
           </div>
@@ -86,8 +86,8 @@
                 {{ file.name }}
               </span>
               <B24Badge
-                :label="FILE_LABELS[file.status] ?? file.status"
-                :color="FILE_COLORS[file.status] ?? 'air-secondary'"
+                :label="fileBadge(file).label"
+                :color="fileBadge(file).color"
                 size="sm"
                 class="shrink-0"
               />
@@ -108,6 +108,15 @@
               :title="file.error"
             >
               {{ file.error }}
+            </p>
+
+            <!-- issue #192: причина, почему сделка не создана (бизнес-ошибка / нераспознанный документ) -->
+            <p
+              v-else-if="file.status === 'done' && !dealOf(file) && file.problem"
+              class="mt-2 text-xs text-amber-600"
+              :title="file.problem"
+            >
+              {{ file.problem }}
             </p>
 
             <!-- Созданная сделка: внутри B24 открываем слайдером, иначе ссылкой -->
@@ -251,6 +260,9 @@ interface FileEntry {
   status: 'pending' | 'processing' | 'done' | 'error'
   result?: unknown
   error?: string | null
+  // issue #192: human-readable reason set by the backend when a 'done' file produced NO deal
+  // (business error / unrecognised document) — surfaced so it isn't a bare green "Готово".
+  problem?: string | null
 }
 
 interface JobStatus {
@@ -310,6 +322,33 @@ function dealOf(file: FileEntry): CreatedDeal | null {
   if (id == null || String(id).trim() === '') return null
   return { dealId: String(id), url: deal?.url ?? null }
 }
+
+// issue #192: a 'done' file is a real SUCCESS only if a deal was created. A 'done' file WITHOUT a
+// deal (business error / unrecognised document) is shown as a distinct amber "Без сделки" with the
+// reason from file.problem — never a bare green "Готово".
+function fileSucceeded(file: FileEntry): boolean {
+  return file.status === 'done' && dealOf(file) !== null
+}
+
+function fileBadge(file: FileEntry): { label: string, color: BadgeColor } {
+  if (file.status === 'done' && !dealOf(file)) {
+    return { label: 'Без сделки', color: 'air-primary-warning' }
+  }
+  return { label: FILE_LABELS[file.status] ?? file.status, color: FILE_COLORS[file.status] ?? 'air-secondary' }
+}
+
+// Job-level badge: green "Готово" only when every file produced a deal; amber otherwise so a batch
+// where nothing (or only some) was created doesn't read as a clean success.
+const jobBadge = computed<{ label: string, color: BadgeColor }>(() => {
+  const j = job.value
+  if (!j) return { label: '', color: 'air-secondary' }
+  if (j.status === 'done') {
+    const withDeal = j.files.filter(f => dealOf(f) !== null).length
+    if (withDeal === 0) return { label: 'Без сделок', color: 'air-primary-warning' }
+    if (withDeal < j.files.length) return { label: 'Частично', color: 'air-primary-warning' }
+  }
+  return { label: JOB_LABELS[j.status] ?? j.status, color: JOB_COLORS[j.status] ?? 'air-secondary' }
+})
 
 // Кнопку показываем только когда сделку реально есть чем открыть: внутри B24 (слайдер)
 // или когда есть абсолютная ссылка от бэкенда (standalone).
@@ -417,12 +456,18 @@ async function pollOnce(jobId: string) {
       stopPolling()
 
       if (data.status === 'done') {
-        const doneCount = data.files.filter(f => f.status === 'done').length
+        // issue #192: «успешно» = создана сделка, а не просто «done». Если часть файлов без сделки —
+        // не выдаём чистый успех, а зовём проверить причину у файла.
+        const ok = data.files.filter(f => fileSucceeded(f)).length
+        const total = data.files.length
+        const allOk = ok === total
         toast.add({
-          title: 'Обработка завершена',
-          description: `${doneCount} из ${data.files.length} файлов успешно обработано`,
-          color: 'air-primary-success',
-          duration: 5000
+          title: allOk ? 'Обработка завершена' : 'Завершено с замечаниями',
+          description: allOk
+            ? `Сделки созданы: ${ok} из ${total}`
+            : `Сделок создано: ${ok} из ${total}. Остальные — без сделки, причина указана у файла.`,
+          color: allOk ? 'air-primary-success' : 'air-primary-warning',
+          duration: allOk ? 5000 : 7000
         })
       } else {
         toast.add({
