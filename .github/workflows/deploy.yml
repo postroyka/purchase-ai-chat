@@ -1,4 +1,12 @@
-name: Deploy
+name: Publish images
+
+# Per-run label so the Actions list shows AT A GLANCE whether a run shipped to prod or just built
+# a rollback artifact: a plain main push builds sha-<sha> only (NOT prod); a v* release tag or a
+# gated manual dispatch moves :latest (prod). See the gate logic below.
+run-name: >-
+  ${{ (github.event_name == 'push' && format('🚀 Release {0} → prod (:latest)', github.ref_name))
+  || (github.event_name == 'workflow_dispatch' && '🚀 Manual release → prod (:latest)')
+  || '📦 Build image (main commit — NOT prod)' }}
 
 # Build images and publish them to GHCR.
 #
