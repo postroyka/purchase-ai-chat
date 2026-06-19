@@ -290,12 +290,12 @@ describe('sanitizeDetails', () => {
     expect(sanitizeDetails(smuggled)).toBe('visible here.')
   })
 
-  it('truncates input over 10000 chars and annotates it', async () => {
+  it('truncates input over 5000 chars and annotates it (shared cap with backend, #190)', async () => {
     const { sanitizeDetails } = await loadFresh()
-    const long = 'x'.repeat(10100)
+    const long = 'x'.repeat(5100)
     const out = sanitizeDetails(long)
     expect(out.length).toBeLessThan(long.length)
-    expect(out).toContain('truncated')
+    expect(out).toContain('[truncated to 5000 characters]')
   })
 })
 
@@ -357,12 +357,12 @@ describe('formatIssueBody', () => {
   it('embeds details in a <pre><code> block with HTML-escaped content', async () => {
     const { formatIssueBody } = await loadFresh()
     const body = formatIssueBody({
-      kind: 'issue',
+      kind: 'problem',
       details: 'crash on <script>alert(1)</script> & more',
       relatedTool: 'b24_user_me',
       severity: 'high',
     })
-    expect(body).toContain('**Kind**: issue')
+    expect(body).toContain('**Kind**: problem')
     expect(body).toContain('**Related tool**: b24_user_me')
     expect(body).toContain('**Severity**: high')
     expect(body).toContain('<pre><code>')
@@ -373,7 +373,7 @@ describe('formatIssueBody', () => {
   it('HTML-escapes relatedTool defensively (caller-sanitised, but escaped again here)', async () => {
     const { formatIssueBody } = await loadFresh()
     const body = formatIssueBody({
-      kind: 'issue',
+      kind: 'problem',
       details: 'x',
       relatedTool: '<img src=x onerror=alert(1)>',
     })
@@ -383,7 +383,7 @@ describe('formatIssueBody', () => {
 
   it('escapes a bare ampersand in relatedTool', async () => {
     const { formatIssueBody } = await loadFresh()
-    const body = formatIssueBody({ kind: 'issue', details: 'x', relatedTool: 'a & b' })
+    const body = formatIssueBody({ kind: 'problem', details: 'x', relatedTool: 'a & b' })
     expect(body).toContain('**Related tool**: a &amp; b')
   })
 
@@ -399,12 +399,12 @@ describe('formatIssueBody', () => {
     // remain inside the code fence in the rendered body, so the issue doesn't
     // get a stray Markdown paragraph after the closing tag.
     const { sanitizeDetails, formatIssueBody } = await loadFresh()
-    const details = sanitizeDetails('x'.repeat(10100))
-    const body = formatIssueBody({ kind: 'issue', details })
+    const details = sanitizeDetails('x'.repeat(5100))
+    const body = formatIssueBody({ kind: 'problem', details })
 
     const openIdx = body.indexOf('<pre><code>')
     const closeIdx = body.indexOf('</code></pre>')
-    const truncatedIdx = body.indexOf('truncated to 10000 characters')
+    const truncatedIdx = body.indexOf('truncated to 5000 characters')
 
     expect(openIdx).toBeGreaterThan(-1)
     expect(closeIdx).toBeGreaterThan(openIdx)

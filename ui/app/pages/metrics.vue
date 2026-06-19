@@ -66,6 +66,32 @@ const feedbackTotal = computed(() => {
   return sum(f.user) + sum(f.agent)
 })
 
+// «Проблемы матчинга» (issue #182, канал «MCP»). The matching-failure signal already lives in
+// outcomes (supplier/contract/РФ/валюта) + warnings (no_items_matched); we fold the relevant codes
+// into ONE ranked "where matching fails" list. The granular "which suppliers" view is matching.suppliers.
+const MATCHING_REASON_LABELS: Record<string, string> = {
+  supplier_not_found: 'Поставщик не найден',
+  contract_not_found: 'Договор не найден',
+  foreign_supplier: 'Иностранный поставщик (РФ)',
+  unsupported_currency: 'Валюта не BYN',
+  no_items_matched: 'Позиции без каталога'
+}
+// УНП fields render as-is; only the overflow bucket is relabelled.
+const SUPPLIER_LABELS: Record<string, string> = { __other__: 'Прочие (сверх лимита)' }
+
+const matchingReasons = computed(() => {
+  const d = data.value
+  if (!d) return [] as { name: string, count: number }[]
+  const pick = (arr: { name: string, count: number }[], name: string) => arr.find(x => x.name === name)?.count ?? 0
+  return [
+    { name: 'supplier_not_found', count: pick(d.outcomes, 'supplier_not_found') },
+    { name: 'contract_not_found', count: pick(d.outcomes, 'contract_not_found') },
+    { name: 'foreign_supplier', count: pick(d.outcomes, 'foreign_supplier') },
+    { name: 'unsupported_currency', count: pick(d.outcomes, 'unsupported_currency') },
+    { name: 'no_items_matched', count: pick(d.warnings, 'no_items_matched') }
+  ].filter(r => r.count > 0).sort((a, b) => b.count - a.count)
+})
+
 // ── Formatters ───────────────────────────────────────────────────────────────
 const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
 const fmtByn = (n: number) => `${nf.format(n)} BYN`
@@ -309,6 +335,39 @@ const sparkPoints = computed(() => {
 
           <p v-if="feedbackTotal === 0" class="text-xs text-base-500">
             Обратная связь появится после первых отзывов сотрудников (виджет на странице результата) и сигналов агента.
+          </p>
+        </section>
+
+        <!-- Проблемы матчинга (issue #182, канал «MCP») -->
+        <section class="space-y-3">
+          <h2 class="text-sm font-semibold text-base-700">
+            Проблемы матчинга
+          </h2>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <B24Card class="rounded-xl" :b24ui="{ body: 'p-5' }">
+              <h3 class="text-sm font-semibold text-base-700 mb-4">
+                Где не сошлось
+              </h3>
+              <MetricsBarList v-if="matchingReasons.length" :items="matchingReasons" :labels="MATCHING_REASON_LABELS" />
+              <p v-else class="text-sm text-base-500">
+                Пока всё сходится
+              </p>
+            </B24Card>
+
+            <B24Card class="rounded-xl" :b24ui="{ body: 'p-5' }">
+              <h3 class="text-sm font-semibold text-base-700 mb-4">
+                Поставщики без матча (по УНП)
+              </h3>
+              <MetricsBarList v-if="data.matching.suppliers.length" :items="data.matching.suppliers" :labels="SUPPLIER_LABELS" />
+              <p v-else class="text-sm text-base-500">
+                Нет данных
+              </p>
+            </B24Card>
+          </div>
+
+          <p class="text-xs text-base-500">
+            Сводка из результатов агента: где матчинг в Битрикс24 чаще всего не сходится (issue #182, канал «MCP»).
           </p>
         </section>
 

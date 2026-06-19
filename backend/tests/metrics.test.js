@@ -158,10 +158,43 @@ describe('metrics — agent signals & feedback (#182)', () => {
     expect(s.feedback.user.find((f) => f.name === 'suggestion')).toBeFalsy();      // sources don't bleed
   });
 
-  it('empty snapshot exposes well-formed warnings + feedback', async () => {
+  it('records the supplier УНП when supplier matching failed (channel «MCP»)', async () => {
+    const m = mem();
+    await m.recordMatching({ result: { error: 'supplier_not_found', unp: '100345678' } });
+    await m.recordMatching({ result: { error: 'supplier_not_found', unp: '100345678' } });
+    await m.recordMatching({ result: { error: 'supplier_not_found', unp: '222333444' } });
+    const s = await m.snapshot();
+    expect(s.matching.suppliers[0]).toEqual({ name: '100345678', count: 2 }); // sorted desc
+    expect(s.matching.suppliers).toContainEqual({ name: '222333444', count: 1 });
+  });
+
+  it('records matching only for supplier_not_found with a numeric УНП (ignores other/junk)', async () => {
+    const m = mem();
+    await m.recordMatching({ result: { deal: { dealId: '5' } } });                  // success
+    await m.recordMatching({ result: { error: 'contract_not_found' } });             // other matching failure
+    await m.recordMatching({ result: { error: 'supplier_not_found' } });             // no unp
+    await m.recordMatching({ result: { error: 'supplier_not_found', unp: 'x' } });   // not numeric
+    await m.recordMatching({ result: { error: 'supplier_not_found', unp: '<inject> доктекст' } }); // junk → no digits
+    await m.recordMatching({});                                                       // no result
+    const s = await m.snapshot();
+    expect(s.matching.suppliers).toEqual([]);
+  });
+
+  it('caps distinct supplier keys, folding overflow into __other__ (cardinality guard)', async () => {
+    const m = mem();
+    for (let i = 0; i < 300; i++) await m.recordMatching({ result: { error: 'supplier_not_found', unp: String(100000 + i) } });
+    for (let i = 0; i < 4; i++) await m.recordMatching({ result: { error: 'supplier_not_found', unp: String(900000 + i) } }); // NEW → fold
+    await m.recordMatching({ result: { error: 'supplier_not_found', unp: '100000' } }); // known → still increments past cap
+    const s = await m.snapshot();
+    expect(s.matching.suppliers.find((x) => x.name === '__other__')).toEqual({ name: '__other__', count: 4 });
+    expect(s.matching.suppliers.find((x) => x.name === '100000')).toEqual({ name: '100000', count: 2 });
+  });
+
+  it('empty snapshot exposes well-formed warnings + feedback + matching', async () => {
     const s = await mem().snapshot();
     expect(s.warnings).toEqual([]);
     expect(s.feedback).toEqual({ user: [], agent: [] });
+    expect(s.matching).toEqual({ suppliers: [] });
   });
 });
 

@@ -4,7 +4,7 @@ about: Feedback submitted by an AI agent via bx24mcp_submit_feedback
 labels: agent-feedback
 ---
 
-**Kind**: positive | issue | suggestion
+**Kind**: positive | problem | suggestion
 **Related tool**: <name or n/a>
 **Severity**: low | medium | high | n/a
 

@@ -24,7 +24,7 @@ interface ToolContent {
 }
 
 interface ToolInput {
-  kind: 'positive' | 'issue' | 'suggestion'
+  kind: 'positive' | 'problem' | 'suggestion'
   summary: string
   details: string
   relatedTool?: string
@@ -38,7 +38,7 @@ const tool = (await import('../../../../server/mcp/tools/meta/submit-feedback'))
 }
 
 const validInput: ToolInput = {
-  kind: 'issue',
+  kind: 'problem',
   summary: 'tool description was ambiguous',
   details: 'Calling b24_user_me, the description hinted at task creation but no such tool exists.',
   relatedTool: 'b24_user_me',
@@ -66,10 +66,10 @@ describe('bx24mcp_submit_feedback', () => {
       body: string
       labels: string[]
     }
-    expect(call.title).toBe('[agent-feedback/issue] tool description was ambiguous')
+    expect(call.title).toBe('[agent-feedback/problem] tool description was ambiguous')
     expect(call.labels).toEqual([
       'agent-feedback',
-      'feedback:issue',
+      'feedback:problem',
       'tool:b24_user_me',
       'severity:medium',
     ])
@@ -113,7 +113,7 @@ describe('bx24mcp_submit_feedback', () => {
     await tool.handler({ ...validInput, summary: 'line one\nline two\r\nline three' })
 
     const call = createGithubIssue.mock.calls[0]![0] as { title: string }
-    expect(call.title).toBe('[agent-feedback/issue] line one line two line three')
+    expect(call.title).toBe('[agent-feedback/problem] line one line two line three')
   })
 
   it('strips hostile chars (bidi/zero-width) from the summary before it lands in the GitHub title', async () => {
@@ -129,7 +129,7 @@ describe('bx24mcp_submit_feedback', () => {
     })
 
     const call = createGithubIssue.mock.calls[0]![0] as { title: string }
-    expect(call.title).toBe('[agent-feedback/issue] feature request: do thing')
+    expect(call.title).toBe('[agent-feedback/problem] feature request: do thing')
     // Use a Unicode property class so the assertion stays readable without
     // literal hostile chars in the source.
     expect(/\p{Bidi_Control}|\u200b|\u200c|\u200d|\ufeff/u.test(call.title)).toBe(false)

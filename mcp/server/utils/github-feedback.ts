@@ -239,7 +239,10 @@ export function consumeFeedbackQuota(now: number = Date.now()): {
 
 // --- Sanitisation -------------------------------------------------------------
 
-const MAX_DETAILS_LENGTH = 10000
+// Canonical feedback-text cap, shared with the procure-ai backend (backend/feedback.js
+// MAX_COMMENT_LENGTH) so the two "text → GitHub issue" copies stay one contract (#190). 5000 is
+// generous for a feedback note and well under any GitHub body limit.
+const MAX_DETAILS_LENGTH = 5000
 
 // Hostile / accidentally-confusing characters in agent-supplied details.
 // Spelled out with `\u` / `\x` escapes so reviewers can verify what is
@@ -294,7 +297,9 @@ function escapeHtml(input: string): string {
 }
 
 export interface FeedbackBody {
-  kind: 'positive' | 'issue' | 'suggestion'
+  // Canonical kinds — keep in lockstep with the procure-ai backend FEEDBACK_KINDS and the metrics
+  // allowlist (positive | problem | suggestion). 'problem' (not 'issue') is the shared contract (#190).
+  kind: 'positive' | 'problem' | 'suggestion'
   details: string
   relatedTool?: string
   severity?: 'low' | 'medium' | 'high'

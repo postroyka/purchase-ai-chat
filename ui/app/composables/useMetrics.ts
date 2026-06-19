@@ -41,6 +41,8 @@ export interface MetricsSnapshot {
   // issue #182: non-terminal agent quality signals (by code) + feedback volume by source/kind.
   warnings: MetricNamedCount[]
   feedback: { user: MetricNamedCount[], agent: MetricNamedCount[] }
+  // issue #182 channel «MCP»: where matching fails — suppliers (by УНП) most often not matched.
+  matching: { suppliers: MetricNamedCount[] }
   daily: { date: string, files: number }[]
 }
 
