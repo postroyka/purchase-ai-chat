@@ -10,6 +10,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
 import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
+import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
 import { createSessionAuth } from './auth.js';
 import { safeCompare } from './utils.js';
@@ -711,6 +712,18 @@ if (process.argv[1] === __filename) {
   const server = app.listen(PORT, () => {
     console.log(`[backend] procure-ai backend listening on port ${PORT}`);
   });
+
+  // Retention sweep for uploads/ (ТЗ §5 / day 14): periodically delete job folders older than
+  // UPLOADS_RETENTION_DAYS (default 7, floored at 1). Started here — NOT inside createApp — so the
+  // test suites that import createApp never spawn timers or touch the filesystem. uploadDir is
+  // resolved the same way createApp resolves it; the timer is self-unref'd so it can't block exit.
+  const uploadsRetentionDays = Math.max(
+    1,
+    parseInt(process.env.UPLOADS_RETENTION_DAYS ?? '7', 10) || 7,
+  );
+  const uploadsDir = path.resolve(process.env.UPLOAD_DIR ?? 'uploads');
+  startUploadsCleanup({ dir: uploadsDir, retentionDays: uploadsRetentionDays });
+  console.log(`[backend] uploads retention: deleting uploads older than ${uploadsRetentionDays}d (dir: ${uploadsDir})`);
 
   async function shutdown(signal) {
     console.log(`[backend] ${signal} received — graceful shutdown started`);
