@@ -244,7 +244,6 @@ export function createSessionAuth(config = {}) {
     hasValidSession,
     requireSession,
     csrfOk,
-    parseCookies,
     cookieName: COOKIE_NAME,
     // handlers
     loginHandler,
