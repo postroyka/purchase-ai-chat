@@ -91,8 +91,8 @@ importers:
         specifier: ^20.10.3
         version: 20.10.3
       openai:
-        specifier: ^6.34.0
-        version: 6.34.0(ws@8.21.0)(zod@4.4.3)
+        specifier: ^6.44.0
+        version: 6.44.0(ws@8.21.0)(zod@4.4.3)
       tsx:
         specifier: ^4.22.4
         version: 4.22.4
@@ -5436,9 +5436,8 @@ packages:
     resolution: {integrity: sha512-smsWv2LzFjP03xmvFoJ331ss6h+jixfA4UUV/Bsiyuu4YJPfN+FIQGOIiv4w9/+MoHkfkJ22UIaQWRVFRfH6Vw==}
     engines: {node: '>=20'}
 
-  openai@6.34.0:
-    resolution: {integrity: sha512-yEr2jdGf4tVFYG6ohmr3pF6VJuveP0EA/sS8TBx+4Eq5NT10alu5zg2dmxMXMgqpihRDQlFGpRt2XwsGj+Fyxw==}
-    hasBin: true
+  openai@6.44.0:
+    resolution: {integrity: sha512-09/gH+8jH0RgUwsgWHAaxsKGRT5zVZ95IaJUnqAWj6XejIBmnFRwq2WUIF37VtDEsmGrtPmvCs5+yBSeZGWvkA==}
     peerDependencies:
       ws: ^8.18.0
       zod: ^3.25 || ^4.0
@@ -12383,7 +12382,7 @@ snapshots:
       powershell-utils: 0.1.0
       wsl-utils: 0.3.1
 
-  openai@6.34.0(ws@8.21.0)(zod@4.4.3):
+  openai@6.44.0(ws@8.21.0)(zod@4.4.3):
     optionalDependencies:
       ws: 8.21.0
       zod: 4.4.3
