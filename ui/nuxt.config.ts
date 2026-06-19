@@ -9,8 +9,9 @@ const extraAllowedHosts = (process?.env.NUXT_ALLOWED_HOSTS?.split(',').map((s: s
 const prodUrl = process?.env.NUXT_PUBLIC_SITE_URL ?? ''
 
 // Dev-only: the dev-proxy (nitro.devProxy below) injects this Bearer token SERVER-SIDE so it never
-// enters the browser bundle (#41/#105 P1). Empty in production builds — there the UI is same-origin
-// behind HTTP Basic and the browser's cached Basic credentials authenticate the API calls instead.
+// enters the browser bundle (#41/#105 P1). Empty in production builds — there the UI authenticates
+// via the app-session cookie (set by /login or, inside Bitrix24, /session/b24) plus the X-PAI-Auth
+// header that useApi adds; no token is shipped to the browser.
 const devApiToken = process?.env.BACKEND_API_TOKEN ?? ''
 const devAuthHeaders = devApiToken ? { Authorization: `Bearer ${devApiToken}` } : {}
 if (!devApiToken && process?.env.NODE_ENV !== 'production') {
@@ -42,7 +43,7 @@ export default defineNuxtConfig({
      */
     public: {
       // siteUrl only — the backend API token is intentionally NOT exposed to the browser here
-      // (#41/#105 P1). Same-origin auth: page HTTP Basic (prod) / dev-proxy Bearer (dev), see above.
+      // (#41/#105 P1). Auth: app-session cookie + X-PAI-Auth (prod) / dev-proxy Bearer (dev), see above.
       siteUrl: prodUrl
     }
   },
@@ -74,15 +75,22 @@ export default defineNuxtConfig({
   nitro: {
     // In local dev the UI dev-server runs on :3001; API calls are proxied to backend on :3000.
     // In production the backend Express server serves the built static files directly.
-    // Authed routes inject the Bearer token here (server-side) so the browser never holds it
-    // (#41/#105 P1). /health is unauthenticated. In prod these proxies don't exist — Express
-    // serves the static UI same-origin and the browser's HTTP Basic session authenticates.
+    // Authed data routes inject the Bearer token here (server-side) so the browser never holds it
+    // (#41/#105 P1). /health is unauthenticated. The app-session routes (/login·/session·/logout·
+    // /session/b24) are proxied WITHOUT a Bearer: they manage the cookie session themselves. In
+    // prod these proxies don't exist — Express serves the static UI same-origin and the app-session
+    // cookie (X-PAI-Auth header via useApi) authenticates.
     devProxy: {
       '/upload': { target: 'http://localhost:3000/upload', changeOrigin: true, headers: devAuthHeaders },
       '/job': { target: 'http://localhost:3000/job', changeOrigin: true, headers: devAuthHeaders },
       '/health': { target: 'http://localhost:3000/health', changeOrigin: true },
       // Only the JSON data is a backend call; /metrics itself is a Nuxt page.
-      '/metrics/data': { target: 'http://localhost:3000/metrics/data', changeOrigin: true, headers: devAuthHeaders }
+      '/metrics/data': { target: 'http://localhost:3000/metrics/data', changeOrigin: true, headers: devAuthHeaders },
+      // App-session endpoints — forwarded as-is (no Bearer); they set/read the pai_sess cookie.
+      '/login': { target: 'http://localhost:3000/login', changeOrigin: true },
+      '/session/b24': { target: 'http://localhost:3000/session/b24', changeOrigin: true },
+      '/session': { target: 'http://localhost:3000/session', changeOrigin: true },
+      '/logout': { target: 'http://localhost:3000/logout', changeOrigin: true }
     },
     prerender: {
       routes: [

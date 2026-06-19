@@ -203,10 +203,11 @@ const FILE_LABELS = JOB_LABELS
 const FILE_COLORS = JOB_COLORS
 
 // ── API ───────────────────────────────────────────────────────────────────────
-// Backend calls are same-origin and carry no token (#41/#105 P1): in prod the browser auto-attaches
-// its cached HTTP Basic Authorization header (the gate on this page) to same-origin requests — Basic
-// is a per-origin credential, sent regardless of the fetch credentials flag. In dev the nitro
-// devProxy injects the Bearer server-side.
+// Backend calls go through useApi (#41/#105 P1): no token in the bundle. In prod the app-session
+// cookie (set via /login or, inside Bitrix24, /session/b24) authenticates, and useApi adds the
+// X-PAI-Auth CSRF header + credentials:'include' so the cookie rides the cross-site B24 iframe.
+// In dev the nitro devProxy injects the Bearer server-side.
+const { apiFetch } = useApi()
 
 // Автозагрузка сразу после выбора файлов — одно действие, без лишней кнопки.
 watch(selectedFiles, (files) => {
@@ -229,7 +230,7 @@ async function doUpload() {
   for (const f of files) form.append('files[]', f)
 
   try {
-    const res = await $fetch<{ jobId: string, files: Array<{ name: string, status: string }> }>(
+    const res = await apiFetch<{ jobId: string, files: Array<{ name: string, status: string }> }>(
       '/upload',
       { method: 'POST', body: form }
     )
@@ -273,7 +274,7 @@ async function pollOnce(jobId: string) {
   const controller = new AbortController()
   pollController = controller
   try {
-    const data = await $fetch<JobStatus>(`/job/${jobId}/status`, {
+    const data = await apiFetch<JobStatus>(`/job/${jobId}/status`, {
       signal: controller.signal
     })
     pollErrors = 0
