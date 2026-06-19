@@ -44,7 +44,13 @@ export default defineNuxtConfig({
     public: {
       // siteUrl only — the backend API token is intentionally NOT exposed to the browser here
       // (#41/#105 P1). Auth: app-session cookie + X-PAI-Auth (prod) / dev-proxy Bearer (dev), see above.
-      siteUrl: prodUrl
+      siteUrl: prodUrl,
+      // Build version shown in the UI footer (ТЗ §6). NUXT_PUBLIC_GIT_SHA is set by Dockerfile.app
+      // BEFORE `nuxt build`, so the short sha is baked into the prerendered static output at build
+      // time (payloadExtraction is off → runtimeConfig.public can't be overridden at runtime here).
+      // 'dev' is the local/un-built fallback. repoUrl drives the commit/tree link in the footer.
+      gitSha: process.env.NUXT_PUBLIC_GIT_SHA || 'dev',
+      repoUrl: 'https://github.com/postroyka/purchase-ai-chat'
     }
   },
 

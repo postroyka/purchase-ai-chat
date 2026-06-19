@@ -10,6 +10,16 @@ import HamburgerMenuIcon from '@bitrix24/b24icons-vue/outline/HamburgerMenuIcon'
 const open = ref(false)
 const isLoading = inject<Ref<boolean>>('isLoading', ref(false))
 
+// Build version in the footer (ТЗ §6): a short git sha linking to the exact commit on GitHub.
+// The sha is baked into the static bundle at build time via NUXT_PUBLIC_GIT_SHA (see nuxt.config
+// + Dockerfile.app). For an un-built/local checkout gitSha is 'dev' — then link to the default
+// branch tree (there is no commit to point at) and render a plain "vdev" badge.
+const config = useRuntimeConfig()
+const gitSha = String(config.public.gitSha || 'dev')
+const repoUrl = String(config.public.repoUrl || '').replace(/\/+$/, '')
+const buildLabel = computed(() => `v${gitSha === 'dev' ? 'dev' : gitSha.slice(0, 7)}`)
+const buildUrl = computed(() => (gitSha === 'dev' ? `${repoUrl}/tree/main` : `${repoUrl}/commit/${gitSha}`))
+
 const links = computed<NavigationMenuItem[][]>(() => [
   [
     {
@@ -75,6 +85,19 @@ const links = computed<NavigationMenuItem[][]>(() => [
           orientation="vertical"
           class="mt-auto"
         />
+
+        <!-- Build version (ТЗ §6): small muted footer with the short git sha, linking to the
+             exact commit (or the default branch for a local 'dev' build). Hidden when the
+             sidebar is collapsed — the rail is too narrow for the label. -->
+        <a
+          v-if="!collapsed"
+          :href="buildUrl"
+          target="_blank"
+          rel="noopener"
+          class="block px-2 pt-1 text-xs text-(--ui-color-design-plain-na-content) hover:text-(--ui-color-accent-main-primary)"
+        >
+          {{ buildLabel }}
+        </a>
       </template>
     </B24DashboardSidebar>
 

@@ -17,6 +17,13 @@ COPY ui/package.json ui/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY ui/ ./
+
+# Build version (ТЗ §6): bake the short git sha into the UI footer link. The app prerenders to
+# static HTML and payloadExtraction is off, so runtimeConfig.public is frozen at BUILD time — the
+# env var must be set BEFORE `pnpm build`, not at container runtime. Defaults to 'dev' for a local
+# `docker build` without --build-arg; CI passes the real commit (deploy.yml / ci.yml build-args).
+ARG GIT_SHA=dev
+ENV NUXT_PUBLIC_GIT_SHA=$GIT_SHA
 RUN pnpm build
 
 # ---- runtime ----
