@@ -43,7 +43,7 @@ const links = computed<NavigationMenuItem[][]>(() => [
     {
       label: 'GitHub',
       icon: GitHubIcon,
-      to: 'https://github.com/postroyka/purchase-ai-chat',
+      to: repoUrl,
       target: '_blank',
       rel: 'noopener noreferrer'
     }
@@ -93,7 +93,7 @@ const links = computed<NavigationMenuItem[][]>(() => [
           v-if="!collapsed"
           :href="buildUrl"
           target="_blank"
-          rel="noopener"
+          rel="noopener noreferrer"
           class="block px-2 pt-1 text-xs text-(--ui-color-design-plain-na-content) hover:text-(--ui-color-accent-main-primary)"
         >
           {{ buildLabel }}

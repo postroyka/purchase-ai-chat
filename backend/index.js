@@ -352,6 +352,9 @@ export function createApp(config = {}) {
   // Track in-flight processJob calls so graceful shutdown can wait for them.
   let activeJobs = 0;
   app.getActiveJobCount = () => activeJobs;
+  // Expose the resolved upload dir so the prod entrypoint's retention sweep targets the SAME
+  // directory createApp uses — the two must never resolve UPLOAD_DIR independently and diverge.
+  app.getUploadDir = () => uploadDir;
 
   const bearerConfigured = () => Boolean(token) && token !== AUTH_PLACEHOLDER;
   // A session is acceptable whenever we have a signing secret — the cookie is HMAC-verified, so its
@@ -717,13 +720,14 @@ if (process.argv[1] === __filename) {
   // UPLOADS_RETENTION_DAYS (default 7, floored at 1). Started here — NOT inside createApp — so the
   // test suites that import createApp never spawn timers or touch the filesystem. uploadDir is
   // resolved the same way createApp resolves it; the timer is self-unref'd so it can't block exit.
-  const uploadsRetentionDays = Math.max(
-    1,
-    parseInt(process.env.UPLOADS_RETENTION_DAYS ?? '7', 10) || 7,
-  );
-  const uploadsDir = path.resolve(process.env.UPLOAD_DIR ?? 'uploads');
+  // Parse retention: an unset/garbled value falls back to the documented default (7); a finite but
+  // too-small value (0/negative) is passed through and floored to the 1-day minimum INSIDE
+  // cleanupOldUploads — one source of the floor avoids the `parseInt('0')||7` footgun (0 → 7, not 1).
+  const parsedRetention = parseInt(process.env.UPLOADS_RETENTION_DAYS ?? '7', 10);
+  const uploadsRetentionDays = Number.isFinite(parsedRetention) ? parsedRetention : 7;
+  const uploadsDir = app.getUploadDir();
   startUploadsCleanup({ dir: uploadsDir, retentionDays: uploadsRetentionDays });
-  console.log(`[backend] uploads retention: deleting uploads older than ${uploadsRetentionDays}d (dir: ${uploadsDir})`);
+  console.log(`[backend] uploads retention: deleting uploads older than ${Math.max(1, uploadsRetentionDays)}d (dir: ${uploadsDir})`);
 
   async function shutdown(signal) {
     console.log(`[backend] ${signal} received — graceful shutdown started`);

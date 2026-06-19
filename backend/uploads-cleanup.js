@@ -65,7 +65,9 @@ export function cleanupOldUploads({ dir, retentionDays = 7, now = Date.now() } =
     }
     const full = path.join(dir, name);
     try {
-      const { mtimeMs } = fs.statSync(full);
+      // lstatSync (not statSync): we age/remove the entry ITSELF. For a symlink that means its own
+      // mtime, and the rmSync below removes just the link — never following it outside uploadDir.
+      const { mtimeMs } = fs.lstatSync(full);
       if (mtimeMs < cutoff) {
         // recursive+force: job folders contain the uploaded files; force ignores a concurrent
         // delete (ENOENT) so two overlapping sweeps don't fight.

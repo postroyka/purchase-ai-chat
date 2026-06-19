@@ -77,11 +77,14 @@ describe('cleanupOldUploads', () => {
     expect(summary.removed).toContain('a.txt');
   });
 
-  it('floors retentionDays at 1 so a misconfigured 0 cannot wipe fresh uploads', () => {
-    const file = path.join(dir, 'today.txt');
+  // Falsifiable floor test: a 12-HOUR-old file. Without the 1-day floor, retentionDays=0 would
+  // delete anything older than "now" (12h > 0 days → gone); the floor keeps it (12h < 1 day).
+  it.each([0, -5, NaN])('floors a bad retentionDays (%s) at 1 — a 12h-old file survives', (bad) => {
+    const file = path.join(dir, 'half-day.txt');
     fs.writeFileSync(file, 'x');
-    // mtime is "now"; with the 1-day floor a brand-new file is below the cutoff and survives.
-    const summary = cleanupOldUploads({ dir, retentionDays: 0 });
+    ageEntry(file, 12 * 60 * 60 * 1000); // 12 hours old
+
+    const summary = cleanupOldUploads({ dir, retentionDays: bad });
 
     expect(fs.existsSync(file)).toBe(true);
     expect(summary.removed).toHaveLength(0);
@@ -91,6 +94,43 @@ describe('cleanupOldUploads', () => {
     const summary = cleanupOldUploads({ dir: path.join(dir, 'does-not-exist'), retentionDays: 7 });
     expect(summary.removed).toHaveLength(0);
     expect(summary.kept).toBe(0);
+  });
+
+  it('keeps an entry whose mtime equals the cutoff exactly (boundary: strict <, not <=)', () => {
+    const file = path.join(dir, 'boundary.txt');
+    fs.writeFileSync(file, 'x');
+    const past = Date.now() - 7 * DAY_MS;
+    fs.utimesSync(file, new Date(past), new Date(past));
+    // Read the mtime the FS actually stored (dodges sub-ms rounding flakiness), then place `now`
+    // so the cutoff lands exactly on it: cutoff = now - 7d  ⇒  now = mtimeMs + 7d.
+    const mtimeMs = fs.lstatSync(file).mtimeMs;
+    const summary = cleanupOldUploads({ dir, retentionDays: 7, now: mtimeMs + 7 * DAY_MS });
+
+    expect(fs.existsSync(file)).toBe(true); // mtimeMs === cutoff → NOT (< cutoff) → kept
+    expect(summary.kept).toBe(1);
+  });
+
+  it('isolates a per-entry lstat error: skips that entry and keeps sweeping the rest', () => {
+    const good = path.join(dir, 'good.txt');
+    const bad = path.join(dir, 'bad.txt');
+    fs.writeFileSync(good, 'x');
+    fs.writeFileSync(bad, 'x');
+    ageEntry(good, 10 * DAY_MS);
+    ageEntry(bad, 10 * DAY_MS);
+
+    const realLstat = fs.lstatSync.bind(fs);
+    const spy = vi.spyOn(fs, 'lstatSync').mockImplementation((p, ...args) => {
+      if (String(p).endsWith('bad.txt')) throw Object.assign(new Error('boom'), { code: 'EACCES' });
+      return realLstat(p, ...args);
+    });
+    try {
+      const summary = cleanupOldUploads({ dir, retentionDays: 7 });
+      expect(fs.existsSync(good)).toBe(false);            // the good (old) entry was still removed
+      expect(summary.removed).toContain('good.txt');
+      expect(summary.skipped).toBeGreaterThanOrEqual(1);  // bad.txt skipped, sweep not aborted
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -114,6 +154,15 @@ describe('startUploadsCleanup', () => {
     try {
       // The boot pass must have already removed the stale entry (no need to wait the interval).
       expect(fs.existsSync(stale)).toBe(false);
+    } finally {
+      clearInterval(timer);
+    }
+  });
+
+  it('returns an unref-d timer so it never holds the event loop open', () => {
+    const timer = startUploadsCleanup({ dir, retentionDays: 7, intervalMs: 9_999_999 });
+    try {
+      expect(timer.hasRef?.()).toBe(false); // .unref() was applied
     } finally {
       clearInterval(timer);
     }
