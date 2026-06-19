@@ -30,7 +30,7 @@
 
 Деление обусловлено архитектурным принципом изоляции: `app` не имеет прямого доступа к Б24 API — только через `mcp`.
 
-**Интеграция с Bitrix24.** MCP-инструменты (`b24_pst_crm_*`) вызывают **REST-контроллеры `shef:purchase.api.procure*`**, добавленные в живой модуль коробки `shef.purchase` (через его `restIntegration`). Транспорт — стандартный REST-вебхук (`NUXT_BITRIX24_WEBHOOK_URL`); отдельного URL контроллера нет. `B24_CONTRACTS_API_URL` убран — не нужен. Исходники — `b24-controller/`, деплой по релизному тегу `v*` (workflow `deploy-b24.yml`, синхронно с прод-образами) или вручную `make deploy-b24`; rsync только `procure*.php`, без `--delete`. **Существующий код `shef.purchase` не трогаем.**
+**Интеграция с Bitrix24.** MCP-инструменты (`b24_pst_crm_*`) вызывают **REST-контроллеры `shef:purchase.api.procure*`**, добавленные в живой модуль коробки `shef.purchase` (через его `restIntegration`). Транспорт — стандартный REST-вебхук (`NUXT_BITRIX24_WEBHOOK_URL`); отдельного URL контроллера нет. `B24_CONTRACTS_API_URL` убран — не нужен. Исходники — `b24-controller/`, деплой по релизному тегу `v*` (workflow `deploy-b24.yml`) или вручную `make deploy-b24`; rsync только `procure*.php`, без `--delete`. ⚠️ Образы (`deploy.yml`) едут **CD на каждый зелёный main**, а PHP-контроллеры — **только по тегу `v*`**; связанные правки контракта Node↔PHP выкатывать тегом. **Существующий код `shef.purchase` не трогаем.**
 
 ---
 
@@ -81,8 +81,8 @@ procure-ai/
 │   └── ТЗ_Закупки_PST.md
 └── .github/workflows/
     ├── ci.yml
-    ├── deploy.yml                  # main→sha-<sha>; тег v*→latest (прод #104); Watchtower следит за latest
-    └── deploy-b24.yml              # PHP-контроллеры shef.purchase по тегу v* (синхронно с образами)
+    ├── deploy.yml                  # «Publish images»: зелёный main→latest (continuous deploy); тег v*→ +версия-метка; Watchtower следит за latest
+    └── deploy-b24.yml              # PHP-контроллеры shef.purchase ТОЛЬКО по тегу v* (образы — CD на main)
 ```
 
 ---

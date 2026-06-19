@@ -1,27 +1,21 @@
 name: Publish images
 
-# Per-run label so the Actions list shows AT A GLANCE whether a run shipped to prod or just built
-# a rollback artifact: a plain main push builds sha-<sha> only (NOT prod); a v* release tag or a
-# gated manual dispatch moves :latest (prod). See the gate logic below.
+# Per-run label so the Actions list shows what each run deployed.
 run-name: >-
   ${{ (github.event_name == 'push' && format('🚀 Release {0} → prod (:latest)', github.ref_name))
-  || (github.event_name == 'workflow_dispatch' && '🚀 Manual release → prod (:latest)')
-  || '📦 Build image (main commit — NOT prod)' }}
+  || (github.event_name == 'workflow_dispatch' && '🚀 Manual deploy → prod (:latest)')
+  || format('🚀 Deploy main {0} → prod (:latest)', github.event.workflow_run.head_sha) }}
 
-# Build images and publish them to GHCR.
+# Build images and publish them to GHCR. CONTINUOUS DEPLOYMENT — a green CI on main ships to prod;
+# no release tag is required. The CI run IS the gate: only a GREEN main commit publishes :latest.
+#   • Push to main → after CI passes (workflow_run): build :latest + sha-<sha>. Watchtower picks it
+#     up → prod. A red CI never reaches build-and-push, so prod only ever gets green commits.
+#   • Push a v* tag → build :latest + :<tag> + sha-<sha> — an OPTIONAL marked release / rollback
+#     point (gated: that commit's CI must be green). Not required for a deploy.
+#   • Manual workflow_dispatch → same, gated on that commit's CI being green.
 #
-# Human-in-the-loop release gate (#104) — a green CI is NOT, by itself, "ship to prod"
-# (the live Bitrix24 box isn't covered by tests). So pushing to main no longer moves
-# production:
-#   • Push to main, CI passes  → build immutable sha-<sha> images ONLY (rollback
-#     artifacts). Production is untouched — Watchtower only follows :latest.
-#   • Push a v* tag            → build :latest + :<tag> + sha-<sha>. Cutting the release
-#     tag IS the deliberate human action that ships to prod.
-#   • Manual workflow_dispatch → escape hatch; builds :latest + sha-<sha>, but ONLY after
-#     verifying CI for that exact commit is green (it used to bypass the CI gate entirely).
-#
-# The production server runs Watchtower, which polls GHCR (~5 min) for :latest and
-# recreates the containers automatically — no SSH deploy step here.
+# The production server runs Watchtower, which polls GHCR (~5 min) for :latest and recreates the
+# containers automatically — no SSH deploy step here. sha-<sha> images are kept for rollback (§13).
 on:
   workflow_run:
     workflows: [CI]
@@ -76,7 +70,10 @@ jobs:
     name: Build and push Docker images to GHCR
     needs: [verify-ci]
     runs-on: ubuntu-latest
-    # Run on a (gated) manual dispatch, on a v* tag push, or when the triggering CI passed.
+    # THE green-CI gate for main pushes lives HERE: a workflow_run reaches build-and-push only when
+    # the triggering CI run succeeded, so a red CI on main never publishes :latest. (verify-ci
+    # additionally gates tag/dispatch, where green CI isn't implied by the trigger.) Do NOT drop the
+    # `workflow_run.conclusion == 'success'` clause — it is the only thing protecting prod on main.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     # Only this job needs to write packages.
     permissions:
@@ -94,22 +91,24 @@ jobs:
             context: .
 
     steps:
-      # Resolve the commit to build and the tag set per trigger. Every build publishes an
-      # immutable sha-<sha> tag (rollback); :latest moves ONLY on a release tag or a gated
-      # manual dispatch — never on a plain main push.
+      # Resolve the commit to build and the image tags. Continuous deployment: EVERY trigger
+      # publishes :latest (→ prod) plus an immutable sha-<sha> (rollback). A v* tag additionally
+      # publishes the version image tag as a release marker.
       - name: Resolve commit + image tags
         id: meta
+        env:
+          # head_sha is empty for tag/dispatch (then we fall back to github.sha). The env + shell
+          # `${VAR:-…}` also guards the rare "null" string an API response can give — a bare
+          # `${{ … || github.sha }}` expression would pass "null" through → a bogus :sha-null tag.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          sha="${{ github.event.workflow_run.head_sha || github.sha }}"
+          sha="${HEAD_SHA:-${{ github.sha }}}"
+          if [ "$sha" = "null" ]; then sha="${{ github.sha }}"; fi
           base="ghcr.io/${{ github.repository_owner }}/procure-ai-${{ matrix.name }}"
-          tags="${base}:sha-${sha}"
-          case "${{ github.event_name }}" in
-            push)               # v* tag → release: move :latest and add the version tag
-              tags="${tags}"$'\n'"${base}:latest"$'\n'"${base}:${{ github.ref_name }}" ;;
-            workflow_dispatch)  # gated escape hatch → also move :latest
-              tags="${tags}"$'\n'"${base}:latest" ;;
-            # workflow_run (CI on main) → sha-only; :latest (production) is left untouched.
-          esac
+          tags="${base}:latest"$'\n'"${base}:sha-${sha}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tags="${tags}"$'\n'"${base}:${{ github.ref_name }}"   # v* tag → version image marker
+          fi
           {
             echo "sha=${sha}"
             echo "tags<<EOF"
