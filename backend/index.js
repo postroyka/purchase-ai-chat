@@ -759,9 +759,11 @@ async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
     if (!fb || typeof fb !== 'object') continue;
     const note = typeof fb.note === 'string' ? fb.note : '';
     if (note.trim() === '') continue;
-    const kind = typeof fb.kind === 'string' ? fb.kind : 'problem';
+    // Normalise the kind ONCE so the /metrics counter and the issue label agree (an unknown kind
+    // becomes 'problem' in both, instead of 'other' in metrics vs 'problem' on the issue).
+    const kind = normalizeKind(typeof fb.kind === 'string' ? fb.kind : '') ?? 'problem';
     const tool = typeof fb.tool === 'string' ? fb.tool : '';
-    metrics?.recordFeedback({ source: 'agent', kind }).catch?.(() => {});
+    metrics?.recordFeedback({ source: 'agent', kind })?.catch(() => {});
     try {
       await agentFeedback?.report({ kind, tool, note, context: ctx });
     } catch { /* reporter is best-effort and already swallows; guard anyway */ }
@@ -815,9 +817,13 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       // Channel «агент» (issue #182): non-terminal quality signals → metrics counts; developer
       // feedback ("what hinders / how to improve" about our tools/prompt) → deduped GitHub issue +
       // metrics. Both are optional fields in the agent result and best-effort — never fail the job.
-      const warnings = Array.isArray(result?.warnings) ? result.warnings.filter((w) => typeof w === 'string') : [];
+      const warnings = Array.isArray(result?.warnings)
+        ? result.warnings.filter((w) => typeof w === 'string').slice(0, 20) // bound at the boundary
+        : [];
       if (warnings.length) metrics?.recordWarnings(warnings);
-      await reportAgentFeedback(result, agentFeedback, metrics, { jobId, fileName: fileEntry.name });
+      // Fire-and-forget: agent-feedback issue creation / metrics must NEVER delay the job — it never
+      // feeds back into job state, and the metrics count (not the issue) is the durable signal.
+      void reportAgentFeedback(result, agentFeedback, metrics, { jobId, fileName: fileEntry.name }).catch(() => {});
     } catch (err) {
       // Redact any Bearer token before the message is logged, persisted, or returned.
       const safeMsg = redactToken(String(err?.message ?? 'agent error'));

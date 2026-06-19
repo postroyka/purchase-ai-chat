@@ -397,6 +397,21 @@ describe('POST /feedback', () => {
     expect(res.status).toBe(201);
     expect(spy).toHaveBeenCalledWith({ source: 'user', kind: 'problem' });
   });
+
+  it('does NOT count feedback on a 400 or a 502 (counts successful submits, not attempts)', async () => {
+    const metrics = createMetrics({ redisUrl: '' });
+    const spy = vi.spyOn(metrics, 'recordFeedback');
+    // 400 — bad kind, rejected before the GitHub call
+    const bad = await request(appWith({ metrics })).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'nope', comment: 'x' });
+    expect(bad.status).toBe(400);
+    // 502 — GitHub fails, count line sits after createGithubIssue so it never runs
+    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 500 }));
+    const fail = await request(appWith({ metrics })).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'x' });
+    expect(fail.status).toBe(502);
+    expect(spy).not.toHaveBeenCalled();
+  });
 });
 
 // Keep FEEDBACK_KINDS in lockstep with the UI widget's options.

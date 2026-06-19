@@ -16,7 +16,7 @@
 // hiccup must never fail or delay a real job beyond the bounded GitHub call.
 
 import { createHash } from 'node:crypto';
-import { createGithubIssue, buildAgentFeedbackIssue, GithubFeedbackError } from './feedback.js';
+import { createGithubIssue, buildAgentFeedbackIssue, GithubFeedbackError, safeToolName } from './feedback.js';
 
 const DAY_SEC = 86400;
 
@@ -39,8 +39,11 @@ export function createAgentFeedbackReporter({
   const memSeen = new Map(); // dedup hash -> expiresAt (ms) — in-memory fallback
   const memHour = new Map(); // hour bucket -> count           — in-memory fallback
 
+  // Dedup on the SAME normalised tool the issue actually renders (safeToolName) — otherwise an
+  // injected document could vary a junk `tool` (`a!`, `b!`, …) to defeat dedup while every issue
+  // still shows the same blank tool. note is normalised + capped inside normalizeNote.
   const hashOf = (kind, tool, note) =>
-    createHash('sha256').update(`${kind}|${tool || ''}|${normalizeNote(note)}`).digest('hex').slice(0, 32);
+    createHash('sha256').update(`${kind}|${safeToolName(tool)}|${normalizeNote(note)}`).digest('hex').slice(0, 32);
 
   // Has this exact friction been issued within the TTL window? (No marking — see markSeen.)
   async function isDuplicate(hash) {
@@ -62,7 +65,9 @@ export function createAgentFeedbackReporter({
     if (memSeen.size > 5000) for (const [k, e] of memSeen) if (e <= now()) memSeen.delete(k);
   }
 
-  // Consume one slot of the hourly cap; returns true while under the ceiling.
+  // Consume one slot of the hourly cap; returns true while under the ceiling. NB: this counts
+  // ATTEMPTS that got past dedup, not issues actually created — a GitHub outage burning the budget
+  // is acceptable (it self-resets next hour; the metrics counters are unaffected).
   async function underHourlyCap() {
     const bucket = Math.floor(now() / 3600000);
     if (redisClient) {
@@ -85,7 +90,10 @@ export function createAgentFeedbackReporter({
    */
   async function report({ kind, tool, note, context } = {}) {
     if (!enabled) return { created: false, reason: 'disabled' };
-    if (!note || String(note).trim() === '') return { created: false, reason: 'empty' };
+    // Treat a note with no letters/digits (empty, whitespace, or emoji/punctuation only) as empty:
+    // normalizeNote collapses all of them to '' and they'd otherwise share one dedup bucket and
+    // render as "(без описания)".
+    if (normalizeNote(note) === '') return { created: false, reason: 'empty' };
     try {
       const k = kind || 'problem';
       const hash = hashOf(k, tool, note);

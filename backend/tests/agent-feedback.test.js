@@ -101,6 +101,106 @@ describe('createAgentFeedbackReporter', () => {
     expect(body.body).not.toContain('<b>');
     expect(body.body).toContain('&lt;b&gt;');
   });
+
+  it('skips a note that is only emoji/punctuation (normalises to empty)', async () => {
+    const fetchImpl = ghFetch();
+    const r = createAgentFeedbackReporter({ token: GH, repo: 'o/r', fetchImpl });
+    expect(await r.report({ kind: 'problem', note: '👍 !!! ' })).toMatchObject({ created: false, reason: 'empty' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('dedups on the SANITISED tool: junk tool variations cannot defeat dedup', async () => {
+    const fetchImpl = ghFetch();
+    const r = createAgentFeedbackReporter({ token: GH, repo: 'o/r', fetchImpl });
+    const a = await r.report({ kind: 'problem', tool: 'bad tool!', note: 'same friction' });
+    const b = await r.report({ kind: 'problem', tool: 'other junk!!', note: 'same friction' });
+    expect(a).toMatchObject({ created: true });
+    expect(b).toMatchObject({ created: false, reason: 'duplicate' }); // both tools sanitise to '' → same hash
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed create is NOT dedup-suppressed: the same note succeeds when GitHub recovers', async () => {
+    let n = 0;
+    const fetchImpl = vi.fn(async () => {
+      n += 1;
+      return n === 1
+        ? { ok: false, status: 500, json: async () => ({}) }
+        : { ok: true, status: 201, json: async () => ({ html_url: 'https://x/issues/9', number: 9 }) };
+    });
+    const r = createAgentFeedbackReporter({ token: GH, repo: 'o/r', fetchImpl });
+    const first = await r.report({ kind: 'problem', note: 'retry me' });
+    const second = await r.report({ kind: 'problem', note: 'retry me' });
+    expect(first).toMatchObject({ created: false, reason: 'error' });
+    expect(second).toMatchObject({ created: true, number: 9 }); // proves markSeen was skipped on failure
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('memory dedup expires after the TTL; the same note re-issues', async () => {
+    const fetchImpl = ghFetch();
+    let t = 1_000_000;
+    const r = createAgentFeedbackReporter({ token: GH, repo: 'o/r', fetchImpl, dedupTtlSec: 100, now: () => t });
+    await r.report({ kind: 'problem', note: 'ttl note' });
+    t += 50_000; // +50s, still within TTL
+    expect(await r.report({ kind: 'problem', note: 'ttl note' })).toMatchObject({ reason: 'duplicate' });
+    t += 60_000; // now 110s > 100s TTL
+    expect(await r.report({ kind: 'problem', note: 'ttl note' })).toMatchObject({ created: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('hourly cap resets on the next hour bucket', async () => {
+    const fetchImpl = ghFetch();
+    let t = 0;
+    const r = createAgentFeedbackReporter({ token: GH, repo: 'o/r', fetchImpl, hourlyCap: 1, now: () => t });
+    expect(await r.report({ kind: 'problem', note: 'h1' })).toMatchObject({ created: true });
+    expect(await r.report({ kind: 'problem', note: 'h2' })).toMatchObject({ reason: 'rate_capped' });
+    t += 3_600_000; // next hour bucket
+    expect(await r.report({ kind: 'problem', note: 'h3' })).toMatchObject({ created: true });
+  });
+});
+
+// In-memory fakes for the Redis-backed dedup/cap path (prod wires rateLimitRedis). TTL is not
+// simulated here — we assert the COMMANDS (exists/set/incr) drive the right decisions.
+function fakeRedis() {
+  const store = new Map();
+  return {
+    store,
+    async exists(k) { return store.has(k) ? 1 : 0; },
+    async set(k, v) { store.set(k, v); return 'OK'; }, // EX arg ignored in the fake
+    async incr(k) { const n = (store.get(k) || 0) + 1; store.set(k, n); return n; },
+    async expire() { return 1; },
+  };
+}
+function throwingRedis() {
+  const boom = async () => { throw new Error('redis down'); };
+  return { exists: boom, set: boom, incr: boom, expire: boom };
+}
+
+describe('createAgentFeedbackReporter — Redis-backed path', () => {
+  it('dedups via EXISTS and writes the dedup key via SET', async () => {
+    const fetchImpl = ghFetch();
+    const redis = fakeRedis();
+    const r = createAgentFeedbackReporter({ token: GH, repo: 'o/r', fetchImpl, redisClient: redis });
+    expect(await r.report({ kind: 'problem', tool: 't', note: 'redis friction' })).toMatchObject({ created: true });
+    expect([...redis.store.keys()].some((k) => k.startsWith('fbk:agent:dedup:'))).toBe(true);
+    expect(await r.report({ kind: 'problem', tool: 't', note: 'redis friction' })).toMatchObject({ created: false, reason: 'duplicate' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('enforces the hourly cap via INCR', async () => {
+    const fetchImpl = ghFetch();
+    const r = createAgentFeedbackReporter({ token: GH, repo: 'o/r', fetchImpl, redisClient: fakeRedis(), hourlyCap: 1 });
+    expect(await r.report({ kind: 'problem', note: 'first' })).toMatchObject({ created: true });
+    expect(await r.report({ kind: 'problem', note: 'second' })).toMatchObject({ created: false, reason: 'rate_capped' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails SAFE on Redis errors: never suppresses (dedup) and never blocks (cap) feedback', async () => {
+    const fetchImpl = ghFetch();
+    const r = createAgentFeedbackReporter({ token: GH, repo: 'o/r', fetchImpl, redisClient: throwingRedis() });
+    // isDuplicate→false (don't suppress) and underHourlyCap→true (don't block) → the issue still opens.
+    expect(await r.report({ kind: 'problem', note: 'x' })).toMatchObject({ created: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── Integration: processJob wires agent warnings + feedback (channel «агент») ──
@@ -180,13 +280,28 @@ describe('processJob — agent feedback channel (#182)', () => {
     }, { metrics, agentFeedback: { enabled: true, report } });
 
     expect(metrics.recordWarnings).toHaveBeenCalledWith(['no_items_matched', 'articles_not_in_catalog']);
+    // Reporting is fire-and-forget (must not delay the job) → await its completion before asserting.
+    await vi.waitFor(() => expect(report).toHaveBeenCalledTimes(1));
     expect(metrics.recordFeedback).toHaveBeenCalledWith({ source: 'agent', kind: 'suggestion' });
-    expect(report).toHaveBeenCalledTimes(1);
     expect(report.mock.calls[0][0]).toMatchObject({
       tool: 'b24_pst_crm_find_contract', kind: 'suggestion',
       note: expect.stringContaining('договор'),
       context: expect.objectContaining({ fileName: 'invoice.pdf' }),
     });
+  });
+
+  it('processes feedback + warnings even on a BUSINESS error (status done, no deal)', async () => {
+    const metrics = fakeMetrics();
+    const report = vi.fn(async () => ({ created: true }));
+    await runOneFile({
+      error: 'tool_unavailable', message: 'B24 недоступен',
+      warnings: ['no_items_matched'],
+      feedback: [{ tool: 'b24_pst_crm_find_supplier', kind: 'problem', note: 'таймаут на поиске поставщика' }],
+    }, { metrics, agentFeedback: { enabled: true, report } });
+
+    expect(metrics.recordWarnings).toHaveBeenCalledWith(['no_items_matched']);
+    await vi.waitFor(() => expect(report).toHaveBeenCalledTimes(1));
+    expect(metrics.recordFeedback).toHaveBeenCalledWith({ source: 'agent', kind: 'problem' });
   });
 
   it('does nothing extra for a clean result (no warnings / no feedback)', async () => {
@@ -213,6 +328,6 @@ describe('processJob — agent feedback channel (#182)', () => {
     }, { metrics, agentFeedback: { enabled: true, report } });
 
     // slice(0,10) → [empty, friction0..friction8]; empty skipped → exactly 9 reports.
-    expect(report).toHaveBeenCalledTimes(9);
+    await vi.waitFor(() => expect(report).toHaveBeenCalledTimes(9));
   });
 });

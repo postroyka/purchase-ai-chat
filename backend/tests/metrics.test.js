@@ -136,6 +136,14 @@ describe('metrics — agent signals & feedback (#182)', () => {
     expect(s.warnings).toContainEqual({ name: 'no_items_matched', count: 1 });     // only the valid string counted
   });
 
+  it('caps the per-call warnings list at 20 (anti-cardinality-DoS)', async () => {
+    const m = mem();
+    const many = Array.from({ length: 50 }, () => 'no_items_matched');
+    await m.recordWarnings(many);
+    const s = await m.snapshot();
+    expect(s.warnings).toContainEqual({ name: 'no_items_matched', count: 20 }); // only the first 20 counted
+  });
+
   it('splits feedback counts by source (user vs agent) and kind', async () => {
     const m = mem();
     await m.recordFeedback({ source: 'user', kind: 'problem' });

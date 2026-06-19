@@ -135,8 +135,10 @@ export function buildIssue({ kind, comment, context = {} }) {
   return { title, body, labels };
 }
 
-// Tool name as referenced by the agent — bound to a safe shape before it goes in a title/label.
-function safeToolName(tool) {
+// Tool name as referenced by the agent — bound to a safe shape before it goes in a title/label OR a
+// dedup key (agent-feedback.js hashes on this same normalised form, so junk tool values can't each
+// spawn a "distinct" near-identical issue). Exported for that reason.
+export function safeToolName(tool) {
   const v = stripHostileChars(tool).trim();
   return /^[A-Za-z0-9_]{1,64}$/.test(v) ? v : '';
 }
@@ -152,7 +154,6 @@ export function formatAgentFeedbackBody({ tool, note, context = {} }) {
     contextLine('Инструмент', safeToolName(tool)),
     contextLine('Задача (jobId)', context.jobId),
     contextLine('Файл', context.fileName),
-    contextLine('Версия сборки', context.appVersion),
   ].filter(Boolean);
 
   const safeNote = escapeHtml(stripHostileChars(note)).trim() || '(без описания)';
