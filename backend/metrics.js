@@ -82,6 +82,9 @@ function label(s, fallback = 'other') {
 // unique hash field with no TTL. Pin to a known set; anything else → 'other' (cardinality cap).
 const KNOWN_OUTCOMES = new Set([
   'ok', 'unknown', 'other',
+  // file finished but NO deal was created — business error OR an unrecognised document (#192).
+  // Distinct from 'ok' so the success-rate matches the UI ("успех = создана сделка").
+  'no_deal',
   // business errors returned by the agent in result.error — keep in sync with prompts/main.md
   // (PR #71: supplier_not_found / contract_not_found replaced the old file_* codes;
   //  #97: foreign_supplier — российский поставщик отсекается по реквизитам ИНН/КПП).

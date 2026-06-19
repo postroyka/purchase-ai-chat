@@ -69,8 +69,8 @@
               Статус обработки
             </h2>
             <B24Badge
-              :label="jobBadge.label"
-              :color="jobBadge.color"
+              :label="jobBadge(job.status, job.files).label"
+              :color="jobBadge(job.status, job.files).color"
               size="sm"
             />
           </div>
@@ -240,20 +240,14 @@
 </template>
 
 <script setup lang="ts">
+import { fileBadge, jobBadge, fileSucceeded } from '~/utils/result-badges'
+
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
 definePageMeta({ layout: 'default' })
 
 const toast = useToast()
 
 // ── Типы ─────────────────────────────────────────────────────────────────────
-
-type BadgeColor
-  = | 'air-primary'
-    | 'air-primary-success'
-    | 'air-primary-alert'
-    | 'air-primary-warning'
-    | 'air-secondary'
-    | 'air-tertiary'
 
 interface FileEntry {
   name: string
@@ -287,31 +281,11 @@ const POLL_MIN_MS = 2000
 const POLL_MAX_MS = 30000
 const MAX_POLL_ERRORS = 5
 
-// ── Метки и цвета статусов ───────────────────────────────────────────────────
-
-type StatusKey = 'pending' | 'processing' | 'done' | 'error'
-
-const JOB_LABELS: Record<StatusKey, string> = {
-  pending: 'Ожидание',
-  processing: 'Обработка…',
-  done: 'Готово',
-  error: 'Ошибка'
-}
-
-const JOB_COLORS: Record<StatusKey, BadgeColor> = {
-  pending: 'air-secondary',
-  processing: 'air-primary',
-  done: 'air-primary-success',
-  error: 'air-primary-alert'
-}
-
-const FILE_LABELS = JOB_LABELS
-const FILE_COLORS = JOB_COLORS
-
 // ── Созданная сделка ───────────────────────────────────────────────────────────
 // Достаём ссылку на сделку из результата файла и открываем её. Внутри Bitrix24 —
 // нативным слайдером (не уводит из приложения); вне портала — ссылкой в новой вкладке
-// (если бэкенд отдал абсолютный deal.url).
+// (если бэкенд отдал абсолютный deal.url). Бейдж-логику (успех = есть сделка) держим
+// в app/utils/result-badges.ts — она чистая и покрыта юнит-тестами (issue #192).
 const b24 = useB24()
 
 interface CreatedDeal { dealId: string, url: string | null }
@@ -322,33 +296,6 @@ function dealOf(file: FileEntry): CreatedDeal | null {
   if (id == null || String(id).trim() === '') return null
   return { dealId: String(id), url: deal?.url ?? null }
 }
-
-// issue #192: a 'done' file is a real SUCCESS only if a deal was created. A 'done' file WITHOUT a
-// deal (business error / unrecognised document) is shown as a distinct amber "Без сделки" with the
-// reason from file.problem — never a bare green "Готово".
-function fileSucceeded(file: FileEntry): boolean {
-  return file.status === 'done' && dealOf(file) !== null
-}
-
-function fileBadge(file: FileEntry): { label: string, color: BadgeColor } {
-  if (file.status === 'done' && !dealOf(file)) {
-    return { label: 'Без сделки', color: 'air-primary-warning' }
-  }
-  return { label: FILE_LABELS[file.status] ?? file.status, color: FILE_COLORS[file.status] ?? 'air-secondary' }
-}
-
-// Job-level badge: green "Готово" only when every file produced a deal; amber otherwise so a batch
-// where nothing (or only some) was created doesn't read as a clean success.
-const jobBadge = computed<{ label: string, color: BadgeColor }>(() => {
-  const j = job.value
-  if (!j) return { label: '', color: 'air-secondary' }
-  if (j.status === 'done') {
-    const withDeal = j.files.filter(f => dealOf(f) !== null).length
-    if (withDeal === 0) return { label: 'Без сделок', color: 'air-primary-warning' }
-    if (withDeal < j.files.length) return { label: 'Частично', color: 'air-primary-warning' }
-  }
-  return { label: JOB_LABELS[j.status] ?? j.status, color: JOB_COLORS[j.status] ?? 'air-secondary' }
-})
 
 // Кнопку показываем только когда сделку реально есть чем открыть: внутри B24 (слайдер)
 // или когда есть абсолютная ссылка от бэкенда (standalone).
@@ -465,7 +412,7 @@ async function pollOnce(jobId: string) {
           title: allOk ? 'Обработка завершена' : 'Завершено с замечаниями',
           description: allOk
             ? `Сделки созданы: ${ok} из ${total}`
-            : `Сделок создано: ${ok} из ${total}. Остальные — без сделки, причина указана у файла.`,
+            : `Сделок создано: ${ok} из ${total}. Остальные — с проблемой, причина указана у файла.`,
           color: allOk ? 'air-primary-success' : 'air-primary-warning',
           duration: allOk ? 5000 : 7000
         })
