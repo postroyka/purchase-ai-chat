@@ -130,6 +130,60 @@
             </div>
           </B24Card>
 
+          <!-- Обратная связь сотрудника (issue #182): оценка результата + комментарий → GitHub issue.
+               Показываем только когда задание завершилось и канал настроен на бэкенде. -->
+          <B24Card
+            v-if="feedbackEnabled && (job.status === 'done' || job.status === 'error')"
+            class="rounded-xl"
+            :b24ui="{ body: 'p-4 sm:p-5' }"
+          >
+            <template v-if="!feedbackSent">
+              <p class="text-sm font-medium text-base-700">
+                Как результат?
+              </p>
+              <p class="mt-1 text-xs text-base-500">
+                Помогите улучшить распознавание — особенно артикулы и определение РФ/РБ поставщика.
+              </p>
+
+              <div class="mt-3 flex flex-wrap gap-2">
+                <B24Button
+                  v-for="opt in FEEDBACK_OPTIONS"
+                  :key="opt.kind"
+                  :color="feedbackKind === opt.kind ? 'air-primary' : 'air-tertiary'"
+                  size="sm"
+                  @click="feedbackKind = opt.kind"
+                >
+                  {{ opt.label }}
+                </B24Button>
+              </div>
+
+              <B24Textarea
+                v-model="feedbackComment"
+                class="mt-3 w-full"
+                :rows="3"
+                :maxrows="8"
+                autoresize
+                :disabled="feedbackSubmitting"
+                placeholder="Что было не так или что понравилось? Можно указать файл/позицию."
+              />
+
+              <div class="mt-3 flex justify-end">
+                <B24Button
+                  color="air-primary"
+                  size="sm"
+                  :disabled="!canSubmitFeedback"
+                  @click="submitFeedback"
+                >
+                  {{ feedbackSubmitting ? 'Отправляем…' : 'Отправить отзыв' }}
+                </B24Button>
+              </div>
+            </template>
+
+            <p v-else class="text-sm text-base-700">
+              Спасибо! Отзыв отправлен — он поможет улучшить распознавание.
+            </p>
+          </B24Card>
+
           <div v-if="job.status === 'done' || job.status === 'error'" class="flex justify-center pt-2">
             <B24Button color="air-secondary" size="sm" @click="resetState">
               Загрузить ещё
@@ -399,7 +453,59 @@ function resetState() {
   job.value = null
   uploadError.value = null
   selectedFiles.value = null
+  // Сбросить и форму обратной связи, чтобы для нового задания она была чистой.
+  feedbackKind.value = null
+  feedbackComment.value = ''
+  feedbackSent.value = false
+  feedbackSubmitting.value = false
 }
+
+// ── Обратная связь сотрудника (issue #182) ─────────────────────────────────────
+// Оценка результата (👍/👎/💡) + комментарий уходит на бэкенд (POST /feedback), который заводит
+// GitHub issue. Виджет показываем только если канал настроен на сервере (GET /feedback/config).
+const { isEnabled: feedbackIsEnabled, submit: submitFeedbackApi } = useFeedback()
+
+type FeedbackKind = 'positive' | 'problem' | 'suggestion'
+const FEEDBACK_OPTIONS: { kind: FeedbackKind, label: string }[] = [
+  { kind: 'positive', label: '👍 Хорошо' },
+  { kind: 'problem', label: '👎 Проблема' },
+  { kind: 'suggestion', label: '💡 Предложение' }
+]
+
+const feedbackEnabled = ref(false)
+const feedbackKind = ref<FeedbackKind | null>(null)
+const feedbackComment = ref('')
+const feedbackSubmitting = ref(false)
+const feedbackSent = ref(false)
+
+// Отправляем, только когда выбран тип и есть текст (бэкенд требует непустой комментарий).
+const canSubmitFeedback = computed(() =>
+  !!feedbackKind.value && feedbackComment.value.trim().length > 0 && !feedbackSubmitting.value
+)
+
+async function submitFeedback() {
+  if (!feedbackKind.value || !canSubmitFeedback.value || !job.value) return
+  feedbackSubmitting.value = true
+  try {
+    await submitFeedbackApi(feedbackKind.value, feedbackComment.value.trim(), { jobId: job.value.jobId })
+    feedbackSent.value = true
+    toast.add({ title: 'Спасибо за отзыв!', color: 'air-primary-success', duration: 4000 })
+  } catch (e: unknown) {
+    toast.add({
+      title: 'Не удалось отправить отзыв',
+      description: extractErrorMessage(e),
+      color: 'air-primary-alert',
+      duration: 6000
+    })
+  } finally {
+    feedbackSubmitting.value = false
+  }
+}
+
+// Узнаём один раз при монтировании, настроен ли канал — иначе виджет не рисуем.
+onMounted(async () => {
+  feedbackEnabled.value = await feedbackIsEnabled()
+})
 
 // ── Утилиты ──────────────────────────────────────────────────────────────────
 

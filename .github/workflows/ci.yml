@@ -37,6 +37,7 @@ jobs:
       - name: Check syntax
         run: |
           node --check backend/index.js
+          node --check backend/feedback.js
           node --check backend/agent-runner.js
           node --check backend/jobs-store.js
           node --check backend/extract-text.js
