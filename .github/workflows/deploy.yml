@@ -4,7 +4,7 @@ name: Publish images
 run-name: >-
   ${{ (github.event_name == 'push' && format('🚀 Release {0} → prod (:latest)', github.ref_name))
   || (github.event_name == 'workflow_dispatch' && '🚀 Manual deploy → prod (:latest)')
-  || '🚀 Deploy main → prod (:latest)' }}
+  || format('🚀 Deploy main {0} → prod (:latest)', github.event.workflow_run.head_sha) }}
 
 # Build images and publish them to GHCR. CONTINUOUS DEPLOYMENT — a green CI on main ships to prod;
 # no release tag is required. The CI run IS the gate: only a GREEN main commit publishes :latest.
@@ -70,7 +70,10 @@ jobs:
     name: Build and push Docker images to GHCR
     needs: [verify-ci]
     runs-on: ubuntu-latest
-    # Run on a (gated) manual dispatch, on a v* tag push, or when the triggering CI passed.
+    # THE green-CI gate for main pushes lives HERE: a workflow_run reaches build-and-push only when
+    # the triggering CI run succeeded, so a red CI on main never publishes :latest. (verify-ci
+    # additionally gates tag/dispatch, where green CI isn't implied by the trigger.) Do NOT drop the
+    # `workflow_run.conclusion == 'success'` clause — it is the only thing protecting prod on main.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     # Only this job needs to write packages.
     permissions:
@@ -93,8 +96,14 @@ jobs:
       # publishes the version image tag as a release marker.
       - name: Resolve commit + image tags
         id: meta
+        env:
+          # head_sha is empty for tag/dispatch (then we fall back to github.sha). The env + shell
+          # `${VAR:-…}` also guards the rare "null" string an API response can give — a bare
+          # `${{ … || github.sha }}` expression would pass "null" through → a bogus :sha-null tag.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          sha="${{ github.event.workflow_run.head_sha || github.sha }}"
+          sha="${HEAD_SHA:-${{ github.sha }}}"
+          if [ "$sha" = "null" ]; then sha="${{ github.sha }}"; fi
           base="ghcr.io/${{ github.repository_owner }}/procure-ai-${{ matrix.name }}"
           tags="${base}:latest"$'\n'"${base}:sha-${sha}"
           if [ "${{ github.event_name }}" = "push" ]; then
