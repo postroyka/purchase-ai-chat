@@ -9,6 +9,7 @@ import WalletIcon from '@bitrix24/b24icons-vue/outline/WalletIcon'
 import MoneyIcon from '@bitrix24/b24icons-vue/outline/MoneyIcon'
 import AlertIcon from '@bitrix24/b24icons-vue/outline/AlertIcon'
 import WarningIcon from '@bitrix24/b24icons-vue/main/WarningIcon'
+import { computeMatchingReasons, MATCHING_REASON_LABELS, SUPPLIER_LABELS } from '~/utils/matching-reasons'
 
 definePageMeta({ layout: 'default' })
 
@@ -66,31 +67,9 @@ const feedbackTotal = computed(() => {
   return sum(f.user) + sum(f.agent)
 })
 
-// «Проблемы матчинга» (issue #182, канал «MCP»). The matching-failure signal already lives in
-// outcomes (supplier/contract/РФ/валюта) + warnings (no_items_matched); we fold the relevant codes
-// into ONE ranked "where matching fails" list. The granular "which suppliers" view is matching.suppliers.
-const MATCHING_REASON_LABELS: Record<string, string> = {
-  supplier_not_found: 'Поставщик не найден',
-  contract_not_found: 'Договор не найден',
-  foreign_supplier: 'Иностранный поставщик (РФ)',
-  unsupported_currency: 'Валюта не BYN',
-  no_items_matched: 'Позиции без каталога'
-}
-// УНП fields render as-is; only the overflow bucket is relabelled.
-const SUPPLIER_LABELS: Record<string, string> = { __other__: 'Прочие (сверх лимита)' }
-
-const matchingReasons = computed(() => {
-  const d = data.value
-  if (!d) return [] as { name: string, count: number }[]
-  const pick = (arr: { name: string, count: number }[], name: string) => arr.find(x => x.name === name)?.count ?? 0
-  return [
-    { name: 'supplier_not_found', count: pick(d.outcomes, 'supplier_not_found') },
-    { name: 'contract_not_found', count: pick(d.outcomes, 'contract_not_found') },
-    { name: 'foreign_supplier', count: pick(d.outcomes, 'foreign_supplier') },
-    { name: 'unsupported_currency', count: pick(d.outcomes, 'unsupported_currency') },
-    { name: 'no_items_matched', count: pick(d.warnings, 'no_items_matched') }
-  ].filter(r => r.count > 0).sort((a, b) => b.count - a.count)
-})
+// «Проблемы матчинга» (issue #182, канал «MCP»). Fold + labels live in a pure, unit-tested module
+// (app/utils/matching-reasons.ts) — the granular "which suppliers" view is data.matching.suppliers.
+const matchingReasons = computed(() => computeMatchingReasons(data.value))
 
 // ── Formatters ───────────────────────────────────────────────────────────────
 const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })

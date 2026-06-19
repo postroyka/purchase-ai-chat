@@ -231,7 +231,11 @@ export async function checkRepoPrivacy({ repo, token, fetchImpl = fetch, timeout
   } catch {
     return { ok: false, private: null, status: response.status };
   }
-  return { ok: true, private: data?.private === true, status: response.status };
+  // Only a boolean `private` is a definite answer. A 200 whose body omits it (shouldn't happen for
+  // /repos, but be defensive) is UNDETERMINED → private:null, so the caller logs "couldn't verify"
+  // rather than a false "PUBLIC" warning.
+  const isPrivate = typeof data?.private === 'boolean' ? data.private : null;
+  return { ok: true, private: isPrivate, status: response.status };
 }
 
 /**

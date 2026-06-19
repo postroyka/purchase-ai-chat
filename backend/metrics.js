@@ -24,6 +24,7 @@ import Redis from 'ioredis';
  *   }): Promise<void>,
  *   recordWarnings(codes: string[]): Promise<void>,
  *   recordFeedback(arg: { source: 'user'|'agent', kind?: string }): Promise<void>,
+ *   recordMatching(arg: { result?: unknown }): Promise<void>,
  *   snapshot(): Promise<MetricsSnapshot>,
  *   ping(): Promise<void>,
  * }} Metrics
@@ -234,6 +235,8 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
       const unp = supplierKeyLabel(r.unp);
       if (!unp) return;
       // Bound distinct keys: a NEW УНП is only added while under the cap; known УНП always increments.
+      // The read-then-write isn't atomic (TOCTOU): concurrent supplier_not_found's can push a few keys
+      // past the cap — benign for a cardinality guard (bounded by job concurrency, never unbounded).
       const cur = await b.hgetall(K.matchingSuppliers);
       const field = (!(unp in (cur || {})) && Object.keys(cur || {}).length >= MATCHING_SUPPLIER_CAP)
         ? '__other__'

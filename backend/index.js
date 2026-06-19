@@ -846,8 +846,9 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
         positions: items.length, positionsNoArticle,
       });
       // Channel «MCP» (issue #182): record WHICH supplier failed to match (by УНП) so the dashboard
-      // can rank the suppliers that fail most. Best-effort, derived from the same result.
-      metrics?.recordMatching({ result });
+      // can rank the suppliers that fail most. Best-effort, derived from the same result. Method-guarded
+      // (?.()) so a partial metrics stub can't throw into the job's success path.
+      metrics?.recordMatching?.({ result });
       // Channel «агент» (issue #182): non-terminal quality signals → metrics counts; developer
       // feedback ("what hinders / how to improve" about our tools/prompt) → deduped GitHub issue +
       // metrics. Both are optional fields in the agent result and best-effort — never fail the job.
@@ -910,11 +911,12 @@ if (process.argv[1] === __filename) {
     if (fbToken) {
       checkRepoPrivacy({ repo: fbRepo, token: fbToken })
         .then((r) => {
-          if (r.ok && r.private === false) {
+          if (r.private === false) {
             console.warn(`[backend] WARNING: feedback repo "${fbRepo}" is PUBLIC — feedback issues contain job context and employee comments. Make it private or point GITHUB_FEEDBACK_REPO at a private repo.`);
-          } else if (!r.ok) {
+          } else if (r.private == null) {
             console.warn(`[backend] could not verify feedback repo privacy (status: ${r.status || 'network'}); ensure "${fbRepo}" is private.`);
           }
+          // r.private === true → repo is private as intended → no log
         })
         .catch(() => {});
     }

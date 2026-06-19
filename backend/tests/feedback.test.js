@@ -231,6 +231,11 @@ describe('checkRepoPrivacy', () => {
     expect(r).toEqual({ ok: true, private: false, status: 200 });
   });
 
+  it('a 200 without a boolean `private` is UNDETERMINED (private:null) — never a false PUBLIC', async () => {
+    const r = await checkRepoPrivacy({ repo: 'owner/repo', token: GH_TOKEN, fetchImpl: fakeFetch({ ok: true, status: 200, json: {} }) });
+    expect(r).toEqual({ ok: true, private: null, status: 200 }); // → caller logs "couldn't verify", not "PUBLIC"
+  });
+
   it('returns ok:false / private:null on 404, network error, and bad JSON (never throws)', async () => {
     expect(await checkRepoPrivacy({ repo: 'owner/repo', token: GH_TOKEN, fetchImpl: fakeFetch({ ok: false, status: 404 }) }))
       .toEqual({ ok: false, private: null, status: 404 });

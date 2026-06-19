@@ -168,6 +168,13 @@ describe('metrics — agent signals & feedback (#182)', () => {
     expect(s.matching.suppliers).toContainEqual({ name: '222333444', count: 1 });
   });
 
+  it('coerces a numeric УНП to its digit-string key (model may emit raw JSON number)', async () => {
+    const m = mem();
+    await m.recordMatching({ result: { error: 'supplier_not_found', unp: 100345678 } });
+    const s = await m.snapshot();
+    expect(s.matching.suppliers).toContainEqual({ name: '100345678', count: 1 });
+  });
+
   it('records matching only for supplier_not_found with a numeric УНП (ignores other/junk)', async () => {
     const m = mem();
     await m.recordMatching({ result: { deal: { dealId: '5' } } });                  // success

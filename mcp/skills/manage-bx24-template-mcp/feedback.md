@@ -44,7 +44,7 @@ bx24mcp_submit_feedback({
 - Start with the smallest reproducer you have: parameters used, what was returned, what was expected.
 - Quote literal values when possible. The body is rendered inside `<pre><code>` so Markdown/HTML in your text appears verbatim — no need to escape, just paste.
 - If a different tool's description influenced your behaviour, name it (`relatedTool`) and quote the relevant sentence.
-- Keep it under 10 000 characters; anything past that is truncated with a marker.
+- Keep it under 5 000 characters; anything past that is truncated with a marker.
 
 ### Choosing `severity`
 
