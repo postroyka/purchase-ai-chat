@@ -5,13 +5,14 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import Redis from 'ioredis';
-import { timingSafeEqual, createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { fileTypeFromBuffer } from 'file-type';
 import { createJobsStore } from './jobs-store.js';
 import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
 import { runAgent, redactToken } from './agent-runner.js';
 import { createSessionAuth } from './auth.js';
+import { safeCompare } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,14 +58,8 @@ const MIME_SNIFF_BYTES = 4100;
 const MAX_RESULT_BYTES = 100_000;
 const MAX_ERROR_CHARS = 300;
 
-// Constant-time string comparison with no length leak (#41). Hash both sides to a fixed
-// 32-byte digest first: this sidesteps timingSafeEqual's equal-length requirement WITHOUT
-// the old early `length !== length` short-circuit (which leaked token length via timing).
-// SHA-256 is collision-resistant, so equal digests ⇒ equal inputs for our auth use.
-function safeCompare(a, b) {
-  const digest = (s) => createHash('sha256').update(Buffer.from(String(s), 'utf8')).digest();
-  return timingSafeEqual(digest(a), digest(b));
-}
+// safeCompare (constant-time, no length leak, #41) is shared via ./utils.js so the Bearer check here
+// and the cookie/credential checks in auth.js never drift.
 
 // Derive bare hostnames from the space-separated CSP frame-ancestors string (e.g.
 // "https://*.bitrix24.by https://portal.example.com" → ["*.bitrix24.by", "portal.example.com"]).
@@ -80,7 +75,9 @@ function parseFrameAncestorHosts(frameAncestors) {
     .map((s) => s.split('/')[0]) // strip any path
     .map((s) => s.replace(/:\d+$/, '')) // strip port
     .map((s) => s.toLowerCase())
-    .filter(Boolean);
+    // Keep only real dotted hostnames (optionally a '*.' wildcard); drop CSP keywords/non-hosts like
+    // 'self', 'none', 'data:' so they can't accidentally enter the app.info allowlist.
+    .filter((s) => /^(\*\.)?[a-z0-9][a-z0-9.-]*\.[a-z0-9]{2,}$/.test(s));
 }
 
 // Best-effort removal of multer's temp files. Used on every early-return error
@@ -226,10 +223,18 @@ export function createApp(config = {}) {
     ?? parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? '60000', 10);
   // App-session lifetime. Default 12h: long enough that a B24 workday doesn't re-prompt, short
   // enough that a leaked cookie ages out. Injectable for tests (config.sessionTtlMs).
+  // Math.max(1h) guards SESSION_TTL_HOURS=0 / negative / NaN, which would otherwise make every issued
+  // cookie already-expired (Max-Age=0 / exp in the past) → nobody could stay logged in.
   const sessionTtlMs = config.sessionTtlMs
-    ?? parseInt(process.env.SESSION_TTL_HOURS ?? '12', 10) * 60 * 60 * 1000;
+    ?? Math.max(1, parseInt(process.env.SESSION_TTL_HOURS ?? '12', 10) || 12) * 60 * 60 * 1000;
 
   const app = express();
+  // Behind nginx-proxy the real client IP is in X-Forwarded-For; without trusting the proxy, req.ip
+  // is the proxy's address and the per-IP brute-force limiter on /login + /session/b24 would bucket
+  // ALL clients into one counter (lockout for everyone, or no real per-attacker limit). Trust one hop
+  // by default; override with TRUST_PROXY (hop count, 'loopback', or an IP/CIDR list) for other setups.
+  const trustProxy = config.trustProxy ?? process.env.TRUST_PROXY ?? 1;
+  app.set('trust proxy', /^\d+$/.test(String(trustProxy)) ? Number(trustProxy) : trustProxy);
 
   // Baseline security headers (helmet-equivalent subset). Kept dependency-free so the
   // prod image still builds with `pnpm install --frozen-lockfile --prod`.
@@ -296,17 +301,30 @@ export function createApp(config = {}) {
   // values; a placeholder password counts as "not set" (mirrors the old basicAuthConfigured check)
   // so a forgotten-to-change default never authenticates.
   const loginPass = (basicAuthPass && basicAuthPass !== BASIC_AUTH_PLACEHOLDER) ? basicAuthPass : '';
-  // SESSION_SECRET signs the cookie; when unset we DERIVE it deterministically from the token +
-  // page password so a single instance is stable across restarts WITHOUT requiring an extra
-  // secret. For multi-instance (shared LB) deployments SESSION_SECRET MUST be set explicitly so
-  // every instance signs/verifies with the same key (documented in .env.prod.example). If neither
-  // token nor password is configured the secret is '' and sessions stay unconfigured — loginHandler
-  // then returns 503, mirroring the existing "service not configured" behaviour.
+  // Real (non-placeholder) API token used as the cookie-secret fallback below — a forgotten-to-change
+  // placeholder must count as "no secret" so sessions stay unconfigured (→ 503), like bearerConfigured.
+  const realToken = (token && token !== AUTH_PLACEHOLDER) ? token : '';
+  // Cookie signing key. Prefer an explicit SESSION_SECRET (REQUIRED for multi-instance — see
+  // .env.prod.example). When unset we derive deterministically so a single instance stays stable
+  // across restarts. Derive from the PAGE PASSWORD first, NOT the API token: the token is shared with
+  // MCP/CI/scripts and is the most likely secret to leak, and a token leak must not also let someone
+  // forge session cookies. Only when no password is set (B24-only deployment) do we fall back to the
+  // token, so the cookie is still signed with *some* secret rather than ''. Rotating the source secret
+  // invalidates existing cookies (documented). If neither is set the secret is '' → loginHandler 503.
   const sessionSecret = config.sessionSecret ?? process.env.SESSION_SECRET ?? (
-    (token || loginPass)
-      ? createHash('sha256').update(`pai-session:${token}:${loginPass}`).digest('hex')
-      : ''
+    loginPass
+      ? createHash('sha256').update(`pai-session:pass:${loginPass}`).digest('hex')
+      : realToken
+        ? createHash('sha256').update(`pai-session:token:${realToken}`).digest('hex')
+        : ''
   );
+  // Deriving (vs an explicit SESSION_SECRET) in production ties the cookie key to the password/token
+  // and won't match across instances — warn once so ops can set it deliberately.
+  if (!config.sessionSecret && !process.env.SESSION_SECRET && sessionSecret
+      && process.env.NODE_ENV === 'production') {
+    console.warn('[session] SESSION_SECRET not set — deriving the cookie key from the page password/token. '
+      + 'Set SESSION_SECRET explicitly (required for multi-instance; survives credential rotation).');
+  }
   // The B24 app.info allowlist is derived from the SAME frame-ancestors origins as the CSP, so
   // ops sets only B24_FRAME_ANCESTORS. portalDomains tests can override via config.portalDomains.
   const sessionAuth = config.sessionAuth ?? createSessionAuth({
@@ -318,10 +336,11 @@ export function createApp(config = {}) {
     ttlMs: sessionTtlMs,
     appInfo: config.appInfo, // undefined in prod → auth.js uses its real fetch-based probe
   });
-  // Dedicated tight brute-force limiter for /login (separate from the upload limiter): a login
-  // form is a credential-guessing target, so cap attempts per IP. Reuses createRateLimiter keyed
-  // by IP (the /login request carries no Authorization header, so keyFor falls back to req.ip).
-  const loginRateLimit = createRateLimiter({
+  // Dedicated tight brute-force limiter for the credential/session endpoints (/login + /session/b24),
+  // separate from the upload limiter: both are guessing/DoS targets (password attempts; authId
+  // guessing + app.info amplification), so cap attempts per IP. Keyed by IP (these requests carry no
+  // Authorization header, so keyFor falls back to req.ip — hence the trust-proxy setting above).
+  const authRateLimit = createRateLimiter({
     windowMs: config.loginRateLimitWindowMs ?? 60_000,
     max: config.loginRateLimitMax ?? 10,
     redisClient: rateLimitRedis,
@@ -332,9 +351,11 @@ export function createApp(config = {}) {
   app.getActiveJobCount = () => activeJobs;
 
   const bearerConfigured = () => Boolean(token) && token !== AUTH_PLACEHOLDER;
-  // The app session is usable only when a real (non-placeholder) page password is set — it is the
-  // credential the standalone /login form checks and the secret seed for the cookie signature.
-  const sessionConfigured = () => Boolean(loginPass);
+  // A session is acceptable whenever we have a signing secret — the cookie is HMAC-verified, so its
+  // validity IS the auth. (The page password is only needed to *log in* via /login, which checks it
+  // separately.) Gating on the password instead would reject genuine B24 sessions (/session/b24) in a
+  // token-but-no-password deployment, breaking uploads inside the portal.
+  const sessionConfigured = () => Boolean(sessionSecret);
 
   // API auth for /upload, /job/:id/status and /metrics/data. Accepts EITHER the Bearer API token
   // (programmatic / smoke-test / MCP clients — unchanged) OR a valid app session: a signed
@@ -559,7 +580,7 @@ export function createApp(config = {}) {
   // Registered BEFORE the static catch-all so the SPA's own /login etc. don't shadow them.
   //
   // /login — standalone (non-B24) credential login. Rate-limited (brute-force guard, per IP).
-  app.post('/login', express.json({ limit: '1kb' }), loginRateLimit, sessionAuth.loginHandler);
+  app.post('/login', express.json({ limit: '1kb' }), authRateLimit, sessionAuth.loginHandler);
   // /session — "am I logged in?" probe for the standalone UI bootstrap.
   app.get('/session', sessionAuth.sessionHandler);
   // /logout — clear the session cookie.
@@ -567,7 +588,7 @@ export function createApp(config = {}) {
   // /session/b24 — establish a session from inside the B24 frame by validating the portal via one
   // app.info call (SSRF-guarded against the frame-ancestors allowlist). 4kb limit: AUTH_ID tokens
   // are larger than a login body.
-  app.post('/session/b24', express.json({ limit: '4kb' }), sessionAuth.b24SessionHandler);
+  app.post('/session/b24', express.json({ limit: '4kb' }), authRateLimit, sessionAuth.b24SessionHandler);
 
   // Serve the built UI (only present in the Docker image) OPENLY so the Bitrix24 iframe can load
   // `/`, `/install` and assets — the app session (above) is the gate now, not a page-level Basic

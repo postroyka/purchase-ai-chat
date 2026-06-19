@@ -319,10 +319,15 @@ describe('App session (login → cookie) auth', () => {
     expect(after.body).toEqual({ authenticated: true });
   });
 
-  it('POST /logout clears the cookie (Max-Age=0) and returns 204', async () => {
-    const res = await request(dualAuthApp).post('/logout');
+  it('POST /logout (with CSRF header) clears the cookie (Max-Age=0) and returns 204', async () => {
+    const res = await request(dualAuthApp).post('/logout').set('X-PAI-Auth', '1');
     expect(res.status).toBe(204);
     expect(res.headers['set-cookie']?.[0]).toMatch(/pai_sess=;.*Max-Age=0/i);
+  });
+
+  it('POST /logout without the CSRF header is rejected (403)', async () => {
+    const res = await request(dualAuthApp).post('/logout');
+    expect(res.status).toBe(403);
   });
 
   it('POST /login returns 503 when no page password is configured', async () => {

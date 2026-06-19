@@ -1,4 +1,5 @@
-import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
+import { createHmac } from 'node:crypto';
+import { safeCompare } from './utils.js';
 
 // App-level signed-cookie session auth (replaces HTTP Basic for the served UI).
 //
@@ -19,15 +20,8 @@ const COOKIE_NAME = 'pai_sess';
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 const fromB64url = (str) => Buffer.from(str, 'base64url');
 
-// Constant-time string comparison with no length leak (mirrors safeCompare in index.js, #41).
-// Hash both sides to a fixed 32-byte SHA-256 digest first: this sidesteps timingSafeEqual's
-// equal-length requirement WITHOUT an early `length !== length` short-circuit (which would leak
-// length via timing). SHA-256 is collision-resistant, so equal digests ⇒ equal inputs for auth.
-// Used for BOTH the HMAC compare and the user/pass compare.
-function safeCompare(a, b) {
-  const digest = (s) => createHash('sha256').update(Buffer.from(String(s), 'utf8')).digest();
-  return timingSafeEqual(digest(a), digest(b));
-}
+// safeCompare (constant-time, no length leak) is shared via ./utils.js — used here for BOTH the HMAC
+// signature compare and the user/pass compare — so it never drifts from the Bearer check in index.js.
 
 // Parse a Cookie header into a plain object. No dependency: split on ';', then on the FIRST '='
 // (cookie values may themselves contain '='). Missing/garbled header → {}.
@@ -123,6 +117,9 @@ export function createSessionAuth(config = {}) {
     }
     if (!payload || typeof payload !== 'object') return null;
     if (typeof payload.exp !== 'number' || now() > payload.exp) return null;
+    // Reject a token without a string `sub`: requireSession only checks validity, so a malformed
+    // payload (only reachable via a code change to issue()) must never count as an authenticated user.
+    if (typeof payload.sub !== 'string' || payload.sub === '') return null;
     return payload;
   }
 
@@ -197,8 +194,11 @@ export function createSessionAuth(config = {}) {
     return res.status(200).json({ authenticated: hasValidSession(req) });
   }
 
-  // POST /logout — clear the cookie. 204 (no body).
-  function logoutHandler(_req, res) {
+  // POST /logout — clear the cookie. Requires the CSRF header too: the cookie is SameSite=None, so
+  // without this a cross-site page could POST /logout (the cookie rides along) and force-logout the
+  // user. The UI sends X-PAI-Auth via useApi.
+  function logoutHandler(req, res) {
+    if (!csrfOk(req)) return res.status(403).json({ error: 'CSRF check failed' });
     clearSessionCookie(res);
     return res.status(204).end();
   }
@@ -215,11 +215,20 @@ export function createSessionAuth(config = {}) {
       return res.status(400).json({ error: 'domain not allowed' });
     }
     const authId = typeof body.authId === 'string' ? body.authId : '';
+    // Reject empty/implausibly-long authId before the outbound call: a real B24 access token is
+    // short and never empty, so skipping the round-trip avoids a pointless app.info hit and bounds
+    // the URL we build.
+    if (!authId || authId.length > 4096) {
+      return res.status(401).json({ error: 'b24 auth failed' });
+    }
     let ok = false;
     try {
       ok = await appInfo(host, authId);
-    } catch {
-      ok = false; // network/abort/parse failure → treat as auth failure (never leak details)
+    } catch (e) {
+      // network/abort/parse failure → auth failure. Log for ops with the authId redacted so a token
+      // never lands in logs; the client still gets a generic 401 (no detail leak).
+      ok = false;
+      console.warn(`[b24-session] app.info failed for ${host}: ${redactAuthId(e?.message ?? e)}`);
     }
     if (ok) {
       setSessionCookie(res, `b24:${host}`);
@@ -290,9 +299,15 @@ function domainAllowed(host, allowlist) {
 // `result` and NO `error` (B24 returns `{ error, error_description }` on a bad/expired auth).
 // 5s timeout via AbortSignal.timeout so a hung portal can't pin the request. `domain` is already
 // normalised + allowlisted by the caller, so the URL host is trusted here.
+// Strip any `auth=<token>` value from a string before logging — defence in depth so a B24 access
+// token never lands in logs (fetch errors don't normally include the URL, but never risk it).
+const redactAuthId = (s) => String(s).replace(/auth=[^&\s]+/gi, 'auth=***');
+
 async function defaultAppInfo(domain, authId) {
   const url = `https://${domain}/rest/app.info?auth=${encodeURIComponent(authId)}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+  // redirect:'error' is defence-in-depth against SSRF-via-redirect: `domain` is allowlisted, but a
+  // portal that responds 3xx (compromise/MITM) must not pull us to an internal address — fail closed.
+  const res = await fetch(url, { signal: AbortSignal.timeout(5000), redirect: 'error' });
   if (!res.ok) return false;
   let data;
   try {

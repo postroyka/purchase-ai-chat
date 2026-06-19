@@ -17,13 +17,18 @@ export function useApi() {
     request: NitroFetchRequest,
     options: NitroFetchOptions<NitroFetchRequest> = {}
   ): Promise<T> {
+    // Merge into a plain object. options.headers may also be Headers | string[][]; every call site
+    // passes a Record (or nothing), so narrow at runtime and ignore the other shapes rather than an
+    // unchecked `as` cast.
+    const provided = options.headers
+    const base: Record<string, string> = (provided && typeof provided === 'object'
+      && !Array.isArray(provided) && !(typeof Headers !== 'undefined' && provided instanceof Headers))
+      ? provided as Record<string, string>
+      : {}
     return $fetch<T>(request, {
       ...options,
       credentials: 'include',
-      headers: {
-        ...(options.headers as Record<string, string> | undefined),
-        'X-PAI-Auth': '1'
-      }
+      headers: { ...base, 'X-PAI-Auth': '1' }
     })
   }
 

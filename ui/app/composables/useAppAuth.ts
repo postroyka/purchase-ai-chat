@@ -1,5 +1,5 @@
 import type { B24Frame } from '@bitrix24/b24jssdk'
-import { ref, readonly } from 'vue'
+import { readonly } from 'vue'
 
 // App-session bootstrap. Establishes the backend session AFTER useB24().init() has run in
 // app.vue, two ways:
@@ -8,13 +8,9 @@ import { ref, readonly } from 'vue'
 //   - Standalone (opened directly in a browser, outside B24): ask GET /session whether a cookie
 //     session already exists; if not, flip `needsLogin` so the UI shows the login overlay.
 //
-// State lives at module scope (singleton, like useB24) so app.vue and any page/layout share the
-// same reactive `needsLogin` / `authed` without prop-drilling or provide/inject plumbing.
-
-const authed = ref(false)
-const needsLogin = ref(false)
-// Guards against double-bootstrap (app.vue mounts once, but be defensive about re-entry).
-let bootstrapped = false
+// State lives in Nuxt useState (keyed), so app.vue and any page/layout share the same reactive
+// `needsLogin` / `authed` — and, unlike module-scope refs, it stays per-request-safe if an SSR page
+// is ever added (module-scope singletons would leak state between requests). [review I2]
 
 // Pull the portal domain (bare host) + AUTH_ID from the B24 frame. getAuthData() returns
 // { access_token, domain, ... } or false when the auth has expired; `domain` is the full target
@@ -52,11 +48,15 @@ function hostFromOrigin(origin: string): string {
 
 export function useAppAuth() {
   const { apiFetch } = useApi()
+  const authed = useState<boolean>('app-auth-authed', () => false)
+  const needsLogin = useState<boolean>('app-auth-needs-login', () => false)
+  // Guards against double-bootstrap (app.vue mounts once, but be defensive about re-entry).
+  const bootstrapped = useState<boolean>('app-auth-bootstrapped', () => false)
 
   // Called once from app.vue after the B24 SDK init resolves. `isInB24` is useB24().isInit().
   async function bootstrap(isInB24: boolean, frame: B24Frame | undefined) {
-    if (bootstrapped) return
-    bootstrapped = true
+    if (bootstrapped.value) return
+    bootstrapped.value = true
 
     if (isInB24 && frame) {
       // In-portal: establish the session from the frame's auth. On any failure we DON'T fall back

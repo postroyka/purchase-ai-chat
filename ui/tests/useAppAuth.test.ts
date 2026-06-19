@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref, readonly } from 'vue'
 import { useApi } from '../app/composables/useApi'
 
-// useAppAuth keeps its state at module scope (singleton). To get a clean slate per test we
-// vi.resetModules() and re-import it dynamically, so `authed`/`needsLogin`/`bootstrapped` reset.
-// $fetch and useApi are stubbed as globals (no Nuxt env), mirroring useMetrics.test.ts.
+// useAppAuth holds state in Nuxt useState. With no Nuxt env we stub useState with a fresh ref per
+// key; re-importing via freshUseAppAuth() each test gives a clean slate (one useAppAuth() call per
+// test, so the per-call refs are the shared state under test). $fetch and useApi are stubbed as
+// globals, mirroring useMetrics.test.ts.
 const fetchMock = vi.fn()
 
 beforeEach(() => {
@@ -12,6 +13,7 @@ beforeEach(() => {
   fetchMock.mockReset()
   vi.stubGlobal('ref', ref)
   vi.stubGlobal('readonly', readonly)
+  vi.stubGlobal('useState', (_key: string, init?: () => unknown) => ref(init ? init() : undefined))
   vi.stubGlobal('$fetch', fetchMock)
   vi.stubGlobal('useApi', useApi) // real wrapper over the $fetch mock
 })

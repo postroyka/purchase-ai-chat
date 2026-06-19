@@ -185,13 +185,21 @@ describe('sessionHandler / logoutHandler', () => {
     expect(r2.body).toEqual({ authenticated: true });
   });
 
-  it('logoutHandler clears the cookie (Max-Age=0) and returns 204', () => {
+  it('logoutHandler (with CSRF header) clears the cookie (Max-Age=0, Path=/) and returns 204', () => {
     const { auth } = makeAuth();
     const res = mockRes();
-    auth.logoutHandler({}, res);
+    auth.logoutHandler({ headers: { 'x-pai-auth': '1' } }, res);
     expect(res.statusCode).toBe(204);
     expect(res.ended).toBe(true);
     expect(setCookieOf(res)).toMatch(/pai_sess=;.*Max-Age=0/);
+    expect(setCookieOf(res)).toMatch(/Path=\//); // matching Path is required for the browser to drop it
+  });
+
+  it('logoutHandler rejects without the CSRF header (403) — blocks forced cross-site logout', () => {
+    const { auth } = makeAuth();
+    const res = mockRes();
+    auth.logoutHandler({ headers: {} }, res);
+    expect(res.statusCode).toBe(403);
   });
 });
 

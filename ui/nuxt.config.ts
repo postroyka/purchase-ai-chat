@@ -48,12 +48,6 @@ export default defineNuxtConfig({
     }
   },
 
-  routeRules: {
-    '/api/**': {
-      cors: true
-    }
-  },
-
   devServer: {
     // Explicit port so Nuxt dev never clashes with backend on :3000.
     port: 3001
