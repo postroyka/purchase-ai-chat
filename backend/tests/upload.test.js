@@ -349,6 +349,42 @@ describe('App session (login → cookie) auth', () => {
       fs.rmSync(uiDir, { recursive: true, force: true });
     }
   });
+
+  it('serves the SPA shell on POST / and POST /install (Bitrix24 loads handlers via POST)', async () => {
+    const uiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-public-'));
+    fs.writeFileSync(path.join(uiDir, 'index.html'), '<html>index</html>');
+    fs.writeFileSync(path.join(uiDir, 'install.html'), '<html>install</html>');
+    try {
+      const pageApp = createApp({
+        token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: PAGE_PASS, uiPublicDir: uiDir,
+      });
+      // B24 appends DOMAIN/APP_SID to the URL and POSTs the auth in the body — no session cookie.
+      const root = await request(pageApp).post('/').query({ DOMAIN: 'x.bitrix24.by', APP_SID: 'a' });
+      expect(root.status).toBe(200);
+      expect(root.text).toContain('index');
+
+      const install = await request(pageApp).post('/install').query({ DOMAIN: 'x.bitrix24.by', APP_SID: 'a' });
+      expect(install.status).toBe(200);
+      expect(install.text).toContain('install');
+    } finally {
+      fs.rmSync(uiDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to index.html on POST /install when install.html is not prerendered', async () => {
+    const uiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-public-'));
+    fs.writeFileSync(path.join(uiDir, 'index.html'), '<html>spa-shell</html>');
+    try {
+      const pageApp = createApp({
+        token: TOKEN, uploadDir: UPLOAD_DIR, basicAuthPass: PAGE_PASS, uiPublicDir: uiDir,
+      });
+      const res = await request(pageApp).post('/install');
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('spa-shell');
+    } finally {
+      fs.rmSync(uiDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── Concurrency cap & store errors ───────────────────────────────────────────

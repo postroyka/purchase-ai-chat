@@ -577,6 +577,22 @@ export function createApp(config = {}) {
   // .html files because nuxt.config sets autoSubfolderIndex:false). /metrics/data and the session
   // routes are handled above, so they never reach the static layer.
   if (fs.existsSync(uiPublicDir)) {
+    // Bitrix24 loads the app + install handlers via POST (it submits the frame auth in the request
+    // body, with DOMAIN/APP_SID/… also on the query string). express.static answers only GET, so
+    // B24's POST would 404 with "Cannot POST /install" (or "/") and the app could never install or
+    // open inside the portal. Serve the matching prerendered SPA shell on POST so the client boots;
+    // b24jssdk then reads the frame params (window.name "DOMAIN|APP_SID" + postMessage auth) and
+    // runs the app (/) or installFinish (/install). These are OPEN (no auth): B24's cross-site POST
+    // can't carry our session cookie, and they only return the public SPA HTML — the API stays
+    // gated by requireAuth. install.html falls back to index.html when /install isn't prerendered
+    // (the client router then resolves /install from the URL path).
+    const indexHtml = path.join(uiPublicDir, 'index.html');
+    const installHtml = fs.existsSync(path.join(uiPublicDir, 'install.html'))
+      ? path.join(uiPublicDir, 'install.html')
+      : indexHtml;
+    const sendSpa = (file) => (_req, res, next) => res.sendFile(file, (err) => { if (err) next(err); });
+    app.post('/', sendSpa(indexHtml));
+    app.post('/install', sendSpa(installHtml));
     app.use(express.static(uiPublicDir, { extensions: ['html'] }));
   }
 
