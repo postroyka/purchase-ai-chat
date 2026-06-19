@@ -14,6 +14,7 @@ import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
 import { createSessionAuth, parseCookies } from './auth.js';
 import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError } from './feedback.js';
+import { createAgentFeedbackReporter } from './agent-feedback.js';
 import { safeCompare } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -323,6 +324,13 @@ export function createApp(config = {}) {
   if (rateLimitRedis?.on) rateLimitRedis.on('error', (e) => console.error('[rate-limit] Redis error:', e?.message ?? e));
   const uploadRateLimit = createRateLimiter({ windowMs: rateLimitWindowMs, max: rateLimitMax, redisClient: rateLimitRedis });
 
+  // Agent-feedback channel (issue #182, channel «агент»): turns the agent's result `feedback[]` into
+  // deduped GitHub issues in the same private repo as the user channel. Off when no token is set
+  // (same GITHUB_FEEDBACK_TOKEN gate). Redis client (when present) backs the dedup + hourly-cap.
+  const agentFeedback = config.agentFeedback ?? createAgentFeedbackReporter({
+    token: githubFeedbackToken, repo: githubFeedbackRepo, redisClient: rateLimitRedis,
+  });
+
   // App-level signed-cookie session (auth.js) — replaces HTTP Basic so the Bitrix24 iframe can
   // load the UI. The standalone /login form's credentials are the existing PUBLIC_PAGE_BASIC_AUTH_*
   // values; a placeholder password counts as "not set" (mirrors the old basicAuthConfigured check)
@@ -585,7 +593,7 @@ export function createApp(config = {}) {
 
       activeJobs++;
       metrics.recordUpload({ fileCount: fileEntries.length }).catch(() => {}); // best-effort
-      processJob(jobId, jobs, agentConfig, metrics).catch((e) =>
+      processJob(jobId, jobs, agentConfig, metrics, agentFeedback).catch((e) =>
         console.error(`[processJob] unhandled error for job ${jobId}:`, e),
       ).finally(() => { activeJobs--; });
 
@@ -695,6 +703,7 @@ export function createApp(config = {}) {
       const issue = await createGithubIssue({
         repo: githubFeedbackRepo, token: githubFeedbackToken, title, body: issueBody, labels,
       });
+      metrics.recordFeedback({ source: 'user', kind }).catch(() => {}); // best-effort, → /metrics
       return res.status(201).json({ ok: true, url: issue.url, number: issue.number });
     } catch (e) {
       // Log ONLY the stable error code — createGithubIssue guarantees its message is leak-free, but
@@ -740,7 +749,26 @@ export function createApp(config = {}) {
 // status transitions (pending → processing → done/error) to the jobs store.
 // NOTE: assumes single-process deployment — no distributed locking. Multi-instance
 // deployments would need a queue (e.g. BullMQ) to prevent duplicate processing.
-async function processJob(jobId, jobs, agentConfig = {}, metrics = null) {
+// Process the agent result's optional `feedback[]` (developer feedback about our MCP tools/prompt,
+// issue #182 channel «агент»): count each by kind in metrics and hand it to the deduping reporter,
+// which decides whether to open a GitHub issue. Bounded (≤10/file) against a prompt-injected document
+// trying to spam, and fully best-effort — a feedback hiccup must never fail or noticeably delay a job.
+async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
+  const list = Array.isArray(result?.feedback) ? result.feedback.slice(0, 10) : [];
+  for (const fb of list) {
+    if (!fb || typeof fb !== 'object') continue;
+    const note = typeof fb.note === 'string' ? fb.note : '';
+    if (note.trim() === '') continue;
+    const kind = typeof fb.kind === 'string' ? fb.kind : 'problem';
+    const tool = typeof fb.tool === 'string' ? fb.tool : '';
+    metrics?.recordFeedback({ source: 'agent', kind }).catch?.(() => {});
+    try {
+      await agentFeedback?.report({ kind, tool, note, context: ctx });
+    } catch { /* reporter is best-effort and already swallows; guard anyway */ }
+  }
+}
+
+async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null) {
   const job = await jobs.get(jobId);
   if (!job) return;
 
@@ -784,6 +812,12 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null) {
         format, status: 'done', outcome, durationMs: Date.now() - startedAt, agent: agentMeta,
         positions: items.length, positionsNoArticle,
       });
+      // Channel «агент» (issue #182): non-terminal quality signals → metrics counts; developer
+      // feedback ("what hinders / how to improve" about our tools/prompt) → deduped GitHub issue +
+      // metrics. Both are optional fields in the agent result and best-effort — never fail the job.
+      const warnings = Array.isArray(result?.warnings) ? result.warnings.filter((w) => typeof w === 'string') : [];
+      if (warnings.length) metrics?.recordWarnings(warnings);
+      await reportAgentFeedback(result, agentFeedback, metrics, { jobId, fileName: fileEntry.name });
     } catch (err) {
       // Redact any Bearer token before the message is logged, persisted, or returned.
       const safeMsg = redactToken(String(err?.message ?? 'agent error'));

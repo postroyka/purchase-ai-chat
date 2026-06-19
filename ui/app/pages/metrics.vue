@@ -37,6 +37,33 @@ const EXTRACT_LABELS: Record<string, string> = {
   office: 'Office (xls/docx)',
   unknown: 'Неизвестно'
 }
+// Feedback (issue #182) — shared by the employee 👍/👎/💡 channel and the agent channel.
+const FEEDBACK_KIND_LABELS: Record<string, string> = {
+  positive: '👍 Хорошо',
+  problem: '👎 Проблема',
+  suggestion: '💡 Предложение',
+  other: 'Прочее'
+}
+// Non-terminal agent quality signals (issue #182, channel «агент»).
+const WARNING_LABELS: Record<string, string> = {
+  no_items_matched: 'Сделка без позиций',
+  articles_not_in_catalog: 'Артикулы не в каталоге',
+  items_without_article: 'Позиции без артикула',
+  product_rows_failed: 'Позиции не сохранились',
+  file_attach_failed: 'Файл не прикреплён',
+  invalid_base64_file: 'Файл не прикреплён (кодировка)',
+  document_date_unparsed: 'Дата документа не распознана',
+  timeline_comment_failed: 'Комментарий в таймлайн не добавлен',
+  other: 'Прочее'
+}
+
+// Total feedback submissions across both channels — drives whether to show the empty-state hint.
+const feedbackTotal = computed(() => {
+  const f = data.value?.feedback
+  if (!f) return 0
+  const sum = (xs: { count: number }[]) => xs.reduce((n, x) => n + x.count, 0)
+  return sum(f.user) + sum(f.agent)
+})
 
 // ── Formatters ───────────────────────────────────────────────────────────────
 const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
@@ -239,6 +266,49 @@ const sparkPoints = computed(() => {
             </h3>
             <MetricsBarList :items="data.extract" :labels="EXTRACT_LABELS" />
           </B24Card>
+        </section>
+
+        <!-- Обратная связь и сигналы агента (issue #182) -->
+        <section class="space-y-3">
+          <h2 class="text-sm font-semibold text-base-700">
+            Обратная связь и сигналы агента
+          </h2>
+
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <B24Card class="rounded-xl" :b24ui="{ body: 'p-5' }">
+              <h3 class="text-sm font-semibold text-base-700 mb-4">
+                Отзывы сотрудников
+              </h3>
+              <MetricsBarList v-if="data.feedback.user.length" :items="data.feedback.user" :labels="FEEDBACK_KIND_LABELS" />
+              <p v-else class="text-sm text-base-500">
+                Нет отзывов
+              </p>
+            </B24Card>
+
+            <B24Card class="rounded-xl" :b24ui="{ body: 'p-5' }">
+              <h3 class="text-sm font-semibold text-base-700 mb-4">
+                Обратная связь агента
+              </h3>
+              <MetricsBarList v-if="data.feedback.agent.length" :items="data.feedback.agent" :labels="FEEDBACK_KIND_LABELS" />
+              <p v-else class="text-sm text-base-500">
+                Нет сигналов
+              </p>
+            </B24Card>
+
+            <B24Card class="rounded-xl" :b24ui="{ body: 'p-5' }">
+              <h3 class="text-sm font-semibold text-base-700 mb-4">
+                Сигналы качества (агент)
+              </h3>
+              <MetricsBarList v-if="data.warnings.length" :items="data.warnings" :labels="WARNING_LABELS" />
+              <p v-else class="text-sm text-base-500">
+                Нет предупреждений
+              </p>
+            </B24Card>
+          </div>
+
+          <p v-if="feedbackTotal === 0" class="text-xs text-base-500">
+            Обратная связь появится после первых отзывов сотрудников (виджет на странице результата) и сигналов агента.
+          </p>
         </section>
 
         <!-- Daily files -->
