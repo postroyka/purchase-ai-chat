@@ -86,6 +86,9 @@ export default defineNuxtConfig({
       '/health': { target: 'http://localhost:3000/health', changeOrigin: true },
       // Only the JSON data is a backend call; /metrics itself is a Nuxt page.
       '/metrics/data': { target: 'http://localhost:3000/metrics/data', changeOrigin: true, headers: devAuthHeaders },
+      // User feedback (issue #182): POST /feedback needs the Bearer in dev; GET /feedback/config is
+      // open but routes through the same prefix. (Prod: same-origin, the app-session cookie authenticates.)
+      '/feedback': { target: 'http://localhost:3000/feedback', changeOrigin: true, headers: devAuthHeaders },
       // App-session endpoints — forwarded as-is (no Bearer); they set/read the pai_sess cookie.
       '/login': { target: 'http://localhost:3000/login', changeOrigin: true },
       '/session/b24': { target: 'http://localhost:3000/session/b24', changeOrigin: true },

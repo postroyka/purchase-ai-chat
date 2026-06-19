@@ -12,7 +12,8 @@ import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
 import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
-import { createSessionAuth } from './auth.js';
+import { createSessionAuth, parseCookies } from './auth.js';
+import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError } from './feedback.js';
 import { safeCompare } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -104,12 +105,15 @@ function decodeOriginalName(name) {
 // flooding /upload can't exhaust the agent subprocess pool, and the raw token never becomes a
 // Redis key). Prefers Redis (shared across instances + survives restart, #105); falls back to
 // an in-memory Map when no Redis client is supplied (dev/tests/single-process).
-function createRateLimiter({ windowMs, max, redisClient = null }) {
+function createRateLimiter({ windowMs, max, redisClient = null, keyFn = null }) {
   const hits = new Map(); // process-local fallback
+  // Bucket identity. Default: the Authorization header (programmatic callers) or the client IP
+  // (cookie sessions carry no Authorization header). A caller may override via keyFn — e.g. /feedback
+  // keys on the verified session `sub` so one portal's staff behind a shared NAT don't share a bucket.
+  // Whatever identity string is returned is hashed uniformly here (the raw value never becomes a key).
+  const identityFor = keyFn || ((req) => String(req.headers['authorization'] || req.ip || 'anon'));
   const keyFor = (req) =>
-    'rl:' + createHash('sha256')
-      .update(String(req.headers['authorization'] || req.ip || 'anon'))
-      .digest('hex').slice(0, 32);
+    'rl:' + createHash('sha256').update(identityFor(req)).digest('hex').slice(0, 32);
 
   // Redis fixed-window: INCR the counter and (re)arm the window TTL. We pexpire on EVERY hit,
   // not just the first: if the process died between INCR and pexpire on the first hit, the key
@@ -228,6 +232,26 @@ export function createApp(config = {}) {
   // cookie already-expired (Max-Age=0 / exp in the past) → nobody could stay logged in.
   const sessionTtlMs = config.sessionTtlMs
     ?? Math.max(1, parseInt(process.env.SESSION_TTL_HOURS ?? '12', 10) || 12) * 60 * 60 * 1000;
+
+  // GitHub user-feedback channel (issue #182, channel 1 — "from the employee"). When no token is set
+  // the feature is OFF: GET /feedback/config reports { enabled:false } so the UI hides the widget, and
+  // POST /feedback returns 503. The repo defaults to this app's own repo (private at launch, so
+  // capturing job context in the issue is acceptable). See backend/feedback.js + docs/FEEDBACK.md.
+  const githubFeedbackToken = config.githubFeedbackToken ?? process.env.GITHUB_FEEDBACK_TOKEN ?? '';
+  const githubFeedbackRepo = config.githubFeedbackRepo
+    ?? process.env.GITHUB_FEEDBACK_REPO ?? 'postroyka/purchase-ai-chat';
+  // Guard NaN explicitly: a garbled FEEDBACK_RATE_LIMIT_MAX would otherwise become NaN, which the
+  // limiter reads as "disabled" (fail-OPEN) — the wrong direction for an anti-spam-into-our-repo
+  // control. Number.isFinite keeps a deliberate 0 (disable) working while a garbled value → default 5.
+  const parsedFeedbackMax = config.feedbackRateLimitMax
+    ?? parseInt(process.env.FEEDBACK_RATE_LIMIT_MAX ?? '5', 10);
+  const feedbackRateLimitMax = Number.isFinite(parsedFeedbackMax) ? parsedFeedbackMax : 5;
+  const parsedFeedbackWindow = config.feedbackRateLimitWindowMs
+    ?? parseInt(process.env.FEEDBACK_RATE_LIMIT_WINDOW_MS ?? '3600000', 10);
+  // A non-finite or non-positive window breaks the limiter (pexpire(NaN) throws → fails open;
+  // memory path's `now - t < NaN` is always false → never blocks) → fall back to 1h.
+  const feedbackRateLimitWindowMs = Number.isFinite(parsedFeedbackWindow) && parsedFeedbackWindow > 0
+    ? parsedFeedbackWindow : 3600000;
 
   const app = express();
   // Behind nginx-proxy the real client IP is in X-Forwarded-For; without trusting the proxy, req.ip
@@ -349,6 +373,22 @@ export function createApp(config = {}) {
     redisClient: rateLimitRedis,
   });
 
+  // Feedback anti-spam (issue #182): cap how many issues one client can open into our GitHub repo
+  // per window (default 5/hour). Same Redis-backed limiter as the others (multi-instance-safe).
+  // Counts ATTEMPTS — a failed GitHub call still consumes a slot, discouraging tight retry loops.
+  // Keyed on the authenticated identity (session `sub` like `b24:<portal>`, or `api-token`) rather
+  // than IP, so a whole portal's staff behind one office NAT don't share a single bucket (one active
+  // reviewer would otherwise starve the rest). feedbackReporter is hoisted (function declaration).
+  const feedbackRateLimit = createRateLimiter({
+    windowMs: feedbackRateLimitWindowMs,
+    max: feedbackRateLimitMax,
+    redisClient: rateLimitRedis,
+    keyFn: (req) => {
+      const who = feedbackReporter(req);
+      return who && who !== 'unknown' ? `fb-sub:${who}` : `fb-ip:${req.ip || 'anon'}`;
+    },
+  });
+
   // Track in-flight processJob calls so graceful shutdown can wait for them.
   let activeJobs = 0;
   app.getActiveJobCount = () => activeJobs;
@@ -383,6 +423,21 @@ export function createApp(config = {}) {
       });
     }
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Best-effort identity for a feedback issue's "who reported" line. The feedback repo is private at
+  // launch, so attributing a report to the B24 portal/login (cookie `sub`) — or to the API token for
+  // programmatic callers — is useful triage signal, not a privacy leak. Never throws; unknown → 'unknown'.
+  function feedbackReporter(req) {
+    try {
+      const cookies = parseCookies(req.headers?.cookie);
+      const payload = sessionAuth.verify(cookies[sessionAuth.cookieName]);
+      if (payload?.sub) return String(payload.sub);
+    } catch { /* fall through to the bearer/unknown cases */ }
+    if (bearerConfigured() && safeCompare(req.headers['authorization'] ?? '', `Bearer ${token}`)) {
+      return 'api-token';
+    }
+    return 'unknown';
   }
 
   const storage = multer.diskStorage({
@@ -595,6 +650,61 @@ export function createApp(config = {}) {
   // app.info call (SSRF-guarded against the frame-ancestors allowlist). 4kb limit: AUTH_ID tokens
   // are larger than a login body.
   app.post('/session/b24', express.json({ limit: '4kb' }), authRateLimit, sessionAuth.b24SessionHandler);
+
+  // ── User feedback (feedback.js — issue #182, channel «сотрудник») ────────────────────────────
+  // GET /feedback/config — OPEN probe so the UI can show/hide the widget without shipping a token to
+  // the browser. Leaks only a boolean (is the GitHub channel configured), never the token or repo.
+  app.get('/feedback/config', (_req, res) => res.json({ enabled: Boolean(githubFeedbackToken) }));
+
+  // 503 when the channel is unconfigured — placed BEFORE the rate limiter so hitting a dead endpoint
+  // can't burn a client's quota (and after requireAuth so it doesn't leak config state to anon).
+  const requireFeedbackConfigured = (_req, res, next) =>
+    githubFeedbackToken ? next() : res.status(503).json({ error: 'Feedback channel is not configured' });
+
+  // POST /feedback — authenticated employee feedback → a GitHub issue in githubFeedbackRepo. Order of
+  // middleware matters: requireAuth (gate to app users — cookie session + X-PAI-Auth, or Bearer) →
+  // requireFeedbackConfigured (503 if off) → feedbackRateLimit (bound spam to our repo) → express.json
+  // (small body) → handler. Mounted BEFORE the static catch-all so the SPA route doesn't shadow it.
+  app.post('/feedback', requireAuth, requireFeedbackConfigured, feedbackRateLimit, express.json({ limit: '32kb' }), async (req, res) => {
+    const body = req.body ?? {};
+    const kind = normalizeKind(body.kind);
+    if (!kind) {
+      return res.status(400).json({ error: 'kind must be one of: positive, problem, suggestion' });
+    }
+    const comment = typeof body.comment === 'string' ? body.comment : '';
+    if (comment.trim() === '') {
+      return res.status(400).json({ error: 'comment is required' });
+    }
+
+    // Validate/normalise the app-captured context BEFORE it reaches buildIssue: ids are constrained
+    // to safe charsets here; free-text fields (fileName, userAgent) are additionally hostile-stripped
+    // + HTML-escaped inside buildIssue. An out-of-shape field is dropped (becomes ''), never rejected
+    // — the feedback itself must still go through even if the context is partial/garbled.
+    const ctxIn = (body.context && typeof body.context === 'object') ? body.context : {};
+    const context = {
+      jobId: /^[A-Za-z0-9-]{1,64}$/.test(String(ctxIn.jobId ?? '')) ? String(ctxIn.jobId) : '',
+      fileName: typeof ctxIn.fileName === 'string' ? ctxIn.fileName.slice(0, 300) : '',
+      dealId: /^\d{1,12}$/.test(String(ctxIn.dealId ?? '')) ? String(ctxIn.dealId) : '',
+      appVersion: typeof ctxIn.appVersion === 'string' ? ctxIn.appVersion.slice(0, 80) : '',
+      userAgent: String(req.headers['user-agent'] ?? '').slice(0, 300),
+      reporter: feedbackReporter(req),
+    };
+
+    const { title, body: issueBody, labels } = buildIssue({ kind, comment, context });
+    try {
+      const issue = await createGithubIssue({
+        repo: githubFeedbackRepo, token: githubFeedbackToken, title, body: issueBody, labels,
+      });
+      return res.status(201).json({ ok: true, url: issue.url, number: issue.number });
+    } catch (e) {
+      // Log ONLY the stable error code — createGithubIssue guarantees its message is leak-free, but
+      // we still avoid logging the message (defence in depth: never let a token reach the logs).
+      const code = e instanceof GithubFeedbackError ? e.code : 'UNKNOWN';
+      console.error(`[feedback] could not create issue (code: ${code})`);
+      const status = code === 'NOT_CONFIGURED' ? 503 : 502;
+      return res.status(status).json({ error: 'Could not submit feedback right now. Please try again later.' });
+    }
+  });
 
   // Serve the built UI (only present in the Docker image) OPENLY so the Bitrix24 iframe can load
   // `/`, `/install` and assets — the app session (above) is the gate now, not a page-level Basic
