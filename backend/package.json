@@ -21,7 +21,7 @@
     "uuid": "^14.0.0"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.8",
+    "@vitest/coverage-v8": "^4.1.9",
     "supertest": "^7.2.2",
     "vitest": "^4.1.8"
   }
