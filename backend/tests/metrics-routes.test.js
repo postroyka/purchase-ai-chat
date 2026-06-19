@@ -93,8 +93,9 @@ describe('metrics pipeline integration (upload → processJob → /metrics/data)
       metrics,
       agentConfig: {
         spawnFn: makeAgentSpawn({
-          // 3 line items, 2 without a supplier article (empty + missing vendorCode)
-          result: { items: [{ vendorCode: 'A-1', name: 'X' }, { vendorCode: '', name: 'Y' }, { name: 'Z' }] },
+          // 3 line items, 2 without a supplier article (empty + missing vendorCode); a deal was
+          // created → outcome 'ok' (success now requires a created deal, #192).
+          result: { deal: { dealId: '101' }, items: [{ vendorCode: 'A-1', name: 'X' }, { vendorCode: '', name: 'Y' }, { name: 'Z' }] },
           cost: 0.05,
         }),
         extractFn: async () => ({ text: 'СЧЁТ № 1', method: 'pdftotext' }),

@@ -17,6 +17,7 @@ const { data, error, pending, refresh } = useMetrics()
 // ── Russian labels for the breakdown charts ──────────────────────────────────
 const OUTCOME_LABELS: Record<string, string> = {
   ok: 'Успешно',
+  no_deal: 'Без сделки',
   tool_unavailable: 'Инструмент Б24 недоступен',
   foreign_supplier: 'Иностранный поставщик',
   supplier_not_found: 'Поставщик не найден',

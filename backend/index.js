@@ -753,16 +753,16 @@ export function createApp(config = {}) {
 // (issue #192) — keyed by the agent's business-error code (prompts/main.md). We do NOT echo the
 // agent's result.message (it derives from untrusted document text); a fixed message per code keeps
 // it safe and clear. Unknown code / no-error-but-no-deal fall back to a generic line.
-const PROBLEM_MESSAGES = {
+export const PROBLEM_MESSAGES = {
   unreadable_document: 'Не удалось распознать документ — нет читаемого текста. Загрузите чёткий скан или PDF счёта.',
   foreign_supplier: 'Поставщик не из РБ (российские реквизиты ИНН/КПП) — сделка не создаётся.',
   unsupported_currency: 'Валюта документа не BYN — сделка не создаётся.',
-  supplier_not_found: 'Поставщик не найден в Битрикс24 по УНП из документа.',
-  contract_not_found: 'У поставщика не найден активный договор закупки.',
-  missing_responsible: 'Не задан ответственный пользователь — сделку некому назначить.',
+  supplier_not_found: 'Поставщик не найден в Битрикс24 по УНП из документа. Заведите поставщика или проверьте УНП.',
+  contract_not_found: 'У поставщика не найден активный договор закупки. Создайте договор для поставщика.',
+  missing_responsible: 'Не задан ответственный пользователь — сделку некому назначить. Обратитесь к администратору.',
   tool_unavailable: 'Сервис Битрикс24 временно недоступен. Повторите попытку позже.',
 };
-function problemMessage(result) {
+export function problemMessage(result) {
   const code = result && typeof result === 'object' && typeof result.error === 'string' ? result.error : null;
   if (code && Object.prototype.hasOwnProperty.call(PROBLEM_MESSAGES, code)) return PROBLEM_MESSAGES[code];
   if (code) return 'Не удалось обработать документ — сделка не создана.';
@@ -809,27 +809,30 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       const result = await runAgent(fileEntry.path, job.responsibleUserId, {
         ...agentConfig, jobId, onMeta: (m) => { agentMeta = m; },
       });
-      // Guard against an abnormally large agent result bloating Redis / the API response.
+      // A created deal is the only success signal (prompts/main.md). Detect it up front so it can be
+      // used for both the metrics outcome and the result-page badge, AND preserved through truncation.
+      const rdeal = result && typeof result === 'object' && result.deal && typeof result.deal === 'object'
+        ? result.deal : null;
+      const dealId = rdeal ? rdeal.dealId : undefined;
+      const hasDeal = dealId != null && String(dealId).trim() !== '';
+      // Guard against an abnormally large agent result bloating Redis / the API response — but KEEP the
+      // deal pointer in the truncated payload, else a big SUCCESS is mis-shown as "Без сделки" with no
+      // reason (the #192 regression on the truncation path: the UI reads file.result.deal via dealOf).
       let tooLarge = false;
       try { tooLarge = JSON.stringify(result).length > MAX_RESULT_BYTES; } catch { /* non-serialisable */ }
       fileEntry.result = tooLarge
-        ? { truncated: true, message: 'agent result too large — omitted' }
+        ? { truncated: true, message: 'agent result too large — omitted', deal: rdeal }
         : result;
       fileEntry.status = 'done';
-      // A business error (e.g. tool_unavailable, supplier_not_found) comes back in the agent's
-      // result payload — not as a thrown exception — so the file is "done" but the outcome
-      // isn't "ok". Surface it for the metrics breakdown.
-      const outcome = (result && typeof result === 'object' && typeof result.error === 'string')
-        ? result.error
-        : 'ok';
-      // issue #192: if the file finished WITHOUT a created deal (a business error, or an
-      // unrecognised document that yielded no deal), attach a human-readable reason so the result
-      // page shows WHY instead of a bare green "Готово". Status stays 'done' — it was processed.
-      const dealId = result && typeof result === 'object' && result.deal && typeof result.deal === 'object'
-        ? result.deal.dealId : undefined;
-      fileEntry.problem = (dealId == null || String(dealId).trim() === '')
-        ? problemMessage(result).slice(0, MAX_ERROR_CHARS)
-        : null;
+      // A business error (e.g. tool_unavailable, supplier_not_found) comes back in the agent's result
+      // payload — not as a thrown exception — so the file is "done" but not "ok". A file with NO created
+      // deal (business error OR an unrecognised document) is 'no_deal', NOT 'ok', so the /metrics
+      // success-rate agrees with the UI ("успех = создана сделка", issue #192).
+      const errCode = result && typeof result === 'object' && typeof result.error === 'string' ? result.error : null;
+      const outcome = errCode ? errCode : (hasDeal ? 'ok' : 'no_deal');
+      // issue #192: surface a human-readable reason when no deal was created, so the result page shows
+      // WHY instead of a bare green "Готово". Status stays 'done' — it was processed.
+      fileEntry.problem = hasDeal ? null : problemMessage(result).slice(0, MAX_ERROR_CHARS);
       // Count recognised line items + those missing a supplier article (vendorCode) for the
       // savings estimate (#75). Items are present even when the deal couldn't be created
       // (e.g. tool_unavailable) — the recognition/matching work was still done.
