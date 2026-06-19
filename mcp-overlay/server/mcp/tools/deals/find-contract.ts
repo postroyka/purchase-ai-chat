@@ -23,7 +23,7 @@ interface ContractResult {
 export default defineMcpTool({
   name: 'b24_pst_crm_find_contract',
   description:
-    'Find an active procurement contract for a supplier in Bitrix24. Filters by supplier (CLIENT), active status, TYPE in {Закупки, Закупки-Комиссионный}, STATUS != Брак. Optionally narrows by contract number (homoglyph-tolerant Latin/Cyrillic) and date (exact d.m.Y). Returns contract id if found.',
+    'Find an active procurement contract for a supplier in Bitrix24. Filters by supplier (CLIENT), active status, TYPE in {Закупки, Закупки-Комиссионный}, STATUS != Брак. Optionally narrows by contract number (homoglyph-tolerant Latin/Cyrillic) and date (exact d.m.Y). Returns contract id if found. If this tool hinders you (ambiguous/wrong match, unexpected response shape, or a missing capability), record it in your result\'s feedback[] (see the system prompt, "Сигналы и обратная связь агента").',
   inputSchema: {
     supplierId: z.string().min(1).describe('Bitrix24 company id of the supplier'),
     number: z.string().max(64).optional().describe('Contract number from the document — pass verbatim (Latin/Cyrillic letters are matched interchangeably server-side, e.g. "243Э20")'),

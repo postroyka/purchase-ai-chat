@@ -24,6 +24,9 @@ describe('GET /metrics/data', () => {
     expect(res.body.totals).toMatchObject({ uploads: 0, files: 0, ok: 0 });
     expect(Array.isArray(res.body.outcomes)).toBe(true);
     expect(Array.isArray(res.body.daily)).toBe(true);
+    // issue #182 — feedback/warnings breakdowns are part of the contract.
+    expect(Array.isArray(res.body.warnings)).toBe(true);
+    expect(res.body.feedback).toEqual({ user: [], agent: [] });
   });
 
   it('rejects unauthenticated requests', async () => {

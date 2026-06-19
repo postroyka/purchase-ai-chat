@@ -21,7 +21,7 @@ interface SupplierResult {
 export default defineMcpTool({
   name: 'b24_pst_crm_find_supplier',
   description:
-    'Find a supplier (company) in Bitrix24 by UNP (9-digit Belarusian taxpayer number). Returns company id and name if found. Russian suppliers (INN+KPP without UNP) are not searched.',
+    'Find a supplier (company) in Bitrix24 by UNP (9-digit Belarusian taxpayer number). Returns company id and name if found. Russian suppliers (INN+KPP without UNP) are not searched. If this tool hinders you (ambiguous/wrong match, unexpected response shape, or a missing capability), record it in your result\'s feedback[] (see the system prompt, "Сигналы и обратная связь агента").',
   inputSchema: {
     // УНП нормализуется (пробелы/дефисы из OCR убираются) ПЕРЕД валидацией —
     // согласовано с PHP-контроллером, который тоже терпит «грязный» ввод (#102).

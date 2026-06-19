@@ -4,11 +4,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { createApp } from '../index.js';
+import { createMetrics } from '../metrics.js';
 import {
   stripHostileChars,
   sanitizeComment,
   normalizeKind,
   buildIssue,
+  buildAgentFeedbackIssue,
   formatIssueBody,
   createGithubIssue,
   GithubFeedbackError,
@@ -212,6 +214,47 @@ describe('createGithubIssue', () => {
   });
 });
 
+// ── Module: agent-feedback issue builder (channel «агент») ────────────────────
+
+describe('buildAgentFeedbackIssue', () => {
+  it('builds an [Агент]-prefixed issue with tool + first line in the title and agent labels', () => {
+    const { title, labels, kind } = buildAgentFeedbackIssue({
+      kind: 'suggestion',
+      tool: 'b24_pst_crm_find_contract',
+      note: 'Нет способа выбрать договор по сумме\nвторая строка',
+      context: { jobId: 'job-7', fileName: 'p.xlsx' },
+    });
+    expect(kind).toBe('suggestion');
+    expect(title.startsWith('[Агент] ')).toBe(true);
+    expect(title).toContain('b24_pst_crm_find_contract');
+    expect(title).toContain('Нет способа выбрать договор по сумме');
+    expect(title).not.toContain('вторая строка');            // first line only
+    expect(labels).toEqual(['agent-feedback', 'feedback:suggestion']);
+  });
+
+  it('defaults an unknown kind to problem and drops a malformed tool name', () => {
+    const { title, labels } = buildAgentFeedbackIssue({ kind: 'nonsense', tool: 'bad tool!', note: 'x' });
+    expect(labels).toEqual(['agent-feedback', 'feedback:problem']);
+    expect(title).not.toContain('bad tool!');                 // invalid tool name not echoed
+  });
+
+  it('hostile-strips the title and HTML-escapes the note + carries context', () => {
+    const { title, body } = buildAgentFeedbackIssue({
+      kind: 'problem',
+      tool: 'b24_pst_crm_find_product',
+      note: `a${RLO}b <script>alert(1)</script> ${ZWSP}c`,
+      context: { jobId: 'job-9', fileName: 'scan.pdf' },
+    });
+    expect(title).not.toContain(RLO);
+    expect(body).not.toContain(RLO);
+    expect(body).not.toContain(ZWSP);
+    expect(body).not.toContain('<script>');
+    expect(body).toContain('&lt;script&gt;');
+    expect(body).toContain('job-9');
+    expect(body).toContain('scan.pdf');
+  });
+});
+
 // ── Route: GET /feedback/config ───────────────────────────────────────────────
 
 describe('GET /feedback/config', () => {
@@ -342,6 +385,32 @@ describe('POST /feedback', () => {
     const second = await request(app).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
       .send({ kind: 'positive', comment: 'two' });
     expect(second.status).toBe(429);
+  });
+
+  it('counts a successful user submission in /metrics (recordFeedback source=user)', async () => {
+    vi.stubGlobal('fetch', fakeFetch());
+    const metrics = createMetrics({ redisUrl: '' });
+    const spy = vi.spyOn(metrics, 'recordFeedback');
+    const app = appWith({ metrics });
+    const res = await request(app).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'article wrong' });
+    expect(res.status).toBe(201);
+    expect(spy).toHaveBeenCalledWith({ source: 'user', kind: 'problem' });
+  });
+
+  it('does NOT count feedback on a 400 or a 502 (counts successful submits, not attempts)', async () => {
+    const metrics = createMetrics({ redisUrl: '' });
+    const spy = vi.spyOn(metrics, 'recordFeedback');
+    // 400 — bad kind, rejected before the GitHub call
+    const bad = await request(appWith({ metrics })).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'nope', comment: 'x' });
+    expect(bad.status).toBe(400);
+    // 502 — GitHub fails, count line sits after createGithubIssue so it never runs
+    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 500 }));
+    const fail = await request(appWith({ metrics })).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'x' });
+    expect(fail.status).toBe(502);
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 

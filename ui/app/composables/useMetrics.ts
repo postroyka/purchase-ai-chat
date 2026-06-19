@@ -38,6 +38,9 @@ export interface MetricsSnapshot {
   outcomes: MetricNamedCount[]
   formats: MetricNamedCount[]
   extract: MetricNamedCount[]
+  // issue #182: non-terminal agent quality signals (by code) + feedback volume by source/kind.
+  warnings: MetricNamedCount[]
+  feedback: { user: MetricNamedCount[], agent: MetricNamedCount[] }
   daily: { date: string, files: number }[]
 }
 

@@ -22,6 +22,8 @@ import Redis from 'ioredis';
  *     positionsNoArticle?: number,
  *     agent?: { extractMethod?: string|null, costUsd?: number|null, agentDurationMs?: number }|null,
  *   }): Promise<void>,
+ *   recordWarnings(codes: string[]): Promise<void>,
+ *   recordFeedback(arg: { source: 'user'|'agent', kind?: string }): Promise<void>,
  *   snapshot(): Promise<MetricsSnapshot>,
  *   ping(): Promise<void>,
  * }} Metrics
@@ -43,6 +45,8 @@ import Redis from 'ioredis';
  *   outcomes: Array<{ name: string, count: number }>,
  *   formats: Array<{ name: string, count: number }>,
  *   extract: Array<{ name: string, count: number }>,
+ *   warnings: Array<{ name: string, count: number }>,
+ *   feedback: { user: Array<{ name: string, count: number }>, agent: Array<{ name: string, count: number }> },
  *   daily: Array<{ date: string, files: number }>,
  * }} MetricsSnapshot
  */
@@ -53,6 +57,11 @@ const K = {
   formats: 'metrics:formats',
   extract: 'metrics:extract',
   daily: 'metrics:daily',
+  // issue #182, channels «агент» + «сотрудник»: non-terminal agent quality signals (by code) and
+  // feedback volume split by source (user 👍/👎/💡 vs agent developer-feedback), both NO-TTL totals.
+  warnings: 'metrics:warnings',
+  feedbackUser: 'metrics:feedback:user',
+  feedbackAgent: 'metrics:feedback:agent',
 };
 
 /** UTC day bucket key, e.g. "2026-06-10". */
@@ -83,6 +92,30 @@ const KNOWN_OUTCOMES = new Set([
 function outcomeLabel(s) {
   const v = label(s, 'unknown');
   return KNOWN_OUTCOMES.has(v) ? v : 'other';
+}
+
+// Non-terminal agent quality signals (issue #182, channel «агент»). Like outcomes these originate
+// (indirectly) from untrusted document content, so pin to a known set — anything else → 'other'.
+// Keep in sync with prompts/main.md (the `warnings[]` code list) and create_deal's PHP warnings.
+const KNOWN_WARNING_CODES = new Set([
+  'other',
+  // surfaced from create_deal's response (prompts/main.md step 5)
+  'no_items_matched', 'product_rows_failed', 'file_attach_failed', 'invalid_base64_file',
+  'document_date_unparsed', 'timeline_comment_failed',
+  // agent-detected during matching (step 4)
+  'articles_not_in_catalog', 'items_without_article',
+]);
+function warningLabel(s) {
+  const v = label(s, 'other');
+  return KNOWN_WARNING_CODES.has(v) ? v : 'other';
+}
+
+// Feedback kinds — shared by the user channel (👍/👎/💡) and the agent channel. label() + this
+// allowlist bound cardinality (agent output is untrusted). Mirror backend/feedback.js FEEDBACK_KINDS.
+const KNOWN_FEEDBACK_KINDS = new Set(['positive', 'problem', 'suggestion', 'other']);
+function feedbackKindLabel(s) {
+  const v = label(s, 'other');
+  return KNOWN_FEEDBACK_KINDS.has(v) ? v : 'other';
 }
 
 function warn(ctx, e) {
@@ -152,10 +185,30 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
     } catch (e) { warn('recordFile', e); }
   }
 
+  // Non-terminal agent quality signals for a file (issue #182, channel «агент»). Bounded list,
+  // each code pinned to the allowlist. Best-effort — never fails a job.
+  async function recordWarnings(codes = []) {
+    try {
+      const list = (Array.isArray(codes) ? codes : []).filter((c) => typeof c === 'string').slice(0, 20);
+      if (!list.length) return;
+      await b.batch(list.map((c) => ['hincrby', K.warnings, warningLabel(c), 1]));
+    } catch (e) { warn('recordWarnings', e); }
+  }
+
+  // One feedback submission, split by source (user 👍/👎/💡 vs agent developer-feedback) and kind.
+  // Counts attempts to submit, regardless of whether a GitHub issue was actually opened (deduped).
+  async function recordFeedback({ source, kind } = {}) {
+    try {
+      const key = source === 'agent' ? K.feedbackAgent : K.feedbackUser;
+      await b.batch([['hincrby', key, feedbackKindLabel(kind), 1]]);
+    } catch (e) { warn('recordFeedback', e); }
+  }
+
   async function snapshot() {
-    const [totals, outcomes, formats, extract, daily] = await Promise.all([
+    const [totals, outcomes, formats, extract, daily, warnings, feedbackUser, feedbackAgent] = await Promise.all([
       b.hgetall(K.totals), b.hgetall(K.outcomes), b.hgetall(K.formats),
       b.hgetall(K.extract), b.hgetall(K.daily),
+      b.hgetall(K.warnings), b.hgetall(K.feedbackUser), b.hgetall(K.feedbackAgent),
     ]);
     const t = numify(totals);
     const files = t.files || 0;
@@ -221,6 +274,8 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
       outcomes: toSortedArray(outcomes),
       formats: toSortedArray(formats),
       extract: toSortedArray(extract),
+      warnings: toSortedArray(warnings),
+      feedback: { user: toSortedArray(feedbackUser), agent: toSortedArray(feedbackAgent) },
       daily: Object.entries(numify(daily))
         .map(([date, n]) => ({ date, files: n }))
         .sort((a, b2) => (a.date < b2.date ? -1 : 1)),
@@ -229,7 +284,7 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
 
   async function ping() { return b.ping(); }
 
-  return { recordUpload, recordFile, snapshot, ping };
+  return { recordUpload, recordFile, recordWarnings, recordFeedback, snapshot, ping };
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

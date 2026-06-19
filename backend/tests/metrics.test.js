@@ -117,6 +117,54 @@ describe('metrics (in-memory)', () => {
   });
 });
 
+describe('metrics — agent signals & feedback (#182)', () => {
+  it('records agent warning codes, caps unknowns to "other", counts repeats', async () => {
+    const m = mem();
+    await m.recordWarnings(['no_items_matched', 'articles_not_in_catalog', 'no_items_matched', 'totally_made_up']);
+    const s = await m.snapshot();
+    expect(s.warnings).toContainEqual({ name: 'no_items_matched', count: 2 });
+    expect(s.warnings).toContainEqual({ name: 'articles_not_in_catalog', count: 1 });
+    expect(s.warnings).toContainEqual({ name: 'other', count: 1 });               // unknown code → capped
+    expect(s.warnings.find((w) => w.name === 'totally_made_up')).toBeFalsy();      // never stored verbatim
+  });
+
+  it('is best-effort on warnings: ignores non-array / non-string entries', async () => {
+    const m = mem();
+    await expect(m.recordWarnings('nope')).resolves.toBeUndefined();
+    await expect(m.recordWarnings([1, null, {}, 'no_items_matched'])).resolves.toBeUndefined();
+    const s = await m.snapshot();
+    expect(s.warnings).toContainEqual({ name: 'no_items_matched', count: 1 });     // only the valid string counted
+  });
+
+  it('caps the per-call warnings list at 20 (anti-cardinality-DoS)', async () => {
+    const m = mem();
+    const many = Array.from({ length: 50 }, () => 'no_items_matched');
+    await m.recordWarnings(many);
+    const s = await m.snapshot();
+    expect(s.warnings).toContainEqual({ name: 'no_items_matched', count: 20 }); // only the first 20 counted
+  });
+
+  it('splits feedback counts by source (user vs agent) and kind', async () => {
+    const m = mem();
+    await m.recordFeedback({ source: 'user', kind: 'problem' });
+    await m.recordFeedback({ source: 'user', kind: 'positive' });
+    await m.recordFeedback({ source: 'agent', kind: 'suggestion' });
+    await m.recordFeedback({ source: 'agent', kind: 'weird_kind' }); // unknown → other
+    const s = await m.snapshot();
+    expect(s.feedback.user).toContainEqual({ name: 'problem', count: 1 });
+    expect(s.feedback.user).toContainEqual({ name: 'positive', count: 1 });
+    expect(s.feedback.agent).toContainEqual({ name: 'suggestion', count: 1 });
+    expect(s.feedback.agent).toContainEqual({ name: 'other', count: 1 });
+    expect(s.feedback.user.find((f) => f.name === 'suggestion')).toBeFalsy();      // sources don't bleed
+  });
+
+  it('empty snapshot exposes well-formed warnings + feedback', async () => {
+    const s = await mem().snapshot();
+    expect(s.warnings).toEqual([]);
+    expect(s.feedback).toEqual({ user: [], agent: [] });
+  });
+});
+
 describe('metrics economics (#75)', () => {
   const econMem = () => createMetrics({ redisUrl: '', hourlyRateByn: 18, minutesPerPosition: 2, usdBynRate: 3 });
 

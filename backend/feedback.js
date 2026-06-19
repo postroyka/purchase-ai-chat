@@ -135,6 +135,65 @@ export function buildIssue({ kind, comment, context = {} }) {
   return { title, body, labels };
 }
 
+// Tool name as referenced by the agent — bound to a safe shape before it goes in a title/label OR a
+// dedup key (agent-feedback.js hashes on this same normalised form, so junk tool values can't each
+// spawn a "distinct" near-identical issue). Exported for that reason.
+export function safeToolName(tool) {
+  const v = stripHostileChars(tool).trim();
+  return /^[A-Za-z0-9_]{1,64}$/.test(v) ? v : '';
+}
+
+/**
+ * Render the body of an AGENT-feedback issue (issue #182, channel «агент»). The note is the agent's
+ * own "what hinders me / how to improve" about our MCP tools or the prompt. The agent processes
+ * UNTRUSTED documents, so its text is treated exactly like user free text: hostile-stripped and
+ * HTML-escaped into <pre><code>. Mirrors formatIssueBody's shape so both channels triage alike.
+ */
+export function formatAgentFeedbackBody({ tool, note, context = {} }) {
+  const ctxLines = [
+    contextLine('Инструмент', safeToolName(tool)),
+    contextLine('Задача (jobId)', context.jobId),
+    contextLine('Файл', context.fileName),
+  ].filter(Boolean);
+
+  const safeNote = escapeHtml(stripHostileChars(note)).trim() || '(без описания)';
+
+  return [
+    '## Обратная связь агента',
+    '',
+    'Автоматический сигнал от ИИ-агента обработки: что мешает в работе с нашими MCP-инструментами / промптом и как это можно улучшить.',
+    '',
+    '## Контекст',
+    '',
+    ...(ctxLines.length ? ctxLines : ['- _(контекст не передан)_']),
+    '',
+    '## Что мешает / как улучшить',
+    '',
+    '<pre><code>',
+    safeNote,
+    '</code></pre>',
+    '',
+    '---',
+    '_Создано автоматически из результата агента (issue #182, канал «агент»). Текст агента — недоверенный (агент читает сторонние документы), поэтому экранирован._',
+  ].join('\n');
+}
+
+/**
+ * Build { title, body, labels, kind } for an AGENT-feedback issue. Unknown kind → 'problem'.
+ * Title = "[Агент] <kind> · <tool?> · <first line>"; labels distinguish the channel (agent-feedback).
+ */
+export function buildAgentFeedbackIssue({ kind, tool, note, context = {} }) {
+  const k = normalizeKind(kind) ?? 'problem';
+  const safeNote = sanitizeComment(note);
+  const firstLine = stripHostileChars(safeNote.split('\n')[0] ?? '').trim();
+  const toolName = safeToolName(tool);
+  const parts = [FEEDBACK_KINDS[k], toolName, firstLine].filter(Boolean);
+  const title = stripHostileChars(`[Агент] ${parts.join(' · ')}`).slice(0, MAX_TITLE_LENGTH);
+  const labels = ['agent-feedback', `feedback:${k}`];
+  const body = formatAgentFeedbackBody({ tool: toolName, note: safeNote, context });
+  return { title, body, labels, kind: k };
+}
+
 /**
  * Create a GitHub issue via the REST API. `fetchImpl` is injectable for tests.
  *
