@@ -286,7 +286,7 @@ export function createApp(config = {}) {
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:",
+    "img-src 'self' data: blob:", // blob: — same-origin object-URL для превью файлов (#198)
     "font-src 'self' data:",
     `connect-src 'self' ${frameAncestors}`,
     "object-src 'none'",

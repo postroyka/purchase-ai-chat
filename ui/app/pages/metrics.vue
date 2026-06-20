@@ -10,6 +10,7 @@ import MoneyIcon from '@bitrix24/b24icons-vue/outline/MoneyIcon'
 import AlertIcon from '@bitrix24/b24icons-vue/outline/AlertIcon'
 import WarningIcon from '@bitrix24/b24icons-vue/main/WarningIcon'
 import { computeMatchingReasons, MATCHING_REASON_LABELS, SUPPLIER_LABELS } from '~/utils/matching-reasons'
+import { money } from '~/utils/money'
 
 definePageMeta({ layout: 'default' })
 
@@ -72,9 +73,9 @@ const feedbackTotal = computed(() => {
 const matchingReasons = computed(() => computeMatchingReasons(data.value))
 
 // ── Formatters ───────────────────────────────────────────────────────────────
-const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
-const fmtByn = (n: number) => `${nf.format(n)} BYN`
-const fmtUsd = (n: number) => `$${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 4 }).format(n)}`
+// Денежный формат вынесен в app/utils/money.ts (юнит-тесты) — `55 123.62 usd` / `66 356.49 byn`.
+const fmtByn = (n: number) => money(n, 'byn')
+const fmtUsd = (n: number) => money(n, 'usd')
 const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} с` : `${Math.round(ms)} мс`)
 const fmtDateTime = (iso?: string) => (iso ? new Date(iso).toLocaleString('ru-RU') : '—')
 

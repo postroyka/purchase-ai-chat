@@ -763,6 +763,7 @@ describe('Security headers', () => {
     // block:csp and breaks the in-frame SDK init (installFinish + helper data).
     expect(csp).toMatch(/connect-src 'self' https:\/\/\*\.bitrix24\.ru/);
     expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("img-src 'self' data: blob:"); // blob: для превью файлов (#198)
     expect(csp).toContain("frame-ancestors 'self'");  // clickjacking: same-origin…
     expect(csp).toContain('https://*.bitrix24.ru');   // …+ порталы Bitrix24 (работа во фрейме)
     expect(csp).toContain("base-uri 'self'");         // base-tag injection
