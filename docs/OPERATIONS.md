@@ -87,12 +87,15 @@ docker logs --tail 200 procure-mcp              # MCP (вызовы B24/1С)
 
 ## 3. Как обновлять систему
 
-### 3.1. Приложение и MCP — автоматически (Watchtower)
-Поток: **git → CI → образ в GHCR → Watchtower подхватывает**.
-- `push` в `main` собирает образы с тегом `sha-<sha>` (не трогает `:latest`).
-- Тег `v*` (релиз) или ручной `workflow_dispatch` при зелёном CI → публикует `:latest`.
+### 3.1. Приложение и MCP — автоматически (Watchtower), continuous deployment
+Поток: **git → зелёный CI → образ в GHCR → Watchtower подхватывает**. **CI и есть гейт** — на прод едут
+только зелёные коммиты `main` (красный CI до сборки образов не доходит).
+- `push` в `main` → **после зелёного CI** (триггер `workflow_run`) публикуются `:latest` **и** `sha-<sha>`.
+  То есть каждый зелёный коммит main автоматически уезжает в прод (релиз-тег **не** обязателен).
+- Тег `v*` или ручной `workflow_dispatch` (тоже под зелёным CI) → то же самое + помечает **опциональную**
+  точку релиза/отката. Не требуется для деплоя.
 - Watchtower на сервере каждые **300 c** тянет новый `:latest` для `procure-app`/`procure-mcp` и
-  пересоздаёт их (scope `procure-ai` — не трогает чужие контейнеры).
+  пересоздаёт их (scope `procure-ai` — не трогает чужие контейнеры). `sha-<sha>` хранятся для отката (§4).
 
 Форс-обновление сейчас (не ждать 5 минут):
 ```bash
@@ -100,11 +103,12 @@ make prod-redeploy     # pull + up -d (или make prod-pull — только п
 ```
 
 ### 3.2. Зависимости (npm/pnpm-пакеты)
-- Обновления пакетов приходят **PR-ами** (Renovate для `mcp/`, Dependabot). Ревью → мерж → CI собирает
-  новый образ → Watchtower раскатывает (как §3.1). То есть «обновить пакеты» = смержить их PR и дождаться
-  релиза `:latest` (или `make deploy-images` вручную).
-- Активность git/CI смотреть на GitHub: вкладка Actions (зелёный CI = безопасно публиковать `:latest`),
-  Pull requests (Renovate/Dependabot), Security (Dependabot alerts).
+- Обновления пакетов приходят **PR-ами**. Корневой `.github/dependabot.yml` ведёт их по всему репо:
+  **npm** (`backend`, `ui`, `mcp`, `mcp-overlay`), **docker** (Node — только patch) и **github-actions**.
+  У `mcp/` есть **свой** набор (`mcp/renovate.json` + `mcp/.github/dependabot.yml`) от вендорного шаблона —
+  он **конфликтует** с корневым (см. issue по сверке). Ревью → мерж → CI → Watchtower раскатывает (как §3.1).
+- Активность git/CI смотреть на GitHub: вкладка **Actions** (зелёный CI = образ уехал в прод),
+  **Pull requests** (Dependabot/Renovate), **Security** (Dependabot alerts).
 
 ### 3.3. Redis и базовые образы — вручную
 `redis:7-alpine` **не** под Watchtower (официальный образ, осознанно). Обновлять руками, со снапшотом:
@@ -120,11 +124,11 @@ supply-chain-риск). Поднимать версию — осознанно, 
 ### 3.5. PHP-модуль Bitrix24 (`b24-controller`) — отдельный деплой
 REST-контроллеры (`shef:purchase.api.*`) живут на портале Bitrix24, **не** в Docker. Обновляются отдельно
 (`make deploy-b24` или вручную выкладкой `config.php` + `procure*.php`). Помнить про связку MCP↔PHP: правки
-контракта едут двумя сторонами (см. чек-лист деплоя MCP↔PHP).
+контракта едут двумя сторонами (чек-лист деплоя MCP↔PHP — PR #78).
 
 ## 4. Откат (rollback)
 
-CI не ходит на прод по SSH — откат ручной (подробно в [`../mcp/docs/RUNBOOK.md`](../mcp/docs/RUNBOOK.md) §Rollback):
+CI не ходит на прод по SSH — откат ручной (подробно в [`../mcp/docs/RUNBOOK.md#rollback`](../mcp/docs/RUNBOOK.md#rollback)):
 ```bash
 # 1) остановить Watchtower, чтобы не перекатил обратно на :latest
 docker stop procure-watchtower
@@ -149,8 +153,8 @@ TLS-сертификаты принадлежат стеку `procure-proxy` —
 - **Ротация токенов** при утечке/периодически: `BACKEND_API_TOKEN`, `NUXT_MCP_AUTH_TOKEN`,
   `NUXT_BITRIX24_WEBHOOK_URL`, `GITHUB_FEEDBACK_TOKEN`, `PUBLIC_PAGE_BASIC_AUTH_PASS`, `REDIS_PASSWORD`
   (`openssl rand -hex 32`), затем `make prod-redeploy`.
-- `GITHUB_FEEDBACK_TOKEN` — **fine-grained PAT**, только репо фидбэка, Issues: R/W; бэкенд на старте
-  проверяет приватность репо.
+- `GITHUB_FEEDBACK_TOKEN` — **fine-grained PAT**, только репо фидбэка (по умолч. `postroyka/purchase-ai-chat`),
+  Issues: R/W; бэкенд на старте **предупреждает в лог**, если этот репо публичный (мягкая проверка, не гейт).
 - На GitHub держать включёнными CI security-гейты (secret-scanning, Dependabot alerts).
 
 ## 7. Связанные документы
