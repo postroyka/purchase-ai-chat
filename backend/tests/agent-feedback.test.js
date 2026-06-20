@@ -291,6 +291,29 @@ describe('processJob — agent feedback channel (#182)', () => {
     });
   });
 
+  it('AGENT_FORCE_FEEDBACK: форсит отзыв в metrics + reporter, даже если агент его не прислал', async () => {
+    const metrics = fakeMetrics();
+    const report = vi.fn(async () => ({ created: true }));
+    const app = createApp({
+      token: TOKEN, uploadDir: UPLOAD_DIR, rateLimitMax: 0, metrics,
+      agentFeedback: { enabled: true, report },
+      // чистый результат БЕЗ feedback + forceFeedback:true → инъекция в agent-runner прогоняет канал
+      agentConfig: {
+        spawnFn: spawnEmitting({ supplier: { unp: '123456789' }, items: [], deal: { dealId: '1' } }),
+        extractFn: async () => null,
+        forceFeedback: true,
+      },
+    });
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`)
+      .attach('files[]', validPdf(), { filename: 'invoice.pdf' });
+    expect(up.status).toBe(201);
+    await pollJob(app, up.body.jobId);
+
+    expect(metrics.recordFeedback).toHaveBeenCalledWith({ source: 'agent', kind: 'problem' });
+    await vi.waitFor(() => expect(report).toHaveBeenCalledTimes(1));
+    expect(report.mock.calls[0][0]).toMatchObject({ kind: 'problem', tool: 'force_test' });
+  });
+
   it('processes feedback + warnings even on a BUSINESS error (status done, no deal)', async () => {
     const metrics = fakeMetrics();
     const report = vi.fn(async () => ({ created: true }));

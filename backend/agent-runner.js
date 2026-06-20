@@ -14,6 +14,23 @@ function getSystemPrompt() {
   return (_systemPrompt ??= readFileSync(SYSTEM_PROMPT_PATH, 'utf8'));
 }
 
+// Диагностика канала «Обратная связь агента» (AGENT_FORCE_FEEDBACK): добавляет в результат один
+// тестовый элемент feedback, ЕСЛИ агент сам ничего не прислал — чтобы на любом файле прогнать весь
+// канал (metrics.recordFeedback → панель /metrics + GitHub issue). Реальный feedback не перетираем,
+// не-объектный результат не трогаем. Возвращает result для удобства.
+function injectForcedFeedback(result, tag = '[agent]') {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  // Непустой массив feedback = реальный отзыв агента, не трогаем. Не-массив трактуем как «отзыва нет».
+  if (Array.isArray(result.feedback) && result.feedback.length > 0) return result;
+  result.feedback = [{
+    kind: 'problem',
+    tool: 'force_test', // подчёркивание: проходит safeToolName (дефис бы срезался) — инструмент видно
+    note: 'AGENT_FORCE_FEEDBACK: принудительный тестовый фидбэк агента (проверка канала «Обратная связь агента»).',
+  }];
+  console.log(`${tag} AGENT_FORCE_FEEDBACK: injected synthetic agent-feedback entry`);
+  return result;
+}
+
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 // Grace period between SIGTERM and SIGKILL on timeout — gives claude a chance
 // to flush output and exit cleanly before we force-kill.
@@ -115,6 +132,10 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const extractFn = config.extractFn ?? extractDocumentText;
   const sleepFn = config.sleepFn ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   const randomFn = config.randomFn ?? Math.random;
+  // Диагностика канала «Обратная связь агента» (#тест): при AGENT_FORCE_FEEDBACK=true инжектируем один
+  // тестовый feedback, если агент сам ничего не прислал — чтобы прогнать весь канал (metrics + GitHub
+  // issue + панель /metrics) на любом файле. Реальный feedback агента не перетираем.
+  const forceFeedback = config.forceFeedback ?? (String(process.env.AGENT_FORCE_FEEDBACK ?? '').toLowerCase() === 'true');
 
   const systemPrompt = getSystemPrompt();
 
@@ -198,6 +219,7 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
           jobId,
         });
         if (attempt > 1) console.log(`${tag} succeeded on attempt ${attempt}/${maxAttempts}`);
+        if (forceFeedback) injectForcedFeedback(result, tag);
         // Best-effort usage metric (issue #67): surface extraction method + agent cost/time.
         // Wrapped so a throwing/absent hook can never break the agent run.
         if (typeof config.onMeta === 'function') {
