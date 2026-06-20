@@ -245,6 +245,10 @@ export function createApp(config = {}) {
   // (startedAt/agentMs/durationMs) + флаг — UI показывает живой mm:ss во время обработки и замеры в
   // логе по готовности. Только для лога на странице, НЕ в метрики. По умолчанию выключено (opt-in).
   const showTimings = config.showTimings ?? (String(process.env.SHOW_TIMINGS ?? '').toLowerCase() === 'true');
+  // Пороги «быстро/медленно» по total-времени файла для лога замеров (#замеры): ≤FAST → fast,
+  // ≥SLOW → slow, между — normal. Оценочные — калибруются реальностью через env (docs/PARSING_PERFORMANCE.md).
+  const timingFastMs = config.timingFastMs ?? (Number.parseInt(process.env.TIMING_FAST_MS ?? '', 10) || 45000);
+  const timingSlowMs = config.timingSlowMs ?? (Number.parseInt(process.env.TIMING_SLOW_MS ?? '', 10) || 90000);
   // Guard NaN explicitly: a garbled FEEDBACK_RATE_LIMIT_MAX would otherwise become NaN, which the
   // limiter reads as "disabled" (fail-OPEN) — the wrong direction for an anti-spam-into-our-repo
   // control. Number.isFinite keeps a deliberate 0 (disable) working while a garbled value → default 5.
@@ -625,7 +629,7 @@ export function createApp(config = {}) {
       files: job.files.map((f) => ({
         name: f.name, status: f.status, result: f.result, error: f.error, problem: f.problem,
         // Тайминги отдаём только при SHOW_TIMINGS (#замеры) — иначе ответ без изменений.
-        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null } : {}),
+        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null, speed: classifySpeed(f.durationMs, timingFastMs, timingSlowMs) } : {}),
       })),
     });
   });
@@ -797,6 +801,16 @@ async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
       await agentFeedback?.report({ kind, tool, note, context: ctx });
     } catch { /* reporter is best-effort and already swallows; guard anyway */ }
   }
+}
+
+// Классификация total-времени файла для лога замеров (#замеры): fast/normal/slow по порогам
+// (оценочные, калибруются через TIMING_FAST_MS/TIMING_SLOW_MS — см. docs/PARSING_PERFORMANCE.md).
+// Ожидается fastMs ≤ slowMs; при инверсии (конфиг-ошибка) 'slow' недостижим — всё ≤fast станет 'fast'.
+export function classifySpeed(durationMs, fastMs, slowMs) {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return null;
+  if (durationMs <= fastMs) return 'fast';
+  if (durationMs >= slowMs) return 'slow';
+  return 'normal';
 }
 
 async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null) {

@@ -150,10 +150,12 @@
               </B24Button>
             </div>
 
-            <!-- Замеры времени (#замеры, только при SHOW_TIMINGS) — в лог на странице, не в метрики -->
+            <!-- Замеры времени (#замеры, только при SHOW_TIMINGS) — в лог на странице, не в метрики.
+                 «медленно» подсвечиваем янтарным (пороги TIMING_FAST_MS/TIMING_SLOW_MS). -->
             <p
               v-if="job?.showTimings && file.durationMs != null"
-              class="mt-2 text-xs text-base-400 tabular-nums"
+              class="mt-2 text-xs tabular-nums"
+              :class="file.speed === 'slow' ? 'text-amber-600' : 'text-base-400'"
             >
               {{ timingLine(file) }}
             </p>
@@ -284,6 +286,7 @@ interface FileEntry {
   agentMs?: number | null
   durationMs?: number | null
   extractMethod?: string | null
+  speed?: 'fast' | 'normal' | 'slow' | null
 }
 
 interface JobStatus {
