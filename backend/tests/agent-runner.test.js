@@ -89,6 +89,31 @@ describe('runAgent', () => {
     expect(result).toMatchObject({ deal: { dealId: 'd-7' } });
   });
 
+  // AGENT_FORCE_FEEDBACK — диагностика канала «Обратная связь агента» (#тест)
+  it('forceFeedback: инжектирует тестовый feedback, если агент его не прислал', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    const result = await runAgent('/uploads/test.pdf', '20', { ...BASE_CONFIG, spawnFn, forceFeedback: true });
+    expect(Array.isArray(result.feedback)).toBe(true);
+    expect(result.feedback).toHaveLength(1);
+    expect(result.feedback[0]).toMatchObject({ kind: 'problem', tool: 'force-test' });
+    expect(result.feedback[0].note).toContain('AGENT_FORCE_FEEDBACK');
+    expect(result).toMatchObject({ deal: { dealId: 'd-7' } }); // остальной результат не тронут
+  });
+
+  it('forceFeedback: НЕ перетирает реальный feedback агента', async () => {
+    const real = { ...VALID_DEAL_RESULT, feedback: [{ kind: 'idea', tool: 'mcp', note: 'настоящий' }] };
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(real) });
+    const result = await runAgent('/uploads/test.pdf', '20', { ...BASE_CONFIG, spawnFn, forceFeedback: true });
+    expect(result.feedback).toHaveLength(1);
+    expect(result.feedback[0]).toMatchObject({ tool: 'mcp', note: 'настоящий' });
+  });
+
+  it('forceFeedback по умолчанию выключен — feedback не добавляется', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    const result = await runAgent('/uploads/test.pdf', '20', { ...BASE_CONFIG, spawnFn });
+    expect(result.feedback).toBeUndefined();
+  });
+
   it('passes file path and responsible user in the user message', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await runAgent('/uploads/invoice.pdf', '42', { ...BASE_CONFIG, spawnFn });
