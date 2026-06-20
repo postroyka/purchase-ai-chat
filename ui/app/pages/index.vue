@@ -261,7 +261,7 @@
 
 <script setup lang="ts">
 import { fileBadge, jobBadge, fileSucceeded } from '~/utils/result-badges'
-import { mmss, humanMs } from '~/utils/format-duration'
+import { mmss, timingLine } from '~/utils/format-duration'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
 definePageMeta({ layout: 'default' })
@@ -283,6 +283,7 @@ interface FileEntry {
   startedAt?: number | null
   agentMs?: number | null
   durationMs?: number | null
+  extractMethod?: string | null
 }
 
 interface JobStatus {
@@ -320,12 +321,6 @@ watch(liveTiming, (on) => {
 }, { immediate: true })
 function elapsedMs(file: FileEntry): number {
   return file.startedAt ? Math.max(0, nowTs.value - file.startedAt) : 0
-}
-// Строка замеров для лога: «⏱ всего 48.5 с · агент 44.2 с» (агент — если backend его вернул).
-function timingLine(file: FileEntry): string {
-  if (file.durationMs == null) return ''
-  const agent = file.agentMs != null ? ` · агент ${humanMs(file.agentMs)}` : ''
-  return `⏱ всего ${humanMs(file.durationMs)}${agent}`
 }
 let pollController: AbortController | null = null
 let pollErrors = 0

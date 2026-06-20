@@ -195,7 +195,23 @@ describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)
     expect(typeof f.startedAt).toBe('number');
     expect(typeof f.durationMs).toBe('number');
     expect(f.durationMs).toBeGreaterThanOrEqual(0);
-    expect('agentMs' in f).toBe(true); // present (число из agentMeta, либо null)
+    expect(f.agentMs).toBe(1234); // из wrapper.duration_ms (agentMeta.agentDurationMs)
+    expect(f.extractMethod).toBe('pdftotext'); // метод извлечения проброшен
+  });
+
+  it('error-путь: тайминги есть, но agentMs и extractMethod = null (agentMeta не заполнен)', async () => {
+    const spawnFn = makeProcMock((proc) => { proc.stderr.emit('data', 'claude: command failed'); proc.emit('close', 2); });
+    const app = appWith({ showTimings: true, agentConfig: { spawnFn, extractFn: extract } });
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`).attach('files[]', validPdf(), 'fail.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('error');
+    const res = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    const f = res.body.files[0];
+    expect(f.status).toBe('error');
+    expect(typeof f.startedAt).toBe('number');
+    expect(typeof f.durationMs).toBe('number');
+    expect(f.durationMs).toBeGreaterThanOrEqual(0);
+    expect(f.agentMs).toBeNull();
+    expect(f.extractMethod).toBeNull();
   });
 
   it('по умолчанию (выключено) — таймингов и флага в ответе нет', async () => {

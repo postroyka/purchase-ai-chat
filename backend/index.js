@@ -625,7 +625,7 @@ export function createApp(config = {}) {
       files: job.files.map((f) => ({
         name: f.name, status: f.status, result: f.result, error: f.error, problem: f.problem,
         // Тайминги отдаём только при SHOW_TIMINGS (#замеры) — иначе ответ без изменений.
-        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, durationMs: f.durationMs ?? null } : {}),
+        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null } : {}),
       })),
     });
   });
@@ -855,6 +855,8 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       const durationMs = Date.now() - startedAt;
       fileEntry.durationMs = durationMs;
       fileEntry.agentMs = (agentMeta && Number.isFinite(agentMeta.agentDurationMs)) ? agentMeta.agentDurationMs : null;
+      // Метод извлечения текста (pdftotext/ocr/office) — частый ответ на «где медленно» (OCR-скан).
+      fileEntry.extractMethod = (agentMeta && typeof agentMeta.extractMethod === 'string') ? agentMeta.extractMethod : null;
       metrics?.recordFile({
         format, status: 'done', outcome, durationMs, agent: agentMeta,
         positions: items.length, positionsNoArticle,
