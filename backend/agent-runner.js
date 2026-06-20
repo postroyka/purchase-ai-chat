@@ -20,10 +20,11 @@ function getSystemPrompt() {
 // не-объектный результат не трогаем. Возвращает result для удобства.
 function injectForcedFeedback(result, tag = '[agent]') {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  // Непустой массив feedback = реальный отзыв агента, не трогаем. Не-массив трактуем как «отзыва нет».
   if (Array.isArray(result.feedback) && result.feedback.length > 0) return result;
   result.feedback = [{
     kind: 'problem',
-    tool: 'force-test',
+    tool: 'force_test', // подчёркивание: проходит safeToolName (дефис бы срезался) — инструмент видно
     note: 'AGENT_FORCE_FEEDBACK: принудительный тестовый фидбэк агента (проверка канала «Обратная связь агента»).',
   }];
   console.log(`${tag} AGENT_FORCE_FEEDBACK: injected synthetic agent-feedback entry`);

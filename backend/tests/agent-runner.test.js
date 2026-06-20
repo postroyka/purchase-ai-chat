@@ -95,9 +95,30 @@ describe('runAgent', () => {
     const result = await runAgent('/uploads/test.pdf', '20', { ...BASE_CONFIG, spawnFn, forceFeedback: true });
     expect(Array.isArray(result.feedback)).toBe(true);
     expect(result.feedback).toHaveLength(1);
-    expect(result.feedback[0]).toMatchObject({ kind: 'problem', tool: 'force-test' });
+    expect(result.feedback[0]).toMatchObject({ kind: 'problem', tool: 'force_test' });
     expect(result.feedback[0].note).toContain('AGENT_FORCE_FEEDBACK');
     expect(result).toMatchObject({ deal: { dealId: 'd-7' } }); // остальной результат не тронут
+  });
+
+  it('forceFeedback: пустой массив feedback тоже считается «нет отзыва» → инжектируем', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult({ ...VALID_DEAL_RESULT, feedback: [] }) });
+    const result = await runAgent('/uploads/test.pdf', '20', { ...BASE_CONFIG, spawnFn, forceFeedback: true });
+    expect(result.feedback).toHaveLength(1);
+    expect(result.feedback[0]).toMatchObject({ tool: 'force_test' });
+  });
+
+  it('forceFeedback читается из env AGENT_FORCE_FEEDBACK (регистр игнор)', async () => {
+    const prev = process.env.AGENT_FORCE_FEEDBACK;
+    process.env.AGENT_FORCE_FEEDBACK = 'TRUE';
+    try {
+      const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+      const result = await runAgent('/uploads/test.pdf', '20', { ...BASE_CONFIG, spawnFn }); // без config.forceFeedback
+      expect(result.feedback).toHaveLength(1);
+      expect(result.feedback[0]).toMatchObject({ tool: 'force_test' });
+    } finally {
+      if (prev === undefined) delete process.env.AGENT_FORCE_FEEDBACK;
+      else process.env.AGENT_FORCE_FEEDBACK = prev;
+    }
   });
 
   it('forceFeedback: НЕ перетирает реальный feedback агента', async () => {
