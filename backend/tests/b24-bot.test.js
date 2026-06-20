@@ -2,9 +2,27 @@ import { describe, it, expect, vi } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
 import request from 'supertest';
 import { parseBotEvent, parseFeedbackParams, feedbackKeyboard, botResultText, handleBotEvent } from '../b24-bot.js';
+import { makeBotApi } from '../b24-bot-api.js';
 import { createApp } from '../index.js';
+
+// Мок агент-спавна (как в metrics-routes.test): успешный прогон с заданным result.
+function makeAgentSpawn({ result = { status: 'stub' } } = {}) {
+  return vi.fn(() => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
+    proc.kill = vi.fn();
+    setImmediate(() => {
+      proc.stdout.emit('data', JSON.stringify({ is_error: false, result: JSON.stringify(result), total_cost_usd: 0.05, duration_ms: 1234, num_turns: 3 }));
+      proc.emit('close', 0);
+    });
+    return proc;
+  });
+}
 
 // ── Чистые функции ────────────────────────────────────────────────────────────
 describe('parseBotEvent', () => {
@@ -166,16 +184,37 @@ describe('handleBotEvent', () => {
     expect(r).toBe('welcome');
     expect(deps.sendMessage).toHaveBeenCalled();
   });
+
+  it('скачивание отфильтровало все файлы → «не нашёл», задание не создаётся', async () => {
+    const deps = makeDeps({ downloadAndSaveFiles: vi.fn(async () => ({ jobId: 'j', jobDir: '/u/j', fileEntries: [] })) });
+    const r = await handleBotEvent(msgEvt([{ id: '1', name: 'a.exe' }]), deps);
+    expect(r).toBe('ignored:no_valid_files');
+    expect(deps.createAndStartJob).not.toHaveBeenCalled();
+  });
+
+  it('команда feedback с мусорными params → submitFeedback НЕ вызывается', async () => {
+    const deps = makeDeps();
+    const r = await handleBotEvent({
+      event: 'ONIMBOTV2COMMANDADD', dialogId: 'c', bot: { id: '1', token: 't' }, message: {},
+      command: { name: 'feedback', params: 'garbage', context: 'keyboard' }, user: { id: '5', isBot: false },
+    }, deps);
+    expect(r).toBe('ignored:bad_feedback_params');
+    expect(deps.submitFeedback).not.toHaveBeenCalled();
+  });
 });
 
 // ── Роут POST /b24/bot/event (валидация токена + проводка) ──────────────────────
 describe('POST /b24/bot/event', () => {
-  const fakeMetrics = () => ({ recordUpload: vi.fn(async () => {}), recordFeedback: vi.fn(async () => {}) });
+  const fakeMetrics = () => ({
+    recordUpload: vi.fn(async () => {}), recordFeedback: vi.fn(async () => {}),
+    recordFile: vi.fn(() => {}), recordMatching: vi.fn(() => {}), recordWarnings: vi.fn(() => {}),
+  });
   function appWith() {
     const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-route-'));
+    const metrics = fakeMetrics();
     const botApi = { sendMessage: vi.fn(async () => {}), downloadAndSaveFiles: vi.fn(async () => ({ jobId: 'j', jobDir: path.join(uploadDir, 'j'), fileEntries: [] })) };
-    const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics(), b24BotApplicationToken: 'secret', botApi });
-    return { app, botApi };
+    const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics, b24BotApplicationToken: 'secret', botApi });
+    return { app, botApi, metrics, uploadDir };
   }
 
   it('неверный application_token → 403, обработчик не запускается', async () => {
@@ -192,5 +231,95 @@ describe('POST /b24/bot/event', () => {
       .send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': 'secret', 'data[dialogId]': 'chat5', 'data[bot][id]': '1', 'data[bot][auth][access_token]': 'botok' });
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(botApi.sendMessage).toHaveBeenCalled());
+  });
+
+  it('бот выключен (нет B24_BOT_APPLICATION_TOKEN) → 403 на любой запрос', async () => {
+    const prev = process.env.B24_BOT_APPLICATION_TOKEN;
+    delete process.env.B24_BOT_APPLICATION_TOKEN;
+    try {
+      const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-off-'));
+      const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics() }); // без b24BotApplicationToken
+      const res = await request(app).post('/b24/bot/event').type('form').send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': '' });
+      expect(res.status).toBe(403);
+    } finally {
+      if (prev !== undefined) process.env.B24_BOT_APPLICATION_TOKEN = prev;
+    }
+  });
+
+  it('команда feedback (без токена фидбэка) → recordFeedback(source:user) и без падения', async () => {
+    const { app, metrics } = appWith();
+    const res = await request(app).post('/b24/bot/event').type('form').send({
+      event: 'ONIMBOTV2COMMANDADD', 'auth[application_token]': 'secret', 'data[dialogId]': 'chat5', 'data[bot][id]': '1',
+      'data[bot][auth][access_token]': 'botok', 'data[user][id]': '27',
+      'data[command][command]': 'feedback', 'data[command][params]': 'like job1', 'data[command][context]': 'keyboard',
+    });
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(metrics.recordFeedback).toHaveBeenCalledWith({ source: 'user', kind: 'positive' }));
+  });
+
+  it('сообщение с файлом → реальный createAndStartJob → результат+клавиатура в чат по готовности', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-file-'));
+    const jobDir = path.join(uploadDir, 'j1');
+    fs.mkdirSync(jobDir, { recursive: true });
+    const filePath = path.join(jobDir, 'f.pdf');
+    fs.writeFileSync(filePath, '%PDF-1.4\n');
+    const botApi = {
+      sendMessage: vi.fn(async () => {}),
+      downloadAndSaveFiles: vi.fn(async () => ({ jobId: 'j1', jobDir, fileEntries: [{ name: 'schet.pdf', path: filePath, status: 'pending', result: null, error: null }] })),
+    };
+    const app = createApp({
+      token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics(), b24BotApplicationToken: 'secret', botApi,
+      agentConfig: { spawnFn: makeAgentSpawn({ result: { deal: { dealId: '5' } } }), extractFn: async () => ({ text: 'СЧЁТ', method: 'pdftotext' }) },
+    });
+    const res = await request(app).post('/b24/bot/event').type('form').send({
+      event: 'ONIMBOTV2MESSAGEADD', 'auth[application_token]': 'secret', 'data[dialogId]': 'chat5',
+      'data[bot][id]': '1', 'data[bot][auth][access_token]': 'botok', 'data[user][id]': '27',
+      'data[message][id]': '1', 'data[message][files][0][id]': '12', 'data[message][files][0][name]': 'schet.pdf',
+    });
+    expect(res.status).toBe(200);
+    expect(botApi.downloadAndSaveFiles).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      const calls = botApi.sendMessage.mock.calls;
+      expect(calls.length).toBeGreaterThanOrEqual(2); // «обрабатываю» + результат
+      expect(calls.at(-1)[0].text).toContain('Сделка #5');
+      expect(calls.at(-1)[0].keyboard).toMatchObject({ BUTTONS: expect.any(Array) });
+    });
+  });
+});
+
+// ── b24-bot-api: фильтрация/SSRF в downloadAndSaveFiles (детерминированно, с mock fetch) ─────────
+describe('makeBotApi.downloadAndSaveFiles', () => {
+  const okFetch = (downloadUrl, bytes = 5, contentLength = '5') => vi.fn(async (url) => {
+    if (String(url).includes('imbot.v2.File.download')) return { ok: true, json: async () => ({ result: { downloadUrl } }) };
+    return { ok: true, headers: { get: () => contentLength }, arrayBuffer: async () => new Uint8Array(bytes).buffer };
+  });
+
+  it('неразрешённый ext пропускается; all-filtered → jobDir удалён', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
+    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://p.bitrix24.ru/f'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost: () => true });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.exe' }], { botToken: 't', botId: '1' });
+    expect(r.fileEntries).toEqual([]);
+    expect(fs.existsSync(r.jobDir)).toBe(false);
+  });
+
+  it('oversize по Content-Length пропускается', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
+    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://p.bitrix24.ru/f', 9999, '9999'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 100, maxFiles: 10, isAllowedHost: () => true });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }], { botToken: 't', botId: '1' });
+    expect(r.fileEntries).toEqual([]);
+  });
+
+  it('SSRF: downloadUrl на чужом домене → throw (host not allowed)', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
+    const isAllowedHost = (h) => h.endsWith('.bitrix24.ru');
+    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://evil.example.com/f'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost });
+    await expect(api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }], { botToken: 't', botId: '1' })).rejects.toThrow(/not allowed/);
+  });
+
+  it('cap по числу файлов (maxFiles)', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
+    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://p.bitrix24.ru/f'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 2, isAllowedHost: () => true });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }, { id: '2', name: 'b.pdf' }, { id: '3', name: 'c.pdf' }], { botToken: 't', botId: '1' });
+    expect(r.fileEntries).toHaveLength(2); // 3-й отброшен cap-ом
   });
 });

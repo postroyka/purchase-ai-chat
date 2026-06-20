@@ -12,7 +12,7 @@ import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
 import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
-import { createSessionAuth, parseCookies } from './auth.js';
+import { createSessionAuth, parseCookies, domainAllowed } from './auth.js';
 import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy } from './feedback.js';
 import { createAgentFeedbackReporter } from './agent-feedback.js';
 import { parseBotEvent, handleBotEvent } from './b24-bot.js';
@@ -372,12 +372,15 @@ export function createApp(config = {}) {
   }
   // The B24 app.info allowlist is derived from the SAME frame-ancestors origins as the CSP, so
   // ops sets only B24_FRAME_ANCESTORS. portalDomains tests can override via config.portalDomains.
+  // SSRF-allowlist портала (из B24_FRAME_ANCESTORS) — общий для /session/b24 (app.info) и обратных
+  // вызовов чат-бота (b24-bot-api.js): один env управляет всеми исходящими к порталу.
+  const portalDomains = config.portalDomains ?? parseFrameAncestorHosts(frameAncestors);
   const sessionAuth = config.sessionAuth ?? createSessionAuth({
     secret: sessionSecret,
     user: basicAuthUser,
     pass: loginPass,
     secure: process.env.NODE_ENV === 'production',
-    portalDomains: config.portalDomains ?? parseFrameAncestorHosts(frameAncestors),
+    portalDomains,
     ttlMs: sessionTtlMs,
     appInfo: config.appInfo, // undefined in prod → auth.js uses its real fetch-based probe
   });
@@ -388,6 +391,14 @@ export function createApp(config = {}) {
   const authRateLimit = createRateLimiter({
     windowMs: config.loginRateLimitWindowMs ?? 60_000,
     max: config.loginRateLimitMax ?? 10,
+    redisClient: rateLimitRedis,
+  });
+
+  // Лимитер публичного бот-эндпоинта (DoS/брутфорс токена): keyed по IP (события Б24 без Authorization).
+  // Щедрее auth-лимитера — легальные события чата идут чаще; 0 = выкл (тесты).
+  const b24BotRateLimit = createRateLimiter({
+    windowMs: config.b24BotRateLimitWindowMs ?? 60_000,
+    max: config.b24BotRateLimitMax ?? 120,
     redisClient: rateLimitRedis,
   });
 
@@ -752,7 +763,7 @@ export function createApp(config = {}) {
   // (constant-time) + лимит тела. Включается заданием B24_BOT_APPLICATION_TOKEN; без него любой POST
   // отвергается (403). Тело — form-urlencoded с PHP-ключами (express.urlencoded extended).
   const b24BotAppToken = config.b24BotApplicationToken ?? process.env.B24_BOT_APPLICATION_TOKEN ?? '';
-  app.post('/b24/bot/event', express.urlencoded({ extended: true, limit: '64kb' }), (req, res) => {
+  app.post('/b24/bot/event', b24BotRateLimit, express.urlencoded({ extended: true, limit: '64kb' }), (req, res) => {
     const evt = parseBotEvent(req.body ?? {});
     if (!b24BotAppToken || !safeCompare(evt.applicationToken, b24BotAppToken)) {
       return res.status(403).json({ error: 'invalid application_token' });
@@ -761,7 +772,9 @@ export function createApp(config = {}) {
     res.status(200).json({ ok: true });
     const api = config.botApi ?? makeBotApi({
       restEndpoint: evt.bot.restEndpoint, uploadDir, allowedExtensions,
-      maxBytes: maxFileSizeMb * 1024 * 1024,
+      maxBytes: maxFileSizeMb * 1024 * 1024, maxFiles: maxFilesPerRequest,
+      // SSRF: исходящие бота (REST-callback + downloadUrl) только на разрешённые домены портала + redirect:'error'.
+      isAllowedHost: (host) => domainAllowed(host, portalDomains),
     });
     handleBotEvent(evt, {
       createAndStartJob,

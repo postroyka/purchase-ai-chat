@@ -275,7 +275,8 @@ function normalizeDomain(raw) {
 // wildcard entries like '*.bitrix24.by', which match any SINGLE-label subdomain (foo.bitrix24.by
 // but NOT a.b.bitrix24.by, and NOT the bare apex bitrix24.by) — mirroring CSP frame-ancestors
 // wildcard semantics, so one env (B24_FRAME_ANCESTORS) drives both the CSP and this allowlist.
-function domainAllowed(host, allowlist) {
+// Exported so the B24 bot (b24-bot-api.js) reuses the SAME SSRF allowlist for its outbound calls.
+export function domainAllowed(host, allowlist) {
   for (const entry of allowlist) {
     if (typeof entry !== 'string' || entry === '') continue;
     const e = entry.trim().toLowerCase();

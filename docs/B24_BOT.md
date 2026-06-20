@@ -111,8 +111,8 @@ imbot.v2.Bot.register({
   BOT_ID, DIALOG_ID, CLIENT_ID,
   MESSAGE: 'Готово ✅ Сделка #1609008 — «Импорт прайса от …»\n7 позиций, 3 460.50 byn',
   KEYBOARD: { BUTTONS: [   // именно { BUTTONS: [...] }; при ОБНОВЛЕНИИ клавиатуры нужен и BOT_ID
-    { TEXT: '👍 Верно', COMMAND: 'feedback', COMMAND_PARAMS: 'like <jobId>',    BG_COLOR: '#1ec391', DISPLAY: 'LINE' },
-    { TEXT: '👎 Не то', COMMAND: 'feedback', COMMAND_PARAMS: 'dislike <jobId>', BG_COLOR: '#f56b54', DISPLAY: 'LINE' },
+    { TEXT: '👍 Верно', COMMAND: 'feedback', COMMAND_PARAMS: 'like <jobId>',    BG_COLOR: '#1ec391', TEXT_COLOR: '#ffffff', DISPLAY: 'LINE' },
+    { TEXT: '👎 Не то', COMMAND: 'feedback', COMMAND_PARAMS: 'dislike <jobId>', BG_COLOR: '#f56b54', TEXT_COLOR: '#ffffff', DISPLAY: 'LINE' },
   ] },
 }
 ```
@@ -146,7 +146,7 @@ imbot.v2.Bot.register({
 
 ## 10. План реализации и статус
 
-**✅ Сделано в каркасе (тестируемо без портала, 18 юнит-тестов `backend/tests/b24-bot.test.js`):**
+**✅ Сделано в каркасе (тестируемо без портала, 27 юнит/интеграционных тестов `backend/tests/b24-bot.test.js`):**
 - **Рефакторы переиспользования:** `createAndStartJob` (из `/upload`) и `createFeedbackIssue` (из
   `/feedback`) — общие замыкания в `backend/index.js`; оба роута переведены на них, поведение не изменилось
   (вся существующая backend-сюита зелёная).
@@ -156,6 +156,9 @@ imbot.v2.Bot.register({
   файлов в одном сообщении** / **сообщение без файла** (подсказка) / нет ёмкости (занято) / сообщение от
   бота (игнор) / ошибка скачивания; команда `feedback like|dislike` → `submitChatFeedback` (`source:'user'`,
   👍→positive/👎→problem) + «спасибо»; join → приветствие; результат по `onDone` + клавиатура 👍/👎.
+- **Безопасность публичного эндпоинта:** IP-rate-limit (`b24BotRateLimit`), SSRF-allowlist на исходящие
+  бота (`restEndpoint`/`downloadUrl` только на домены `B24_FRAME_ANCESTORS`, как у `/session/b24`) +
+  `redirect:'error'`, лимиты файла (ext, Content-Length/размер, таймаут, cap числа файлов).
 - **Боевая граница** `backend/b24-bot-api.js` (`imbot.v2.File.download`, `imbot.message.add`) — написана,
   **помечена «портал-QA»**, инъектируется (в тестах — мок).
 
@@ -164,8 +167,11 @@ imbot.v2.Bot.register({
   `application_token` и сохранить (Redis); сейчас токен задаётся вручную через `B24_BOT_APPLICATION_TOKEN`.
 - **`imbot.command.register`** для команды `feedback` (иначе клик кнопки не породит `ONIMBOTV2COMMANDADD`).
 - **Scope `imbot`** в `getRequiredRights()` + карточке приложения.
-- **Портал-QA:** сверить фактические форматы `imbot.v2.*` (имена методов/полей, форма файла в `message`),
-  прогнать сквозной сценарий (§12) и поправить по факту.
+- **MIME-валидация как в `/upload`:** бот-граница сейчас проверяет ext+размер, но НЕ magic-byte MIME/
+  zip-bomb (которые `/upload` гонит до агента). При боевой проводке применить тот же контроль (выделить
+  общий хелпер из `/upload`). Трекается отдельным issue.
+- **Портал-QA:** сверить фактические форматы `imbot.v2.*` (имена методов/полей, форма файла в `message`,
+  домен `downloadUrl` относительно SSRF-allowlist), прогнать сквозной сценарий (§12) и поправить по факту.
 
 ## 11. Приёмка
 
@@ -192,12 +198,18 @@ imbot.v2.Bot.register({
 | 3 | Отправить **два сообщения подряд** с файлами (сценарий «>1 сообщения») | Два **независимых** задания → два ответа |
 | 4 | Отправить сообщение **без файла** (просто текст) | Подсказка «бросьте файл счёта…»; задание НЕ создаётся |
 | 5 | Кривой/нераспознаваемый документ | «⚠️ Без сделки — <причина>» (#192) + 👍/👎 |
-| 6 | Нажать **👍**, затем на другом результате **👎** | «Спасибо за оценку»/«Спасибо, учту…»; на `/metrics` «Обратная связь» +1 (+ issue при токене) |
+| 6 | Нажать **👍**, затем на другом результате **👎** (требует зарег. команды `feedback`, prep §3 — иначе клик не породит событие) | «Спасибо за оценку»/«Спасибо, учту…»; на `/metrics` «Обратная связь» +1 (+ issue при токене) |
 | 7 | (негатив) `curl -X POST …/b24/bot/event` с неверным `auth[application_token]` | **403**, ничего не создаётся |
 | 8 | Закидать многими файлами разом (превысить лимит заданий) | «Сейчас много задач… пришлите позже» (без падения) |
 
 **Что смотреть:** `/metrics` (успех, «Обратная связь»), логи `app` (`docker logs procure-app | grep b24bot`),
 созданные сделки в воронке «Закупки».
+
+**Если «Принял, обрабатываю…» есть, а результата нет** — обратные вызовы бота берут REST-адрес портала из
+**самого события** (`data.bot.auth.client_endpoint`) и токен бота; смотрите в логах `app` ошибки `B24 …
+failed` (метод/код). Частые причины: бот зарегистрирован **не** в `eventMode:'webhook'` (тогда событие не
+несёт OAuth-токен/endpoint); `downloadUrl` вне SSRF-allowlist (`B24_FRAME_ANCESTORS`) → `outbound host not
+allowed`; не выдан scope `imbot`.
 
 ## 13. Переключение на БОЕВОЙ Битрикс24
 

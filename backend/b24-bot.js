@@ -36,8 +36,8 @@ export function parseBotEvent(body = {}) {
     applicationToken: s(topAuth.application_token),
     // restEndpoint — база REST портала для обратных вызовов бота (client_endpoint из OAuth-токена бота).
     bot: { id: s(bot.id), code: s(bot.code), token: s(botAuth.access_token), restEndpoint: s(botAuth.client_endpoint || topAuth.client_endpoint) },
-    // dialogId на верхнем уровне (join/context) или в message; чат личный/групповой — это chatXXX/число.
-    dialogId: s(data.dialogId || msg.dialogId || data.dialogId),
+    // dialogId в data (join/context-события) или в message (сообщение); чат — chatXXX/число.
+    dialogId: s(data.dialogId || msg.dialogId),
     message: { id: s(msg.id), text: s(msg.text), files },
     command: { name: s(cmd.command), params: s(cmd.params), context: s(cmd.context) },
     user: { id: s(user.id), isBot: s(user.bot) === '1' || s(user.bot).toLowerCase() === 'true' },
