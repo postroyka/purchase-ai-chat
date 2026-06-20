@@ -6,157 +6,169 @@
 
 Сотрудник **бросает файл счёта в чат с ботом** → бот отправляет файл на разбор (тот же пайплайн, что и
 веб-загрузка) → **показывает результат** (создана сделка / без сделки + причина) прямо в чате → под
-результатом **кнопки 👍 / 👎** для обратной связи. Альтернатива веб-странице загрузки: то же действие из
-мессенджера Битрикс24.
+результатом **кнопки 👍 / 👎** для обратной связи. Это альтернатива веб-странице загрузки.
 
-## 2. Почему это заметная доработка (риски/решения до кода)
+## 2. Почему это отдельная итерация (риски до кода)
 
-1. **Новый scope `imbot` (+ `im`).** Сейчас приложение работает в webhook-режиме (`NUXT_BITRIX24_OAUTH_ENABLED=false`),
-   донастройки портала при установке нет. Боту нужны права `imbot`/`im` — добавить в карточку приложения
-   на портале (и в вебхук, если регистрируем через него).
-2. **Новый ПУБЛИЧНЫЙ серверный эндпоинт.** Бот получает события от Б24 **server-to-server** (`EVENT_HANDLER`
-   URL). Это новая точка входа в `backend` (Express) с собственной валидацией (`application_token`) — новая
-   атак-поверхность, нужна аккуратная защита.
-3. **Регистрация при установке.** `imbot.register` надо вызвать один раз при установке приложения и
-   сохранить `BOT_ID`/`CLIENT_ID`. Сейчас установка — чисто клиентская (`useInstall` → `installFinish`).
-4. **Нельзя проверить без живого портала.** События, скачивание файла из чата, отправка сообщения с
-   клавиатурой требуют реального Битрикс24. Юнит-тестами покрываем парсинг события/роутинг/валидацию токена/
-   сборку ответа; сквозную часть — ручной QA на портале.
-
-> Из-за п.1–п.4 это отдельная итерация. Ниже — полный контракт, чтобы реализовать предсказуемо.
+1. **Захват и хранение `application_token` — главный «длинный шест».** Сервер **сегодня его не видит**:
+   установка чисто клиентская (`useInstall.ts` → `frame.installFinish()`), `/session/b24` валидирует фрейм
+   через `app.info` и **ничего не персистит** (`backend/auth.js`). Прод — webhook-режим
+   (`NUXT_BITRIX24_OAUTH_ENABLED=false`). Чтобы валидировать входящие события бота, нужен **новый
+   механизм**: захватить `application_token` при установке и сохранить (Redis). Без него §5/§11 не
+   реализуемы — это не «открытый вопрос», а подсистема. Делать **первым**.
+2. **Используем API чат-ботов 2.0 (`imbot.v2.*`).** Старый `imbot.*`/`ONIMBOT*` официально **устарел**.
+   На v2: регистрация `imbot.v2.Bot.register`, события `ONIMBOTV2*`, скачивание файла
+   `imbot.v2.File.download`, ответ на команду `imbot.v2.Command.answer`.
+3. **Новый публичный серверный эндпоинт** `POST /b24/bot/event` (Б24 ходит снаружи, server→server). Сам по
+   себе публичный эндпоинт без `requireAuth` согласуется с моделью приложения (ср. открытые `POST /`,
+   `/install`, `/session/b24`); защита — валидация `application_token` (см. п.1) + лимиты.
+4. **Новый scope `imbot`** — его **нет** в `getRequiredRights()` (`useB24.ts`: `user_brief,crm,tasks,entity`)
+   и в карточке приложения; добавить и переустановить. `im` — только если используем `im.*`-хелперы.
+5. **Швы переиспользования требуют рефакторинга** (не «вызвать существующее»): см. §6, §8.
+6. **Нельзя проверить без живого портала** — события/скачивание/отправку проверяем ручным QA; парсинг
+   события, роутинг, валидацию токена, сборку ответа — юнит-тестами на mock-payload.
 
 ## 3. Архитектура и поток
 
 ```
 Сотрудник → [чат с ботом] → файл
-   Б24 (server→server, POST) → backend  POST /b24/bot/event   (новый публичный эндпоинт)
-        ├─ ONIMBOTMESSAGEADD + файл → скачать файл → uploads/ → createJob → processJob (СУЩЕСТВУЮЩИЙ пайплайн)
-        │       по готовности → imbot.message.add(результат + KEYBOARD 👍/👎)
-        ├─ ONIMBOTMESSAGEADD + команда (клик 👍/👎) → записать отзыв (metrics.recordFeedback + канал)
-        ├─ ONIMBOTJOINCHAT → приветствие (как пользоваться)
-        └─ ONIMBOTDELETE → очистка
+   Б24 (server→server, POST, form-urlencoded) → backend  POST /b24/bot/event
+        ├─ ONIMBOTV2MESSAGEADD + файл(ы) в message → imbot.v2.File.download → uploads/ → createAndStartJob*
+        │       по готовности → imbot.message.add(результат + KEYBOARD 👍/👎) [auth = data.bot.auth.access_token]
+        ├─ ONIMBOTV2COMMANDADD (клик 👍/👎, context=keyboard) → submitFeedback* → imbot.v2.Command.answer
+        ├─ ONIMBOTV2JOINCHAT → приветствие
+        └─ ONIMBOTV2DELETE → очистка
+   * createAndStartJob / submitFeedback — новые ОБЩИЕ хелперы, выделенные из /upload и /feedback (см. §6, §8)
 ```
 
-Парс-пайплайн и канал отзывов **переиспользуются** — бот это новый «вход», а не новая логика разбора.
+**Обратные вызовы бота авторизуются токеном из самого события:** v2-событие несёт
+`data.bot.auth.access_token` (OAuth-токен бота) — им и зовём `imbot.*`/`imbot.v2.*`. Отдельный вебхук для
+ответов не нужен (это снимает вопрос «webhook vs OAuth» для бота).
 
-## 4. Регистрация бота (установка)
+## 4. Регистрация бота (при установке)
 
-При установке приложения один раз вызвать `imbot.register`:
+`imbot.v2.Bot.register` один раз при установке:
 
 ```jsonc
-imbot.register({
-  CODE: 'procure_ai_invoice',
-  TYPE: 'B',                                  // обычный чат-бот
-  EVENT_HANDLER: 'https://<app-домен>/b24/bot/event',  // один URL на все события бота
-  OPENLINE: 'N',
-  PROPERTIES: { NAME: 'Импорт счетов', WORK_POSITION: 'Бросьте счёт — создам сделку', COLOR: 'GREEN' },
-  // CLIENT_ID — обязателен при регистрации через вебхук; сохранить и слать во все imbot.* вызовы
-})
-// → result = BOT_ID
+imbot.v2.Bot.register({
+  code: 'procure_ai_invoice',
+  type: 'B',
+  eventMode: 'webhook',
+  webhookUrl: 'https://<app-домен>/b24/bot/event',   // авто-подписка на все ONIMBOTV2*
+  properties: { name: 'Импорт счетов', workPosition: 'Бросьте счёт — создам сделку', color: 'GREEN' },
+})  // → BOT_ID
 ```
 
-- Хранить `BOT_ID` (и `CLIENT_ID`, если webhook) — например, в Redis/конфиге приложения; нужны для
-  `imbot.message.add` и сверки адресата событий.
-- Где вызвать: в установочном шаге (клиентский `useInstall` через `frame.callMethod('imbot.register', …)`,
-  либо серверный install-хук). Идемпотентность: при повторной установке — `imbot.update` вместо повторного
-  `register` (по `CODE`).
-- При удалении приложения — `imbot.unregister` (чистка бота).
+- Команды кнопок регистрируем отдельно: `imbot.command.register` (команда `feedback` с обработчиком) —
+  нужна, чтобы клик кнопки порождал `ONIMBOTV2COMMANDADD` (см. §7).
+- Хранить `BOT_ID` (+ `code`) в Redis-«сторе приложения». `application_token` (см. §2.1) — туда же.
+- Идемпотентность: повтор установки → `imbot.v2.Bot.update`; удаление приложения → `imbot.v2.Bot.unregister`.
+- **Установка получает серверный шаг:** клиентский `frame.callMethod('imbot.v2.Bot.register', …)` сам по себе
+  оставляет сервер без `BOT_ID`/токена — результат и `application_token` надо **отправить POST-ом на новый
+  авторизованный backend-роут** и сохранить. Это и есть подсистема из §2.1.
 
-## 5. Серверный эндпоинт `POST /b24/bot/event` (backend)
+## 5. Серверный эндпоинт `POST /b24/bot/event`
 
-- **Публичный** (Б24 ходит снаружи), **без** обычного `requireAuth`. Защита — своя:
-  - проверить `data[...]auth.application_token` (или `event[auth][application_token]`) против сохранённого
-    при установке `application_token` приложения — **обязательно** (иначе кто угодно дёрнет эндпоинт);
-  - rate-limit (как `/upload`), размер тела ограничить.
-- Тело — формат событий бота (см. `ONIMBOTMESSAGEADD`): `data[PARAMS]` (DIALOG_ID, MESSAGE, MESSAGE_ID,
-  FROM_USER_ID, файлы), `data[BOT]` (BOT_ID, BOT_CODE, AUTH для ответных вызовов), `data[USER]`.
+- Тело — `application/x-www-form-urlencoded` (B24 шлёт через `http_build_query`): ключи в PHP-виде
+  (`data[bot][id]`, `auth[application_token]`), **все скаляры — строки** → приводить типы явно.
+- **Валидация:** сверить **верхнеуровневый** `auth.application_token` с сохранённым при установке
+  (главное; не из `data.bot.auth`). Плюс rate-limit и лимит размера тела. На событие отвечаем **200 быстро**
+  (Б24 **не гарантирует** повтор при сбое обработчика) — тяжёлый разбор асинхронно, результат отдельным
+  сообщением.
 - Роутинг по `event`:
 
 | Событие | Действие |
 |---|---|
-| `ONIMBOTMESSAGEADD` + есть файл(ы) | взять файл → скачать → `uploads/` → запустить разбор; ответить «принял, обрабатываю…» |
-| `ONIMBOTMESSAGEADD` + команда `feedback like/dislike:<jobId>` | записать отзыв; обновить/ответить «спасибо» |
-| `ONIMBOTMESSAGEADD` без файла (текст) | подсказка: «бросьте файл счёта (PDF/скан/Excel)» |
-| `ONIMBOTJOINCHAT` | приветствие + краткая инструкция |
-| `ONIMBOTDELETE` | очистка `BOT_ID`/состояния |
-
-Ответ на вебхук-событие — **200** быстро; тяжёлый разбор — асинхронно (как сейчас `processJob`), результат
-шлём отдельным `imbot.message.add`, не в ответе на событие.
+| `ONIMBOTV2MESSAGEADD` + файлы в `message` | скачать файл(ы) → `uploads/` → запустить разбор; ответить «принял…» |
+| `ONIMBOTV2COMMANDADD` (`command.context='keyboard'`, наша команда `feedback`) | записать отзыв; `imbot.v2.Command.answer` «спасибо» |
+| `ONIMBOTV2MESSAGEADD` без файла | подсказка «бросьте файл счёта (PDF/скан/Excel)» |
+| `ONIMBOTV2JOINCHAT` | приветствие + краткая инструкция |
+| `ONIMBOTV2DELETE` | очистка `BOT_ID`/состояния |
 
 ## 6. Файл из чата → разбор
 
-1. Из `ONIMBOTMESSAGEADD` достать вложение (id файла на Диске Б24).
-2. Получить ссылку и скачать (Disk/im REST по `auth` бота), проверить размер/расширение (те же лимиты, что
-   в `/upload`: `MAX_FILE_SIZE_MB`, `ALLOWED_EXTENSIONS`).
-3. Сохранить в `uploads/<jobId>/` и запустить **существующий** `processJob` (агент → MCP → сделка).
-4. `responsibleUserId` для сделки = маппинг `FROM_USER_ID` (автор сообщения) → id пользователя Б24
-   (он и есть пользователь Б24; уточнить, всегда ли подходит как ответственный — см. §9).
+1. Из `ONIMBOTV2MESSAGEADD` взять файл(ы) из структурного объекта `message` (v2 отдаёт файлы в сообщении —
+   в отличие от legacy, где их в событии не было).
+2. Скачать: **`imbot.v2.File.download`** (`botId`, `fileId` → `result.downloadUrl`, одноразовый) → загрузить
+   по `downloadUrl`. Проверить размер/расширение (те же лимиты, что в `/upload`: `MAX_FILE_SIZE_MB`,
+   `ALLOWED_EXTENSIONS`).
+3. **Переиспользовать пайплайн через НОВЫЙ общий хелпер `createAndStartJob({files, responsibleUserId})`,
+   выделенный из `/upload`** (`backend/index.js`). Сейчас `processJob` **не экспортирован**, а создание
+   задания (mkdir `uploads/<jobId>/`, форма `job`, `jobs.set`, гард `maxConcurrentJobs`→429, `recordUpload`,
+   запуск `processJob().finally(activeJobs--)`) **заинлайнено** в `/upload` — его надо вынести в функцию и
+   звать из обоих мест. Бот обязан соблюдать тот же лимит конкурентности.
+4. **`responsibleUserId`** = `user.id` автора (числовой id Б24 — проходит проверку `runAgent`/контроллера).
+   **Фолбэк** на дефолт (`PUBLIC_PAGE_RESPONSIBLE_USER_ID`), если автор — бот/внешний/не задан (иначе
+   пайплайн вернёт бизнес-ошибку `missing_responsible`).
 
-## 7. Результат + кнопки 👍/👎 (`imbot.message.add`)
+## 7. Результат + кнопки 👍/👎
 
-По готовности `processJob` — отправить в тот же `DIALOG_ID`:
+По готовности задания — отправить в тот же `dialogId` (`imbot.message.add`, авторизуясь
+`data.bot.auth.access_token`):
 
 ```jsonc
-imbot.message.add({
+{
   BOT_ID, DIALOG_ID, CLIENT_ID,
   MESSAGE: 'Готово ✅ Сделка #1609008 — «Импорт прайса от …»\n7 позиций, 3 460.50 byn',
-  // либо: 'Без сделки ⚠️ <причина: бизнес-ошибка / не распознан документ>'
-  KEYBOARD: [
-    { TEXT: '👍 Верно',  COMMAND: 'feedback', COMMAND_PARAMS: 'like:<jobId>',    BG_COLOR: '#1ec391', TEXT_COLOR: '#fff', DISPLAY: 'LINE' },
-    { TEXT: '👎 Не то',  COMMAND: 'feedback', COMMAND_PARAMS: 'dislike:<jobId>', BG_COLOR: '#f56b54', TEXT_COLOR: '#fff', DISPLAY: 'LINE' },
-  ],
-  ATTACH: [ /* опц.: ссылка «Открыть сделку» как блок с URL */ ],
-})
+  KEYBOARD: { BUTTONS: [   // именно { BUTTONS: [...] }; при ОБНОВЛЕНИИ клавиатуры нужен и BOT_ID
+    { TEXT: '👍 Верно', COMMAND: 'feedback', COMMAND_PARAMS: 'like <jobId>',    BG_COLOR: '#1ec391', DISPLAY: 'LINE' },
+    { TEXT: '👎 Не то', COMMAND: 'feedback', COMMAND_PARAMS: 'dislike <jobId>', BG_COLOR: '#f56b54', DISPLAY: 'LINE' },
+  ] },
+}
 ```
 
-- Клик по кнопке с `COMMAND` присылает боту команду тем же каналом события (`ONIMBOTMESSAGEADD`/командное
-  событие) с `COMMAND_PARAMS` → эндпоинт распознаёт `feedback like/dislike:<jobId>`.
-- Точные имена полей KEYBOARD (`COMMAND`/`COMMAND_PARAMS`/`BG_COLOR`/`DISPLAY`) сверить с актуальной докой
-  Б24 при реализации (формат стабильный, но лучше проверить).
+- Кнопка с `COMMAND` срабатывает только если команда **зарегистрирована** (`imbot.command.register`, §4).
+  Клик порождает **отдельное событие `ONIMBOTV2COMMANDADD`** с `command.context='keyboard'`,
+  `command.command='feedback'`, `command.params='like <jobId>'`. Это **не** повторный `ONIMBOTV2MESSAGEADD`.
+- Альтернатива без регистрации команды: кнопки с `ACTION:'SEND'`/`ACTION_VALUE` (клик постит текст → обычный
+  `ONIMBOTV2MESSAGEADD`, парсим текст) или нативные **реакции** (`ONIMBOTV2REACTIONCHANGE`, `reaction='like'`).
+  Решить при реализации; для явных кнопок «лайк/дизлайк» — путь с командой выше.
 
-## 8. Обратная связь (переиспользуем канал)
+## 8. Обратная связь (нужен общий хелпер, не HTTP-роут)
 
-Клик 👍/👎 → как и виджет на странице результата (issue #182):
-- `metrics.recordFeedback({ source: 'employee', kind: positive|problem })` — счётчик на `/metrics`;
-- при заданном `GITHUB_FEEDBACK_TOKEN` — issue/коммент в канал отзывов (с контекстом jobId/диалог).
-- Без текста-комментария (в чате — только палец); опц. можно попросить причину вторым шагом для 👎.
+Клик 👍/👎 ведёт в тот же канал, что виджет на странице (issue #182), **но не через `POST /feedback`** — тот
+**session-authed** (`requireAuth`), у бота сессии нет. Реалистичный шов:
+- счётчик: `metrics.recordFeedback({ source: 'user', kind })` — **`source:'user'`** (как у виджета
+  сотрудника; `'employee'` в коде нет), `kind ∈ positive|problem|suggestion` (👍→`positive`, 👎→`problem`);
+- issue/коммент: вызвать напрямую `buildIssue` + `createGithubIssue` (оба экспортируются из
+  `backend/feedback.js`) **или** выделить из роута `/feedback` общий `submitFeedback()` и звать из обоих
+  мест. Гейты `requireFeedbackConfigured` + rate-limit сохранить.
+- «Кто сообщил» (`feedbackReporter`) в роуте берётся из cookie/сессии — для бота **синтезировать** строку,
+  напр. `b24:<portal>/user:<user.id>`.
 
-## 9. Безопасность и открытые вопросы
+## 9. Открытые вопросы
 
-Безопасность:
-- **Валидация `application_token`** на каждом событии (главное).
-- Лимиты размера/типа файла (как `/upload`); сам файл недоверенный — те же hostile-strip, что в пайплайне.
-- Rate-limit эндпоинта; не эхо-ить пути/секреты в ответах; токены в логах редактировать.
+1. **Реакции vs кнопки-команды** для 👍/👎 (см. §7) — что предпочесть.
+2. **Хранение** `BOT_ID`/`application_token`/`code` — отдельный Redis-namespace «app-config»; формат.
+3. **`responsibleUserId`**: подтвердить фолбэк на дефолт и его источник.
+4. **Группа vs 1-на-1**: только личный чат с ботом или и групповые (там бота надо упоминать)?
+5. **Scope/права**: добавить `imbot` в `getRequiredRights()` + карточку приложения, переустановить.
 
-Открытые вопросы к заказчику/при реализации:
-1. **Регистрация бота** — через клиентскую установку (`frame.callMethod`) или серверный install-хук? Где
-   хранить `BOT_ID`/`CLIENT_ID`/`application_token` (Redis?).
-2. **Webhook vs OAuth** для ответных вызовов бота (`imbot.message.add`): использовать `auth` из события,
-   общий вебхук, или включить OAuth (сейчас выключен).
-3. **`responsibleUserId`**: всегда ли автор сообщения = корректный ответственный за сделку? Нужен ли
-   маппинг/фолбэк.
-4. **Группа vs 1-на-1**: поддерживаем только личный чат с ботом или и групповые (там бота надо упоминать)?
-5. **Scope**: добавить `imbot`/`im` в карточку приложения — подтвердить и переустановить.
+## 10. План реализации (порядок важен)
 
-## 10. План реализации (итерации)
-
-1. **Каркас (тестируемо без портала):** эндпоинт `POST /b24/bot/event` — парсинг события, валидация
-   `application_token`, роутинг, сборка текста результата и KEYBOARD; юнит-тесты на mock-событиях. Заглушки
-   на реальные `imbot.*`/Disk-вызовы.
-2. **Регистрация:** install-шаг (`imbot.register`/`update`/`unregister`) + хранение `BOT_ID`/`CLIENT_ID`.
-3. **Файл → разбор:** скачивание из Диска + интеграция с `processJob` + ответ результатом.
-4. **Кнопки → отзыв:** обработка команды + `recordFeedback`.
-5. **Портал-QA:** ручная проверка сквозного сценария на тестовом Битрикс24; правка по факту форматов.
+1. **Подсистема токена (БЛОКЕР, первым):** серверный install-шаг — принять результат `imbot.v2.Bot.register`
+   + `application_token` на новый авторизованный роут, сохранить в Redis. Юнит-тест валидации токена — на
+   **инжектированном** сохранённом значении (источник появляется здесь).
+2. **Рефакторы переиспользования:** выделить `createAndStartJob` из `/upload` и `submitFeedback` (либо прямой
+   `buildIssue`+`createGithubIssue`) из `/feedback`. Юнит-тесты на эквивалентность поведения.
+3. **Эндпоинт-каркас (тестируемо без портала):** `POST /b24/bot/event` — разбор form-urlencoded/PHP-ключей,
+   валидация токена, роутинг, сборка текста + KEYBOARD. Юнит-тесты на mock-событиях.
+4. **Файл → разбор:** `imbot.v2.File.download` + `createAndStartJob` + ответ результатом.
+5. **Кнопки → отзыв:** `imbot.command.register` + обработка `ONIMBOTV2COMMANDADD` + `submitFeedback` +
+   `imbot.v2.Command.answer`.
+6. **Портал-QA:** сквозной сценарий на тестовом Битрикс24; правка по фактическим форматам.
 
 ## 11. Приёмка
 
-- В личном чате с ботом: бросить PDF-счёт → бот «обрабатываю» → через N сек «Готово, Сделка #…» + 👍/👎.
-- Кривой документ → «Без сделки + причина» (как #192) + 👍/👎.
-- Клик 👍/👎 → счётчик «Обратная связь» на `/metrics` растёт (+ issue при токене).
-- Невалидный `application_token` → эндпоинт отвергает (нет создания заданий).
+- Личный чат: бросить PDF-счёт → «обрабатываю» → «Готово, Сделка #…» + 👍/👎.
+- Кривой документ → «Без сделки + причина» (#192) + 👍/👎.
+- Клик 👍/👎 → `/metrics` «Обратная связь» растёт (+ issue при токене).
+- Невалидный `auth.application_token` → эндпоинт отвергает (нет создания заданий) — юнит-тест с
+  инжектированным сохранённым токеном.
 
 ---
 
-> Эталон поведения разбора и отзывов — `backend/index.js` (`processJob`, `reportAgentFeedback`),
-> `prompts/main.md`, `docs/FEEDBACK.md`; установка — `ui/app/composables/useInstall.ts`,
-> `docs/BITRIX24_APP_SETUP.md`. API чат-ботов Б24 — `imbot.*`, событие `ONIMBOTMESSAGEADD`.
+> Эталоны: разбор/отзывы — `backend/index.js` (`/upload` `:483-613`, `processJob` `:816`, `/feedback`
+> `:689-729`), `backend/feedback.js` (`buildIssue`/`createGithubIssue`), `prompts/main.md`; установка —
+> `ui/app/composables/useInstall.ts`, `useB24.ts` (`getRequiredRights`), `docs/BITRIX24_APP_SETUP.md`.
+> API Б24 — **чат-боты 2.0** (`imbot.v2.*`, события `ONIMBOTV2*`); сверять с офиц. докой при реализации.
