@@ -74,6 +74,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `ANTHROPIC_API_KEY` | app | ✅² | Ключ Claude API для агента. **В Docker обязателен** — подписка claude в контейнере не работает |
 | `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX` + `AWS_*` / `GOOGLE_*` | app | — | Альтернативные провайдеры Claude (Bedrock/Vertex) — пробрасываются агенту |
 | `NODE_ENV` / `PORT` / `UPLOAD_DIR` | app | — | Стандартные настройки рантайма |
+| `SHOW_TIMINGS` | app | — | Замеры времени на странице результата: живой `mm:ss` при обработке + «⏱ всего…·агент…·извлечение» в лог (НЕ в метрики). По умолчанию `false` (opt-in) |
 
 ¹ Обязательны при деплое за общим nginx-proxy (прод). Для локального запуска не нужны.
 ² Обязателен для реальной работы агента. В Docker подписочная сессия `claude login` не работает, поэтому ключ задаётся явно в `.env.prod`. Локально (вне Docker) можно вместо него залогиниться интерактивно (`claude login`).

@@ -241,6 +241,10 @@ export function createApp(config = {}) {
   const githubFeedbackToken = config.githubFeedbackToken ?? process.env.GITHUB_FEEDBACK_TOKEN ?? '';
   const githubFeedbackRepo = config.githubFeedbackRepo
     ?? process.env.GITHUB_FEEDBACK_REPO ?? 'postroyka/purchase-ai-chat';
+  // Замеры времени (#замеры): при SHOW_TIMINGS=true /job/:id/status отдаёт тайминги по файлам
+  // (startedAt/agentMs/durationMs) + флаг — UI показывает живой mm:ss во время обработки и замеры в
+  // логе по готовности. Только для лога на странице, НЕ в метрики. По умолчанию выключено (opt-in).
+  const showTimings = config.showTimings ?? (String(process.env.SHOW_TIMINGS ?? '').toLowerCase() === 'true');
   // Guard NaN explicitly: a garbled FEEDBACK_RATE_LIMIT_MAX would otherwise become NaN, which the
   // limiter reads as "disabled" (fail-OPEN) — the wrong direction for an anti-spam-into-our-repo
   // control. Number.isFinite keeps a deliberate 0 (disable) working while a garbled value → default 5.
@@ -617,7 +621,12 @@ export function createApp(config = {}) {
     return res.json({
       jobId: job.jobId,
       status: job.status,
-      files: job.files.map(({ name, status, result, error, problem }) => ({ name, status, result, error, problem })),
+      ...(showTimings ? { showTimings: true } : {}),
+      files: job.files.map((f) => ({
+        name: f.name, status: f.status, result: f.result, error: f.error, problem: f.problem,
+        // Тайминги отдаём только при SHOW_TIMINGS (#замеры) — иначе ответ без изменений.
+        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null } : {}),
+      })),
     });
   });
 
@@ -799,8 +808,9 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
 
   for (const fileEntry of job.files) {
     fileEntry.status = 'processing';
-    await jobs.set(jobId, job);
     const startedAt = Date.now();
+    fileEntry.startedAt = startedAt; // тайминги (#замеры): для живого mm:ss, пока файл обрабатывается
+    await jobs.set(jobId, job);
     const format = path.extname(fileEntry.path).slice(1).toLowerCase();
     let agentMeta = null; // filled via onMeta on a successful run (extract method + cost/time)
     try {
@@ -841,8 +851,14 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
         const vc = it && typeof it === 'object' ? it.vendorCode : null;
         return vc == null || String(vc).trim() === '';
       }).length;
+      // Тайминги (#замеры): полное время файла и время агента — для лога на странице (НЕ в метрики).
+      const durationMs = Date.now() - startedAt;
+      fileEntry.durationMs = durationMs;
+      fileEntry.agentMs = (agentMeta && Number.isFinite(agentMeta.agentDurationMs)) ? agentMeta.agentDurationMs : null;
+      // Метод извлечения текста (pdftotext/ocr/office) — частый ответ на «где медленно» (OCR-скан).
+      fileEntry.extractMethod = (agentMeta && typeof agentMeta.extractMethod === 'string') ? agentMeta.extractMethod : null;
       metrics?.recordFile({
-        format, status: 'done', outcome, durationMs: Date.now() - startedAt, agent: agentMeta,
+        format, status: 'done', outcome, durationMs, agent: agentMeta,
         positions: items.length, positionsNoArticle,
       });
       // Channel «MCP» (issue #182): record WHICH supplier failed to match (by УНП) so the dashboard
@@ -865,7 +881,9 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       console.error(`[processJob] error processing file ${fileEntry.name} (job ${jobId}): ${safeMsg}`);
       fileEntry.status = 'error';
       fileEntry.error = safeMsg.slice(0, MAX_ERROR_CHARS);
-      metrics?.recordFile({ format, status: 'error', outcome: classifyAgentError(safeMsg), durationMs: Date.now() - startedAt, agent: agentMeta });
+      const durationMs = Date.now() - startedAt;
+      fileEntry.durationMs = durationMs;
+      metrics?.recordFile({ format, status: 'error', outcome: classifyAgentError(safeMsg), durationMs, agent: agentMeta });
     }
     await jobs.set(jobId, job);
   }

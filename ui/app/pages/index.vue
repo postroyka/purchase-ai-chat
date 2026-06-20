@@ -93,14 +93,26 @@
               />
             </div>
 
-            <B24Progress
+            <div
               v-if="file.status === 'processing' || file.status === 'pending'"
-              class="mt-3"
-              :model-value="null"
-              animation="carousel"
-              color="air-primary"
-              size="xs"
-            />
+              class="mt-3 flex items-center gap-2"
+            >
+              <B24Progress
+                class="flex-1"
+                :model-value="null"
+                animation="carousel"
+                color="air-primary"
+                size="xs"
+              />
+              <!-- Живой таймер обработки (#замеры, только при SHOW_TIMINGS) -->
+              <span
+                v-if="job?.showTimings && file.startedAt"
+                class="shrink-0 text-xs tabular-nums text-base-500"
+                title="Время обработки"
+              >
+                ⏱ {{ mmss(elapsedMs(file)) }}
+              </span>
+            </div>
 
             <p
               v-if="file.error"
@@ -137,6 +149,14 @@
                 Открыть сделку
               </B24Button>
             </div>
+
+            <!-- Замеры времени (#замеры, только при SHOW_TIMINGS) — в лог на странице, не в метрики -->
+            <p
+              v-if="job?.showTimings && file.durationMs != null"
+              class="mt-2 text-xs text-base-400 tabular-nums"
+            >
+              {{ timingLine(file) }}
+            </p>
           </B24Card>
 
           <!-- Обратная связь сотрудника (issue #182): оценка результата + комментарий → GitHub issue.
@@ -241,6 +261,7 @@
 
 <script setup lang="ts">
 import { fileBadge, jobBadge, fileSucceeded } from '~/utils/result-badges'
+import { mmss, timingLine } from '~/utils/format-duration'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
 definePageMeta({ layout: 'default' })
@@ -257,12 +278,19 @@ interface FileEntry {
   // issue #192: human-readable reason set by the backend when a 'done' file produced NO deal
   // (business error / unrecognised document) — surfaced so it isn't a bare green "Готово".
   problem?: string | null
+  // Тайминги (#замеры): приходят только при SHOW_TIMINGS на бэкенде. startedAt — для живого mm:ss,
+  // agentMs/durationMs — для замеров в логе по готовности.
+  startedAt?: number | null
+  agentMs?: number | null
+  durationMs?: number | null
+  extractMethod?: string | null
 }
 
 interface JobStatus {
   jobId: string
   status: 'pending' | 'processing' | 'done' | 'error'
   files: FileEntry[]
+  showTimings?: boolean
 }
 
 // ── Состояние ────────────────────────────────────────────────────────────────
@@ -274,6 +302,26 @@ const uploadError = ref<string | null>(null)
 const job = ref<JobStatus | null>(null)
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null
+
+// Живой таймер обработки (#замеры, только при SHOW_TIMINGS): тикаем `nowTs` раз в секунду, пока есть
+// файлы в обработке, чтобы карточка показывала mm:ss. useIntervalFn сам останавливается при unmount.
+const nowTs = ref(Date.now())
+const clock = useIntervalFn(() => {
+  nowTs.value = Date.now()
+}, 1000, { immediate: false })
+const liveTiming = computed(() =>
+  Boolean(job.value?.showTimings) && (job.value?.files.some(f => f.status === 'processing' || f.status === 'pending') ?? false))
+watch(liveTiming, (on) => {
+  if (on) {
+    nowTs.value = Date.now()
+    clock.resume()
+  } else {
+    clock.pause()
+  }
+}, { immediate: true })
+function elapsedMs(file: FileEntry): number {
+  return file.startedAt ? Math.max(0, nowTs.value - file.startedAt) : 0
+}
 let pollController: AbortController | null = null
 let pollErrors = 0
 let pollDelay = 2000
