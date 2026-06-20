@@ -42,6 +42,15 @@
 6. Обновить **этот файл** (версия/SHA/дата) и при необходимости `Dockerfile.mcp`
    (напр. v0.3.0 добавил нативный `better-sqlite3` → `apk add python3 make g++`).
 
+## Обновление зависимостей: `mcp/`-конфиги ИНЕРТНЫ (issue #211)
+
+Вендоренные `mcp/.github/dependabot.yml` и `mcp/renovate.json` (из upstream-шаблона) в этом монорепо
+**не работают**: GitHub Dependabot читает только **корневой** `.github/dependabot.yml` (вложенный — не на
+корне → игнорируется), а Renovate в репо не установлен (корневого `renovate.json` нет). npm-зависимости
+`mcp/` ведёт **корневой** Dependabot (есть запись `directory: /mcp`). Эти файлы оставлены как есть ради
+точности зеркала (ре-вендор `rsync --delete` их всё равно восстановит) — просто не считайте их
+действующими.
+
 ## Что мы меняем относительно upstream (в сборке, не в `mcp/`)
 
 - `Dockerfile.mcp` удаляет `server/mcp/tools/{tasks,users,meta}` — нужны только

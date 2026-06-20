@@ -105,8 +105,8 @@ make prod-redeploy     # pull + up -d (или make prod-pull — только п
 ### 3.2. Зависимости (npm/pnpm-пакеты)
 - Обновления пакетов приходят **PR-ами**. Корневой `.github/dependabot.yml` ведёт их по всему репо:
   **npm** (`backend`, `ui`, `mcp`, `mcp-overlay`), **docker** (Node — только patch) и **github-actions**.
-  У `mcp/` есть **свой** набор (`mcp/renovate.json` + `mcp/.github/dependabot.yml`) от вендорного шаблона —
-  он **конфликтует** с корневым (см. issue по сверке). Ревью → мерж → CI → Watchtower раскатывает (как §3.1).
+  Вендоренные `mcp/.github/dependabot.yml` + `mcp/renovate.json` (от шаблона) — **инертны** (GitHub читает
+  только корневой конфиг; Renovate не установлен), см. `../mcp/VENDOR.md`. Ревью → мерж → CI → Watchtower.
 - Активность git/CI смотреть на GitHub: вкладка **Actions** (зелёный CI = образ уехал в прод),
   **Pull requests** (Dependabot/Renovate), **Security** (Dependabot alerts).
 

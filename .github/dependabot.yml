@@ -1,5 +1,12 @@
 version: 2
 
+# ЕДИНСТВЕННЫЙ операционный конфиг обновления зависимостей в этом монорепо. GitHub Dependabot читает
+# ТОЛЬКО этот файл (корневой `.github/dependabot.yml`) и покрывает им весь репозиторий: npm в
+# /backend, /ui, /mcp, /mcp-overlay + docker + github-actions.
+# Вендоренные `mcp/.github/dependabot.yml` и `mcp/renovate.json` (из upstream-шаблона MCP) — ИНЕРТНЫ:
+# вложенный dependabot.yml не на корне → GitHub его не читает; Renovate в репо не установлен (корневого
+# renovate.json нет). Удалять их нельзя — `mcp/` это rsync-зеркало (ре-вендор восстановит, см. mcp/VENDOR.md).
+
 updates:
   # Docker — allow only patch updates within Node 22 LTS (active until April 2027).
   # IMPORTANT: do NOT bump the Node major or minor version without a deliberate decision.

@@ -15,16 +15,17 @@ interface ProductResult {
  * Calls `shef:purchase.api.procureproduct.findByVendorCode` over the webhook
  * (callV2). The controller matches `PURCHASE_ARTICLE` on active parent products
  * (empty PURCHASE_69_PARENT_PRODUCT) and returns the minimum-id match. Matching
- * is homoglyph-tolerant — Latin/Cyrillic look-alikes match interchangeably
- * (e.g. "тех 100х25х6000"). Matching by name is intentionally NOT supported —
+ * is STRICT exact on the article "as-is" — homoglyph/keyboard-layout folding was
+ * deliberately removed (unlike find_contract, where the contract NUMBER is
+ * homoglyph-tolerant). Matching by name is intentionally NOT supported —
  * vendor code only (B5).
  */
 export default defineMcpTool({
   name: 'b24_pst_crm_find_product',
   description:
-    'Find an active parent product in the Bitrix24 catalog by vendor code (PURCHASE_ARTICLE). Matching tolerates Latin/Cyrillic look-alike letters. If multiple active products match, returns the one with minimum id. If this tool hinders you (ambiguous/wrong match, unexpected response shape, or a missing capability), record it in your result\'s feedback[] (see the system prompt, "Сигналы и обратная связь агента").',
+    'Find an active parent product in the Bitrix24 catalog by vendor code (PURCHASE_ARTICLE). Matching is a STRICT exact comparison of the article as-is (no homoglyph/layout folding — a near-look-alike article will NOT match). If multiple active products match, returns the one with minimum id. If this tool hinders you (ambiguous/wrong match, unexpected response shape, or a missing capability), record it in your result\'s feedback[] (see the system prompt, "Сигналы и обратная связь агента").',
   inputSchema: {
-    vendorCode: z.string().min(1).describe('Vendor article/code from the supplier document — pass verbatim (Latin/Cyrillic letters are matched interchangeably server-side, e.g. "тех 100х25х6000")'),
+    vendorCode: z.string().min(1).describe('Vendor article/code from the supplier document — pass verbatim; matched by STRICT exact comparison server-side (no homoglyph folding), e.g. "тех 100х25х6000"'),
   },
   handler: async ({ vendorCode }) => {
     const b24 = useBitrix24Tenant()
