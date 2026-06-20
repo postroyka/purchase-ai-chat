@@ -225,6 +225,7 @@ describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)
     expect('startedAt' in f).toBe(false);
     expect('durationMs' in f).toBe(false);
     expect('agentMs' in f).toBe(false);
+    expect('speed' in f).toBe(false);
   });
 });
 

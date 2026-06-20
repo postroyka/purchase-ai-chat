@@ -805,6 +805,7 @@ async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
 
 // Классификация total-времени файла для лога замеров (#замеры): fast/normal/slow по порогам
 // (оценочные, калибруются через TIMING_FAST_MS/TIMING_SLOW_MS — см. docs/PARSING_PERFORMANCE.md).
+// Ожидается fastMs ≤ slowMs; при инверсии (конфиг-ошибка) 'slow' недостижим — всё ≤fast станет 'fast'.
 export function classifySpeed(durationMs, fastMs, slowMs) {
   if (!Number.isFinite(durationMs) || durationMs < 0) return null;
   if (durationMs <= fastMs) return 'fast';
