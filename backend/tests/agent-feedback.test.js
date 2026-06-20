@@ -230,6 +230,7 @@ function fakeMetrics(overrides = {}) {
     recordFile: vi.fn(async () => {}),
     recordWarnings: vi.fn(async () => {}),
     recordFeedback: vi.fn(async () => {}),
+    recordMatching: vi.fn(async () => {}),
     snapshot: vi.fn(async () => ({})),
     ping: vi.fn(async () => {}),
     ...overrides,

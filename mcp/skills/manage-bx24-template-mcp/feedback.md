@@ -10,8 +10,8 @@ The operator/maintainer-facing companion to this guide is [`../../docs/FEEDBACK.
 
 Call `bx24mcp_submit_feedback` when one of these is true:
 
-- A **tool description** was ambiguous and led you to a wrong call (kind: `issue`, severity: `low`/`medium`).
-- A tool **threw an unexpected error** or its response shape did not match its description (kind: `issue`, severity depends on impact).
+- A **tool description** was ambiguous and led you to a wrong call (kind: `problem`, severity: `low`/`medium`).
+- A tool **threw an unexpected error** or its response shape did not match its description (kind: `problem`, severity depends on impact).
 - A capability is **missing** — you needed an operation this MCP does not expose and would have helped (kind: `suggestion`, severity: `low`).
 - A workflow **worked notably well** — a tool description matched intent on the first try in a non-trivial scenario (kind: `positive`, no severity). Rare but useful as a signal.
 
@@ -25,7 +25,7 @@ Do **not** call it when:
 
 ```ts
 bx24mcp_submit_feedback({
-  kind: 'issue' | 'suggestion' | 'positive',
+  kind: 'problem' | 'suggestion' | 'positive',
   summary: '<one line, < 200 chars>',
   details: '<what happened, what you expected, why it matters>',
   relatedTool: '<MCP tool name, optional>',
@@ -44,7 +44,7 @@ bx24mcp_submit_feedback({
 - Start with the smallest reproducer you have: parameters used, what was returned, what was expected.
 - Quote literal values when possible. The body is rendered inside `<pre><code>` so Markdown/HTML in your text appears verbatim — no need to escape, just paste.
 - If a different tool's description influenced your behaviour, name it (`relatedTool`) and quote the relevant sentence.
-- Keep it under 10 000 characters; anything past that is truncated with a marker.
+- Keep it under 5 000 characters; anything past that is truncated with a marker.
 
 ### Choosing `severity`
 

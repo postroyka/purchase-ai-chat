@@ -24,6 +24,7 @@ import Redis from 'ioredis';
  *   }): Promise<void>,
  *   recordWarnings(codes: string[]): Promise<void>,
  *   recordFeedback(arg: { source: 'user'|'agent', kind?: string }): Promise<void>,
+ *   recordMatching(arg: { result?: unknown }): Promise<void>,
  *   snapshot(): Promise<MetricsSnapshot>,
  *   ping(): Promise<void>,
  * }} Metrics
@@ -47,6 +48,7 @@ import Redis from 'ioredis';
  *   extract: Array<{ name: string, count: number }>,
  *   warnings: Array<{ name: string, count: number }>,
  *   feedback: { user: Array<{ name: string, count: number }>, agent: Array<{ name: string, count: number }> },
+ *   matching: { suppliers: Array<{ name: string, count: number }> },
  *   daily: Array<{ date: string, files: number }>,
  * }} MetricsSnapshot
  */
@@ -62,7 +64,14 @@ const K = {
   warnings: 'metrics:warnings',
   feedbackUser: 'metrics:feedback:user',
   feedbackAgent: 'metrics:feedback:agent',
+  // issue #182, channel «MCP»: where matching fails. Counts supplier_not_found by УНП so the
+  // dashboard can rank the suppliers that most often aren't matched (the «which suppliers fail» ask).
+  matchingSuppliers: 'metrics:matching:suppliers',
 };
+
+// Cap on distinct supplier keys tracked (cardinality DoS guard — `unp` is agent-derived from an
+// untrusted document). Once reached, further NEW suppliers fold into '__other__'.
+const MATCHING_SUPPLIER_CAP = 300;
 
 /** UTC day bucket key, e.g. "2026-06-10". */
 function today() {
@@ -119,6 +128,14 @@ const KNOWN_FEEDBACK_KINDS = new Set(['positive', 'problem', 'suggestion', 'othe
 function feedbackKindLabel(s) {
   const v = label(s, 'other');
   return KNOWN_FEEDBACK_KINDS.has(v) ? v : 'other';
+}
+
+// A supplier УНП used as a hash field (issue #182 MCP channel). Belarus УНП is numeric (~9 digits);
+// keep only digits and bound the length, so a prompt-injected `unp` (arbitrary document text) can't
+// create giant/odd fields or pollute the supplier ranking. Returns null for junk (→ not recorded).
+function supplierKeyLabel(s) {
+  const v = String(s ?? '').replace(/\D/g, '');
+  return v.length >= 4 && v.length <= 16 ? v : null;
 }
 
 function warn(ctx, e) {
@@ -207,11 +224,33 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
     } catch (e) { warn('recordFeedback', e); }
   }
 
+  // MCP matching telemetry (issue #182, channel «MCP»). Derived from the agent result: when the
+  // supplier wasn't matched in Bitrix24, record WHICH supplier (by УНП) so /metrics can rank the
+  // suppliers that fail most. Other matching failures (contract, articles, РФ/РБ) are already
+  // covered by `outcomes`/`warnings`. Best-effort — never fails a job.
+  async function recordMatching({ result } = {}) {
+    try {
+      const r = (result && typeof result === 'object') ? result : null;
+      if (!r || r.error !== 'supplier_not_found') return;
+      const unp = supplierKeyLabel(r.unp);
+      if (!unp) return;
+      // Bound distinct keys: a NEW УНП is only added while under the cap; known УНП always increments.
+      // The read-then-write isn't atomic (TOCTOU): concurrent supplier_not_found's can push a few keys
+      // past the cap — benign for a cardinality guard (bounded by job concurrency, never unbounded).
+      const cur = await b.hgetall(K.matchingSuppliers);
+      const field = (!(unp in (cur || {})) && Object.keys(cur || {}).length >= MATCHING_SUPPLIER_CAP)
+        ? '__other__'
+        : unp;
+      await b.batch([['hincrby', K.matchingSuppliers, field, 1]]);
+    } catch (e) { warn('recordMatching', e); }
+  }
+
   async function snapshot() {
-    const [totals, outcomes, formats, extract, daily, warnings, feedbackUser, feedbackAgent] = await Promise.all([
+    const [totals, outcomes, formats, extract, daily, warnings, feedbackUser, feedbackAgent, matchingSuppliers] = await Promise.all([
       b.hgetall(K.totals), b.hgetall(K.outcomes), b.hgetall(K.formats),
       b.hgetall(K.extract), b.hgetall(K.daily),
       b.hgetall(K.warnings), b.hgetall(K.feedbackUser), b.hgetall(K.feedbackAgent),
+      b.hgetall(K.matchingSuppliers),
     ]);
     const t = numify(totals);
     const files = t.files || 0;
@@ -279,6 +318,7 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
       extract: toSortedArray(extract),
       warnings: toSortedArray(warnings),
       feedback: { user: toSortedArray(feedbackUser), agent: toSortedArray(feedbackAgent) },
+      matching: { suppliers: toSortedArray(matchingSuppliers).slice(0, 15) },
       daily: Object.entries(numify(daily))
         .map(([date, n]) => ({ date, files: n }))
         .sort((a, b2) => (a.date < b2.date ? -1 : 1)),
@@ -287,7 +327,7 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
 
   async function ping() { return b.ping(); }
 
-  return { recordUpload, recordFile, recordWarnings, recordFeedback, snapshot, ping };
+  return { recordUpload, recordFile, recordWarnings, recordFeedback, recordMatching, snapshot, ping };
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

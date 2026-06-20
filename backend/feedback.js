@@ -195,6 +195,50 @@ export function buildAgentFeedbackIssue({ kind, tool, note, context = {} }) {
 }
 
 /**
+ * Best-effort privacy probe for the feedback repo (#190): GET /repos/{repo} and report whether it's
+ * private. Used at startup to WARN if the repo that stores client context in issues is public. NEVER
+ * throws — a network/permission/parse failure yields { ok:false, private:null } so the caller can log
+ * "couldn't verify" rather than crash. The token is never logged here (the caller logs only the slug).
+ *
+ * @param {{ repo: string, token: string, fetchImpl?: typeof fetch, timeoutMs?: number }} input
+ * @returns {Promise<{ ok: boolean, private: boolean|null, status: number }>}
+ */
+export async function checkRepoPrivacy({ repo, token, fetchImpl = fetch, timeoutMs = 5000 }) {
+  if (!token || !repo) return { ok: false, private: null, status: 0 };
+  const slug = String(repo);
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(slug) || /(^|\/)\.\.?(\/|$)/.test(slug)) {
+    return { ok: false, private: null, status: 0 };
+  }
+  let response;
+  try {
+    response = await fetchImpl(`${GITHUB_API}/repos/${slug}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'procure-ai-feedback',
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: 'error',
+    });
+  } catch {
+    return { ok: false, private: null, status: 0 };
+  }
+  if (!response.ok) return { ok: false, private: null, status: response.status };
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    return { ok: false, private: null, status: response.status };
+  }
+  // Only a boolean `private` is a definite answer. A 200 whose body omits it (shouldn't happen for
+  // /repos, but be defensive) is UNDETERMINED → private:null, so the caller logs "couldn't verify"
+  // rather than a false "PUBLIC" warning.
+  const isPrivate = typeof data?.private === 'boolean' ? data.private : null;
+  return { ok: true, private: isPrivate, status: response.status };
+}
+
+/**
  * Create a GitHub issue via the REST API. `fetchImpl` is injectable for tests.
  *
  * Throws GithubFeedbackError (codes NOT_CONFIGURED | UPSTREAM | NETWORK) and NEVER includes the

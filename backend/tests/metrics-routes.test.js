@@ -156,6 +156,29 @@ describe('metrics pipeline integration (upload → processJob → /metrics/data)
     expect(res.body.totals.filesDone).toBe(1); // resolved (not a thrown error) → done
     expect(res.body.outcomes).toContainEqual({ name: 'tool_unavailable', count: 1 });
   });
+
+  it('records matching.suppliers from a real supplier_not_found run (channel «MCP», #182)', async () => {
+    const metrics = createMetrics({ redisUrl: '' });
+    const app = appWith({
+      metrics,
+      agentConfig: {
+        spawnFn: makeAgentSpawn({ result: { error: 'supplier_not_found', unp: '100345678' } }),
+        extractFn: async () => ({ text: 'СЧЁТ № 3', method: 'pdftotext' }),
+      },
+    });
+
+    const up = await request(app)
+      .post('/upload')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .attach('files[]', validPdf(), 'invoice.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+
+    const res = await request(app).get('/metrics/data').set('Authorization', `Bearer ${TOKEN}`);
+    // The failing supplier's УНП is ranked, read from result.unp through the REAL pipeline — pins the
+    // top-level field path (NOT result.supplier.unp, which is the success-path shape).
+    expect(res.body.matching.suppliers).toContainEqual({ name: '100345678', count: 1 });
+    expect(res.body.outcomes).toContainEqual({ name: 'supplier_not_found', count: 1 });
+  });
 });
 
 // Poll a job to a terminal state; returns the final status.

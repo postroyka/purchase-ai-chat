@@ -9,6 +9,7 @@ import WalletIcon from '@bitrix24/b24icons-vue/outline/WalletIcon'
 import MoneyIcon from '@bitrix24/b24icons-vue/outline/MoneyIcon'
 import AlertIcon from '@bitrix24/b24icons-vue/outline/AlertIcon'
 import WarningIcon from '@bitrix24/b24icons-vue/main/WarningIcon'
+import { computeMatchingReasons, MATCHING_REASON_LABELS, SUPPLIER_LABELS } from '~/utils/matching-reasons'
 
 definePageMeta({ layout: 'default' })
 
@@ -65,6 +66,10 @@ const feedbackTotal = computed(() => {
   const sum = (xs: { count: number }[]) => xs.reduce((n, x) => n + x.count, 0)
   return sum(f.user) + sum(f.agent)
 })
+
+// «Проблемы матчинга» (issue #182, канал «MCP»). Fold + labels live in a pure, unit-tested module
+// (app/utils/matching-reasons.ts) — the granular "which suppliers" view is data.matching.suppliers.
+const matchingReasons = computed(() => computeMatchingReasons(data.value))
 
 // ── Formatters ───────────────────────────────────────────────────────────────
 const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
@@ -309,6 +314,39 @@ const sparkPoints = computed(() => {
 
           <p v-if="feedbackTotal === 0" class="text-xs text-base-500">
             Обратная связь появится после первых отзывов сотрудников (виджет на странице результата) и сигналов агента.
+          </p>
+        </section>
+
+        <!-- Проблемы матчинга (issue #182, канал «MCP») -->
+        <section class="space-y-3">
+          <h2 class="text-sm font-semibold text-base-700">
+            Проблемы матчинга
+          </h2>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <B24Card class="rounded-xl" :b24ui="{ body: 'p-5' }">
+              <h3 class="text-sm font-semibold text-base-700 mb-4">
+                Где не сошлось
+              </h3>
+              <MetricsBarList v-if="matchingReasons.length" :items="matchingReasons" :labels="MATCHING_REASON_LABELS" />
+              <p v-else class="text-sm text-base-500">
+                Пока всё сходится
+              </p>
+            </B24Card>
+
+            <B24Card class="rounded-xl" :b24ui="{ body: 'p-5' }">
+              <h3 class="text-sm font-semibold text-base-700 mb-4">
+                Поставщики без матча (по УНП)
+              </h3>
+              <MetricsBarList v-if="data.matching.suppliers.length" :items="data.matching.suppliers" :labels="SUPPLIER_LABELS" />
+              <p v-else class="text-sm text-base-500">
+                Нет данных
+              </p>
+            </B24Card>
+          </div>
+
+          <p class="text-xs text-base-500">
+            Сводка из результатов агента: где матчинг в Битрикс24 чаще всего не сходится (issue #182, канал «MCP»).
           </p>
         </section>
 

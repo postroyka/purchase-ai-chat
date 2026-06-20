@@ -13,6 +13,7 @@ import {
   buildAgentFeedbackIssue,
   formatIssueBody,
   createGithubIssue,
+  checkRepoPrivacy,
   GithubFeedbackError,
   FEEDBACK_KINDS,
 } from '../feedback.js';
@@ -211,6 +212,46 @@ describe('createGithubIssue', () => {
       .catch((e) => e);
     expect(err).toBeInstanceOf(GithubFeedbackError);
     expect(err.code).toBe('NETWORK');
+  });
+});
+
+// ── Module: checkRepoPrivacy (#190 — warn if the feedback repo is public) ──────
+
+describe('checkRepoPrivacy', () => {
+  it('reports a PRIVATE repo as private:true and hits GET /repos/{repo}', async () => {
+    const fetchImpl = fakeFetch({ ok: true, status: 200, json: { private: true } });
+    const r = await checkRepoPrivacy({ repo: 'owner/repo', token: GH_TOKEN, fetchImpl });
+    expect(r).toEqual({ ok: true, private: true, status: 200 });
+    expect(fetchImpl.calls[0].url).toBe('https://api.github.com/repos/owner/repo');
+    expect(fetchImpl.calls[0].init.method ?? 'GET').toBe('GET'); // a read, not a POST
+  });
+
+  it('reports a PUBLIC repo as private:false (the case the startup warning fires on)', async () => {
+    const r = await checkRepoPrivacy({ repo: 'owner/repo', token: GH_TOKEN, fetchImpl: fakeFetch({ ok: true, status: 200, json: { private: false } }) });
+    expect(r).toEqual({ ok: true, private: false, status: 200 });
+  });
+
+  it('a 200 without a boolean `private` is UNDETERMINED (private:null) — never a false PUBLIC', async () => {
+    const r = await checkRepoPrivacy({ repo: 'owner/repo', token: GH_TOKEN, fetchImpl: fakeFetch({ ok: true, status: 200, json: {} }) });
+    expect(r).toEqual({ ok: true, private: null, status: 200 }); // → caller logs "couldn't verify", not "PUBLIC"
+  });
+
+  it('returns ok:false / private:null on 404, network error, and bad JSON (never throws)', async () => {
+    expect(await checkRepoPrivacy({ repo: 'owner/repo', token: GH_TOKEN, fetchImpl: fakeFetch({ ok: false, status: 404 }) }))
+      .toEqual({ ok: false, private: null, status: 404 });
+    const thrower = vi.fn(async () => { throw new Error(`ECONNREFUSED ... Bearer ${GH_TOKEN}`); });
+    expect(await checkRepoPrivacy({ repo: 'owner/repo', token: GH_TOKEN, fetchImpl: thrower }))
+      .toEqual({ ok: false, private: null, status: 0 });
+    expect(await checkRepoPrivacy({ repo: 'owner/repo', token: GH_TOKEN, fetchImpl: fakeFetch({ ok: true, status: 200, json: '__throw__' }) }))
+      .toEqual({ ok: false, private: null, status: 200 });
+  });
+
+  it('skips the call for a missing token or a malformed repo slug (no network)', async () => {
+    const fetchImpl = fakeFetch({ json: { private: true } });
+    expect(await checkRepoPrivacy({ repo: 'owner/repo', token: '', fetchImpl })).toEqual({ ok: false, private: null, status: 0 });
+    expect(await checkRepoPrivacy({ repo: '../../users/x', token: GH_TOKEN, fetchImpl })).toEqual({ ok: false, private: null, status: 0 });
+    expect(await checkRepoPrivacy({ repo: 'owner/..', token: GH_TOKEN, fetchImpl })).toEqual({ ok: false, private: null, status: 0 });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

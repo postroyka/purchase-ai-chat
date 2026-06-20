@@ -13,7 +13,7 @@ import { createNbrbRate } from './nbrb-rate.js';
 import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
 import { createSessionAuth, parseCookies } from './auth.js';
-import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError } from './feedback.js';
+import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy } from './feedback.js';
 import { createAgentFeedbackReporter } from './agent-feedback.js';
 import { safeCompare } from './utils.js';
 
@@ -845,6 +845,10 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
         format, status: 'done', outcome, durationMs: Date.now() - startedAt, agent: agentMeta,
         positions: items.length, positionsNoArticle,
       });
+      // Channel «MCP» (issue #182): record WHICH supplier failed to match (by УНП) so the dashboard
+      // can rank the suppliers that fail most. Best-effort, derived from the same result. Method-guarded
+      // (?.()) so a partial metrics stub can't throw into the job's success path.
+      metrics?.recordMatching?.({ result });
       // Channel «агент» (issue #182): non-terminal quality signals → metrics counts; developer
       // feedback ("what hinders / how to improve" about our tools/prompt) → deduped GitHub issue +
       // metrics. Both are optional fields in the agent result and best-effort — never fail the job.
@@ -896,6 +900,27 @@ if (process.argv[1] === __filename) {
   const server = app.listen(PORT, () => {
     console.log(`[backend] procure-ai backend listening on port ${PORT}`);
   });
+
+  // Privacy hardening (#190): feedback issues carry job context + employee comments (client data),
+  // so the feedback repo MUST stay private. We can't enforce that, but warn loudly at boot if it's
+  // public — a far better signal than a doc note that a single "Make public" click would silently void.
+  // Best-effort, non-blocking; a network/permission failure just logs that it couldn't verify.
+  {
+    const fbToken = process.env.GITHUB_FEEDBACK_TOKEN ?? '';
+    const fbRepo = process.env.GITHUB_FEEDBACK_REPO ?? 'postroyka/purchase-ai-chat';
+    if (fbToken) {
+      checkRepoPrivacy({ repo: fbRepo, token: fbToken })
+        .then((r) => {
+          if (r.private === false) {
+            console.warn(`[backend] WARNING: feedback repo "${fbRepo}" is PUBLIC — feedback issues contain job context and employee comments. Make it private or point GITHUB_FEEDBACK_REPO at a private repo.`);
+          } else if (r.private == null) {
+            console.warn(`[backend] could not verify feedback repo privacy (status: ${r.status || 'network'}); ensure "${fbRepo}" is private.`);
+          }
+          // r.private === true → repo is private as intended → no log
+        })
+        .catch(() => {});
+    }
+  }
 
   // Retention sweep for uploads/ (ТЗ §5 / day 14): periodically delete job folders older than
   // UPLOADS_RETENTION_DAYS (default 7, floored at 1). Started here — NOT inside createApp — so the

@@ -149,7 +149,7 @@ Agent-facing guidance lives under `skills/`. Primary entry point is [`skills/man
   3. `b24_task_update`
   4. `b24_task_comment_add`
   5. `b24_user_me`
-- **Meta-tool `bx24mcp_submit_feedback`** — lets the AI agent submit feedback (positive/issue/suggestion). Each call creates a GitHub issue in `bitrix24/templates-mcp` with label `agent-feedback` (see "Agent Feedback" section).
+- **Meta-tool `bx24mcp_submit_feedback`** — lets the AI agent submit feedback (positive/problem/suggestion). Each call creates a GitHub issue in `bitrix24/templates-mcp` with label `agent-feedback` (see "Agent Feedback" section).
 - Inspector in Nuxt DevTools for tool debugging during development.
 - Structured logging via the SDK's own `Logger` system (`@bitrix24/b24jssdk`'s `Logger` + `ConsoleHandler`), wired into `useBitrix24()` via `client.setLogger(useLogger())` so SDK retry / rate-limit / 503 events flow through the same channel as app logs. See `server/utils/logger.ts`.
 - `/api/health` endpoint, no auth.
@@ -227,7 +227,7 @@ export default defineMcpTool({
   name: 'bx24mcp_submit_feedback',
   description: 'Submit feedback about the bx24-template-mcp server. Use this when you want to report a problem, suggest an improvement, or share a positive observation about your experience using this MCP. Each call creates a GitHub issue.',
   inputSchema: {
-    kind: z.enum(['positive', 'issue', 'suggestion']).describe('Type of feedback'),
+    kind: z.enum(['positive', 'problem', 'suggestion']).describe('Type of feedback'),
     summary: z.string().min(5).max(200).describe('Short summary, one line'),
     details: z.string().min(10).describe('Full details: what happened, what was expected, why it matters'),
     relatedTool: z.string().optional().describe('Name of the related MCP tool, if applicable (e.g. "b24_task_create")'),
@@ -261,7 +261,7 @@ about: Feedback submitted by an AI agent via bx24mcp_submit_feedback
 labels: agent-feedback
 ---
 
-**Kind**: positive | issue | suggestion
+**Kind**: positive | problem | suggestion
 **Related tool**: <name or n/a>
 **Severity**: low | medium | high | n/a
 
@@ -308,7 +308,7 @@ Each submission creates a GitHub issue in `bitrix24/templates-mcp` with the `age
 
 - GitHub token is isolated in a single file (`server/utils/github-feedback.ts`)
 - Rate limit on the MCP server: max 5 issues/hour per MCP token, to prevent flooding (expandable if needed)
-- Feedback content is sanitised: truncated to 10000 chars, Markdown control chars escaped
+- Feedback content is sanitised: truncated to 5000 chars, Markdown control chars escaped
 - In eval tests `submit-feedback` is mocked and does not create real issues
 
 ## Renovate Bot — automated dependency updates

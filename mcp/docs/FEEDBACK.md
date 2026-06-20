@@ -1,6 +1,6 @@
 # Agent feedback (`bx24mcp_submit_feedback`)
 
-`Last reviewed: 2026-06-14`
+`Last reviewed: 2026-06-19`
 
 This MCP exposes a meta-tool — `bx24mcp_submit_feedback` — that lets the AI agent file a GitHub issue against this repository when it notices something worth reporting. The mechanism is the project's primary channel for structured, machine-authored feedback. This document is for **maintainers** triaging those issues and **operators** configuring the integration; agents should look at [`../skills/manage-bx24-template-mcp/feedback.md`](../skills/manage-bx24-template-mcp/feedback.md) for the calling guide.
 
@@ -12,9 +12,9 @@ Human-only feedback loops miss the patterns only an automated caller surfaces: a
 
 ```ts
 bx24mcp_submit_feedback({
-  kind: 'positive' | 'issue' | 'suggestion',
+  kind: 'positive' | 'problem' | 'suggestion',
   summary: string,            // 5..200 chars, becomes the issue title
-  details: string,            // 10..10000 chars (longer is truncated)
+  details: string,            // 10..5000 chars (longer is truncated)
   relatedTool?: string,       // sanitised to /^[a-z0-9_]{0,45}$/ — fits inside `tool:<name>` ≤ 50-char label
   severity?: 'low' | 'medium' | 'high',
 })
@@ -77,7 +77,7 @@ Both `summary` and `details` pass through the same hostile-character strip befor
 
 Beyond the strip:
 
-- `details` over 10 000 characters is truncated with a `[truncated to 10000 characters]` marker line; the marker stays inside the `<pre><code>` block in the rendered body.
+- `details` over 5 000 characters is truncated with a `[truncated to 5000 characters]` marker line; the marker stays inside the `<pre><code>` block in the rendered body.
 - `details` is HTML-escaped and rendered inside `<pre><code>`, so Markdown formatting (`*`, `_`, `` ` ``, `#`, `[`, etc.) and HTML tags from the agent render as literal text. This is the *only* defence against Markdown injection — agents are trusted to write reasonable prose, but the framing keeps a careless or hostile call from breaking the issue layout.
 - `summary` is collapsed to a single line (any `\r\n` runs become a single space) and trimmed to 200 characters.
 - `relatedTool` is lowercased and reduced to `[a-z0-9_]{0,45}` before being embedded in a `tool:<name>` label — 45 chars is the longest name that fits inside GitHub's 50-character label limit alongside the prefix.
