@@ -181,6 +181,36 @@ describe('metrics pipeline integration (upload → processJob → /metrics/data)
   });
 });
 
+describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)', () => {
+  const spawn = () => makeAgentSpawn({ result: { deal: { dealId: '5' } } });
+  const extract = async () => ({ text: 'СЧЁТ', method: 'pdftotext' });
+
+  it('SHOW_TIMINGS on → ответ содержит флаг + тайминги по файлам', async () => {
+    const app = appWith({ showTimings: true, agentConfig: { spawnFn: spawn(), extractFn: extract } });
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`).attach('files[]', validPdf(), 'a.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+    const res = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.body.showTimings).toBe(true);
+    const f = res.body.files[0];
+    expect(typeof f.startedAt).toBe('number');
+    expect(typeof f.durationMs).toBe('number');
+    expect(f.durationMs).toBeGreaterThanOrEqual(0);
+    expect('agentMs' in f).toBe(true); // present (число из agentMeta, либо null)
+  });
+
+  it('по умолчанию (выключено) — таймингов и флага в ответе нет', async () => {
+    const app = appWith({ agentConfig: { spawnFn: spawn(), extractFn: extract } });
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`).attach('files[]', validPdf(), 'a.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+    const res = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.body.showTimings).toBeUndefined();
+    const f = res.body.files[0];
+    expect('startedAt' in f).toBe(false);
+    expect('durationMs' in f).toBe(false);
+    expect('agentMs' in f).toBe(false);
+  });
+});
+
 // Poll a job to a terminal state; returns the final status.
 async function waitJob(app, jobId, maxMs = 5000) {
   const deadline = Date.now() + maxMs;
