@@ -411,6 +411,7 @@ claude
 - [docs/PARSING_PERFORMANCE.md](docs/PARSING_PERFORMANCE.md) — «быстро/медленно» при разборе файла + калибровка порогов
 - [docs/FEEDBACK.md](docs/FEEDBACK.md) — каналы обратной связи (сотрудник 👍/👎/💡 и сигналы агента)
 - [docs/1C_UT_INTEGRATION.md](docs/1C_UT_INTEGRATION.md) — ТЗ интеграции с «1С: Управление торговлей» через MCP
+- [docs/B24_BOT.md](docs/B24_BOT.md) — дизайн чат-бота Битрикс24 (файл в чат → разбор → результат + 👍/👎); **к реализации**
 - [prompts/main.md](prompts/main.md) — системный промпт агента
 
 ---
