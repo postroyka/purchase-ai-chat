@@ -10,6 +10,7 @@ import MoneyIcon from '@bitrix24/b24icons-vue/outline/MoneyIcon'
 import AlertIcon from '@bitrix24/b24icons-vue/outline/AlertIcon'
 import WarningIcon from '@bitrix24/b24icons-vue/main/WarningIcon'
 import { computeMatchingReasons, MATCHING_REASON_LABELS, SUPPLIER_LABELS } from '~/utils/matching-reasons'
+import { money } from '~/utils/money'
 
 definePageMeta({ layout: 'default' })
 
@@ -72,10 +73,7 @@ const feedbackTotal = computed(() => {
 const matchingReasons = computed(() => computeMatchingReasons(data.value))
 
 // ── Formatters ───────────────────────────────────────────────────────────────
-// Единый денежный формат: пробел-разряды, точка-десятичные, 2 знака, валюта строчным суффиксом
-// (3.62 usd / 55 123.62 byn). en-US даёт «,»-разряды + «.»-дробную → меняем «,» на пробел.
-const money = (n: number, cur: 'usd' | 'byn') =>
-  `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n).replace(/,/g, ' ')} ${cur}`
+// Денежный формат вынесен в app/utils/money.ts (юнит-тесты) — `55 123.62 usd` / `66 356.49 byn`.
 const fmtByn = (n: number) => money(n, 'byn')
 const fmtUsd = (n: number) => money(n, 'usd')
 const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} с` : `${Math.round(ms)} мс`)
