@@ -12,9 +12,11 @@ import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
 import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
-import { createSessionAuth, parseCookies } from './auth.js';
+import { createSessionAuth, parseCookies, domainAllowed } from './auth.js';
 import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy } from './feedback.js';
 import { createAgentFeedbackReporter } from './agent-feedback.js';
+import { parseBotEvent, handleBotEvent } from './b24-bot.js';
+import { makeBotApi } from './b24-bot-api.js';
 import { safeCompare } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -370,12 +372,15 @@ export function createApp(config = {}) {
   }
   // The B24 app.info allowlist is derived from the SAME frame-ancestors origins as the CSP, so
   // ops sets only B24_FRAME_ANCESTORS. portalDomains tests can override via config.portalDomains.
+  // SSRF-allowlist портала (из B24_FRAME_ANCESTORS) — общий для /session/b24 (app.info) и обратных
+  // вызовов чат-бота (b24-bot-api.js): один env управляет всеми исходящими к порталу.
+  const portalDomains = config.portalDomains ?? parseFrameAncestorHosts(frameAncestors);
   const sessionAuth = config.sessionAuth ?? createSessionAuth({
     secret: sessionSecret,
     user: basicAuthUser,
     pass: loginPass,
     secure: process.env.NODE_ENV === 'production',
-    portalDomains: config.portalDomains ?? parseFrameAncestorHosts(frameAncestors),
+    portalDomains,
     ttlMs: sessionTtlMs,
     appInfo: config.appInfo, // undefined in prod → auth.js uses its real fetch-based probe
   });
@@ -386,6 +391,14 @@ export function createApp(config = {}) {
   const authRateLimit = createRateLimiter({
     windowMs: config.loginRateLimitWindowMs ?? 60_000,
     max: config.loginRateLimitMax ?? 10,
+    redisClient: rateLimitRedis,
+  });
+
+  // Лимитер публичного бот-эндпоинта (DoS/брутфорс токена): keyed по IP (события Б24 без Authorization).
+  // Щедрее auth-лимитера — легальные события чата идут чаще; 0 = выкл (тесты).
+  const b24BotRateLimit = createRateLimiter({
+    windowMs: config.b24BotRateLimitWindowMs ?? 60_000,
+    max: config.b24BotRateLimitMax ?? 120,
     redisClient: rateLimitRedis,
   });
 
@@ -477,6 +490,41 @@ export function createApp(config = {}) {
       files: maxFilesPerRequest,
     },
   });
+
+  // Создание+запуск задания — ОБЩИЙ путь для /upload и чат-бота Б24 (b24-bot.js). files уже на диске
+  // (форма [{name,path,status:'pending',result:null,error:null}]). onDone(job) — опц. колбэк по
+  // завершении: UI поллит /job/:id/status и onDone не нужен, бот шлёт результат в чат.
+  async function createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId, onDone }) {
+    const job = { jobId, status: 'pending', responsibleUserId, files: fileEntries, dir: jobDir, createdAt: Date.now() };
+    await jobs.set(jobId, job); // бросает → caller чистит jobDir и отвечает 503
+    activeJobs++;
+    metrics.recordUpload({ fileCount: fileEntries.length }).catch(() => {}); // best-effort
+    processJob(jobId, jobs, agentConfig, metrics, agentFeedback)
+      .then(async () => {
+        if (!onDone) return;
+        try { await onDone(await jobs.get(jobId)); }
+        catch (e) { console.error(`[job ${jobId}] onDone failed:`, e?.message); }
+      })
+      .catch((e) => console.error(`[processJob] unhandled error for job ${jobId}:`, e))
+      .finally(() => { activeJobs--; });
+    return job;
+  }
+
+  // Завести GitHub-issue по отзыву (репо/токен из конфига) — общий путь для /feedback и бота.
+  async function createFeedbackIssue({ kind, comment, context }) {
+    const { title, body, labels } = buildIssue({ kind, comment, context });
+    return createGithubIssue({ repo: githubFeedbackRepo, token: githubFeedbackToken, title, body, labels });
+  }
+
+  // Отзыв из чата бота (👍/👎): счётчик пишем всегда (source:'user', как у виджета сотрудника),
+  // issue — best-effort и только при настроенном токене (бот не должен падать на телеметрии).
+  async function submitChatFeedback({ kind, jobId, reporter }) {
+    metrics.recordFeedback({ source: 'user', kind }).catch(() => {});
+    if (!githubFeedbackToken) return;
+    const comment = kind === 'positive' ? 'Оценка из чата Битрикс24: 👍 верно' : 'Оценка из чата Битрикс24: 👎 не то';
+    const context = { jobId: /^[A-Za-z0-9-]{1,64}$/.test(String(jobId ?? '')) ? String(jobId) : '', reporter: String(reporter ?? '') };
+    await createFeedbackIssue({ kind, comment, context });
+  }
 
   // POST /upload — two DoS guards: per-token rate limit (uploadRateLimit) bounds request
   // frequency, and the concurrency cap below bounds how many agent subprocesses run at once.
@@ -582,28 +630,13 @@ export function createApp(config = {}) {
       }
 
       const responsibleUserId = hasResponsible ? String(rawResponsible) : responsibleUserIdDefault;
-
-      const job = {
-        jobId,
-        status: 'pending',
-        responsibleUserId,
-        files: fileEntries,
-        dir: jobDir,
-        createdAt: Date.now(),
-      };
       try {
-        await jobs.set(jobId, job);
+        await createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId });
       } catch (e) {
         console.error(`[upload] failed to persist job ${jobId}:`, e.message);
         fs.rmSync(jobDir, { recursive: true, force: true });
         return res.status(503).json({ error: 'Job store unavailable — please retry' });
       }
-
-      activeJobs++;
-      metrics.recordUpload({ fileCount: fileEntries.length }).catch(() => {}); // best-effort
-      processJob(jobId, jobs, agentConfig, metrics, agentFeedback).catch((e) =>
-        console.error(`[processJob] unhandled error for job ${jobId}:`, e),
-      ).finally(() => { activeJobs--; });
 
       return res.status(201).json({
         jobId,
@@ -711,11 +744,8 @@ export function createApp(config = {}) {
       reporter: feedbackReporter(req),
     };
 
-    const { title, body: issueBody, labels } = buildIssue({ kind, comment, context });
     try {
-      const issue = await createGithubIssue({
-        repo: githubFeedbackRepo, token: githubFeedbackToken, title, body: issueBody, labels,
-      });
+      const issue = await createFeedbackIssue({ kind, comment, context });
       metrics.recordFeedback({ source: 'user', kind }).catch(() => {}); // best-effort, → /metrics
       return res.status(201).json({ ok: true, url: issue.url, number: issue.number });
     } catch (e) {
@@ -726,6 +756,35 @@ export function createApp(config = {}) {
       const status = code === 'NOT_CONFIGURED' ? 503 : 502;
       return res.status(status).json({ error: 'Could not submit feedback right now. Please try again later.' });
     }
+  });
+
+  // POST /b24/bot/event — публичный обработчик событий чат-бота Б24 2.0 (дизайн docs/B24_BOT.md).
+  // Без requireAuth (Б24 ходит снаружи server→server); защита — сверка ВЕРХНЕГО auth.application_token
+  // (constant-time) + лимит тела. Включается заданием B24_BOT_APPLICATION_TOKEN; без него любой POST
+  // отвергается (403). Тело — form-urlencoded с PHP-ключами (express.urlencoded extended).
+  const b24BotAppToken = config.b24BotApplicationToken ?? process.env.B24_BOT_APPLICATION_TOKEN ?? '';
+  app.post('/b24/bot/event', b24BotRateLimit, express.urlencoded({ extended: true, limit: '64kb' }), (req, res) => {
+    const evt = parseBotEvent(req.body ?? {});
+    if (!b24BotAppToken || !safeCompare(evt.applicationToken, b24BotAppToken)) {
+      return res.status(403).json({ error: 'invalid application_token' });
+    }
+    // 200 быстро (Б24 не гарантирует повтор обработчика) — тяжёлую работу делаем асинхронно.
+    res.status(200).json({ ok: true });
+    const api = config.botApi ?? makeBotApi({
+      restEndpoint: evt.bot.restEndpoint, uploadDir, allowedExtensions,
+      maxBytes: maxFileSizeMb * 1024 * 1024, maxFiles: maxFilesPerRequest,
+      // SSRF: исходящие бота (REST-callback + downloadUrl) только на разрешённые домены портала + redirect:'error'.
+      isAllowedHost: (host) => domainAllowed(host, portalDomains),
+    });
+    handleBotEvent(evt, {
+      createAndStartJob,
+      submitFeedback: submitChatFeedback,
+      hasCapacity: () => activeJobs < maxConcurrentJobs,
+      responsibleUserIdFor: (uid) => (/^\d+$/.test(String(uid)) ? String(uid) : responsibleUserIdDefault),
+      downloadAndSaveFiles: (files, opts) => api.downloadAndSaveFiles(files, { ...opts, botId: evt.bot.id }),
+      sendMessage: (m) => api.sendMessage(m),
+      log: (m) => console.error(m),
+    }).catch((e) => console.error('[b24bot] handler error:', e?.message));
   });
 
   // Serve the built UI (only present in the Docker image) OPENLY so the Bitrix24 iframe can load
