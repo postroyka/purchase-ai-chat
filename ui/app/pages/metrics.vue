@@ -72,9 +72,12 @@ const feedbackTotal = computed(() => {
 const matchingReasons = computed(() => computeMatchingReasons(data.value))
 
 // ── Formatters ───────────────────────────────────────────────────────────────
-const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
-const fmtByn = (n: number) => `${nf.format(n)} BYN`
-const fmtUsd = (n: number) => `$${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 4 }).format(n)}`
+// Единый денежный формат: пробел-разряды, точка-десятичные, 2 знака, валюта строчным суффиксом
+// (3.62 usd / 55 123.62 byn). en-US даёт «,»-разряды + «.»-дробную → меняем «,» на пробел.
+const money = (n: number, cur: 'usd' | 'byn') =>
+  `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n).replace(/,/g, ' ')} ${cur}`
+const fmtByn = (n: number) => money(n, 'byn')
+const fmtUsd = (n: number) => money(n, 'usd')
 const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} с` : `${Math.round(ms)} мс`)
 const fmtDateTime = (iso?: string) => (iso ? new Date(iso).toLocaleString('ru-RU') : '—')
 
