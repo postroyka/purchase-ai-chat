@@ -27,14 +27,14 @@ describe('format-duration (#замеры)', () => {
     expect(humanMs(59940)).toBe('59.9 с') // ниже границы — секунды
   })
 
-  it('timingLine: всего / +агент / +извлечение; null длительность → ""', () => {
+  it('timingLine: всего / +скорость / +агент / +извлечение; null длительность → ""', () => {
     expect(timingLine({ durationMs: null })).toBe('')
-    expect(timingLine({ durationMs: 48500 })).toBe('⏱ всего 48.5 с')
-    expect(timingLine({ durationMs: 48500, agentMs: 44200 })).toBe('⏱ всего 48.5 с · агент 44.2 с')
-    expect(timingLine({ durationMs: 48500, agentMs: 44200, extractMethod: 'ocr' }))
-      .toBe('⏱ всего 48.5 с · агент 44.2 с · извлечение: ocr')
+    expect(timingLine({ durationMs: 48500, agentMs: 44200 })).toBe('⏱ всего 48.5 с · агент 44.2 с') // без speed
+    expect(timingLine({ durationMs: 80200, speed: 'normal' })).toBe('⏱ всего 1 мин 20 с — норма')
+    expect(timingLine({ durationMs: 120000, speed: 'slow', agentMs: 110000, extractMethod: 'ocr' }))
+      .toBe('⏱ всего 2 мин — медленно · агент 1 мин 50 с · извлечение: ocr')
     // агент отсутствует (null, напр. ошибка) — секцию агента не показываем
-    expect(timingLine({ durationMs: 5000, extractMethod: 'pdftotext' }))
-      .toBe('⏱ всего 5.0 с · извлечение: pdftotext')
+    expect(timingLine({ durationMs: 5000, speed: 'fast', extractMethod: 'pdftotext' }))
+      .toBe('⏱ всего 5.0 с — быстро · извлечение: pdftotext')
   })
 })

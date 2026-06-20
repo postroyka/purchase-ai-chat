@@ -24,13 +24,19 @@ export function humanMs(ms: number): string {
   return s ? `${m} мин ${s} с` : `${m} мин`
 }
 
-// Строка замеров для лога результата: «⏱ всего 48.5 с · агент 44.2 с · извлечение: ocr».
-// `агент`/`извлечение` — только если backend их вернул (на ошибке агента agentMs/extractMethod нет).
+// Метки классификации total-времени файла (backend, пороги TIMING_FAST_MS/TIMING_SLOW_MS).
+export const SPEED_LABELS: Record<string, string> = { fast: 'быстро', normal: 'норма', slow: 'медленно' }
+
+// Строка замеров для лога результата: «⏱ всего 48.5 с — норма · агент 44.2 с · извлечение: ocr».
+// `— <скорость>`/`агент`/`извлечение` — только если backend их вернул (на ошибке агента нет agentMs).
 // Точное время извлечения отдельно не меряется (остаток «всего−агент» включал бы ретрай-бэкофф),
 // поэтому показываем МЕТОД извлечения (ocr/pdftotext/office) — частый ответ на «где медленно».
-export function timingLine(file: { durationMs?: number | null, agentMs?: number | null, extractMethod?: string | null }): string {
+export function timingLine(
+  file: { durationMs?: number | null, agentMs?: number | null, extractMethod?: string | null, speed?: string | null }
+): string {
   if (file.durationMs == null) return ''
   let s = `⏱ всего ${humanMs(file.durationMs)}`
+  if (file.speed && SPEED_LABELS[file.speed]) s += ` — ${SPEED_LABELS[file.speed]}`
   if (file.agentMs != null) s += ` · агент ${humanMs(file.agentMs)}`
   if (file.extractMethod) s += ` · извлечение: ${file.extractMethod}`
   return s

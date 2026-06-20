@@ -4,7 +4,7 @@ import request from 'supertest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createApp, classifyAgentError } from '../index.js';
+import { createApp, classifyAgentError, classifySpeed } from '../index.js';
 import { createMetrics } from '../metrics.js';
 
 vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -197,6 +197,7 @@ describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)
     expect(f.durationMs).toBeGreaterThanOrEqual(0);
     expect(f.agentMs).toBe(1234); // из wrapper.duration_ms (agentMeta.agentDurationMs)
     expect(f.extractMethod).toBe('pdftotext'); // метод извлечения проброшен
+    expect(f.speed).toBe('fast'); // мок-прогон укладывается в дефолтный FAST-порог (45 с)
   });
 
   it('error-путь: тайминги есть, но agentMs и extractMethod = null (agentMeta не заполнен)', async () => {
@@ -224,6 +225,21 @@ describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)
     expect('startedAt' in f).toBe(false);
     expect('durationMs' in f).toBe(false);
     expect('agentMs' in f).toBe(false);
+  });
+});
+
+describe('classifySpeed (#замеры — пороги быстро/медленно)', () => {
+  it('fast ≤ FAST, slow ≥ SLOW, между — normal (границы включительно)', () => {
+    expect(classifySpeed(10000, 45000, 90000)).toBe('fast');
+    expect(classifySpeed(45000, 45000, 90000)).toBe('fast');   // граница FAST — включительно
+    expect(classifySpeed(60000, 45000, 90000)).toBe('normal');
+    expect(classifySpeed(90000, 45000, 90000)).toBe('slow');   // граница SLOW — включительно
+    expect(classifySpeed(120000, 45000, 90000)).toBe('slow');
+  });
+  it('некорректное время → null', () => {
+    expect(classifySpeed(-1, 45000, 90000)).toBeNull();
+    expect(classifySpeed(null, 45000, 90000)).toBeNull();
+    expect(classifySpeed(Number.NaN, 45000, 90000)).toBeNull();
   });
 });
 
