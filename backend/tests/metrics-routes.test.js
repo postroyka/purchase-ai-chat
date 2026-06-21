@@ -180,6 +180,52 @@ describe('metrics pipeline integration (upload → processJob → /metrics/data)
     expect(fb == null || fb.length === 0).toBe(true); // без форса — отзыва нет
   });
 
+  it('#205: глобальный AGENT_FORCE_FEEDBACK=true форсит и без query (env-путь не сломан per-job-флагом)', async () => {
+    const prev = process.env.AGENT_FORCE_FEEDBACK;
+    process.env.AGENT_FORCE_FEEDBACK = 'true';
+    try {
+      const metrics = createMetrics({ redisUrl: '' });
+      const app = appWith({
+        metrics,
+        agentConfig: {
+          spawnFn: makeAgentSpawn({ result: { deal: { dealId: '9' } } }),
+          extractFn: async () => ({ text: 'СЧЁТ', method: 'pdftotext' }),
+        },
+      });
+      const up = await request(app) // БЕЗ ?forceFeedback — форсит именно env-флаг
+        .post('/upload')
+        .set('Authorization', `Bearer ${TOKEN}`)
+        .attach('files[]', validPdf(), 'invoice.pdf');
+      expect(await waitJob(app, up.body.jobId)).toBe('done');
+      const r = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+      const fb = r.body.files[0].result?.feedback;
+      expect(Array.isArray(fb) && fb.length > 0).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.AGENT_FORCE_FEEDBACK; else process.env.AGENT_FORCE_FEEDBACK = prev;
+    }
+  });
+
+  it('#207: бакет скорости берётся из ИНЪЕКТИРОВАННЫХ порогов, а не из дефолтов', async () => {
+    const metrics = createMetrics({ redisUrl: '' });
+    // fastMs=-1 → никогда не «fast»; slowMs=0 → любая длительность ≥0 попадёт в «slow». Если бы
+    // processJob игнорировал пороги и брал дефолт 45000, быстрый мок-прогон попал бы в «fast».
+    const app = appWith({
+      metrics, timingFastMs: -1, timingSlowMs: 0,
+      agentConfig: {
+        spawnFn: makeAgentSpawn({ result: { deal: { dealId: '11' } } }),
+        extractFn: async () => ({ text: 'СЧЁТ', method: 'pdftotext' }),
+      },
+    });
+    const up = await request(app)
+      .post('/upload')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .attach('files[]', validPdf(), 'invoice.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+    const res = await request(app).get('/metrics/data').set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.body.speed).toContainEqual({ name: 'slow', count: 1 });
+    expect(res.body.speed.find((x) => x.name === 'fast')).toBeFalsy();
+  });
+
   it('records a business error outcome (e.g. tool_unavailable) as done-but-not-ok', async () => {
     const metrics = createMetrics({ redisUrl: '' });
     const app = appWith({

@@ -74,6 +74,17 @@ const feedbackTotal = computed(() => {
   return sum(f.user) + sum(f.agent)
 })
 
+// issue #207: процентное распределение скорости разбора (то самое «62% быстро / 30% норма / 8% медленно»)
+// под плиткой — счётчики MetricsBarList дополняем долями. Пустое → '' (плитка тогда не показывается).
+const speedSummary = computed(() => {
+  const items = data.value?.speed ?? []
+  const total = items.reduce((n, x) => n + x.count, 0)
+  if (!total) return ''
+  return (['fast', 'normal', 'slow'] as const)
+    .map(k => `${SPEED_LABELS[k]} ${Math.round(((items.find(i => i.name === k)?.count ?? 0) / total) * 100)}%`)
+    .join(' · ')
+})
+
 // «Проблемы матчинга» (issue #182, канал «MCP»). Fold + labels live in a pure, unit-tested module
 // (app/utils/matching-reasons.ts) — the granular "which suppliers" view is data.matching.suppliers.
 const matchingReasons = computed(() => computeMatchingReasons(data.value))
@@ -280,11 +291,14 @@ const sparkPoints = computed(() => {
             <MetricsBarList :items="data.extract" :labels="EXTRACT_LABELS" />
           </B24Card>
 
-          <!-- issue #207: распределение скорости разбора (по total-времени файла) -->
+          <!-- issue #207: распределение скорости разбора (по total-времени успешно разобранных файлов) -->
           <B24Card v-if="data.speed?.length" class="rounded-xl" :b24ui="{ body: 'p-5' }">
-            <h3 class="text-sm font-semibold text-base-700 mb-4">
+            <h3 class="text-sm font-semibold text-base-700 mb-1">
               Скорость разбора
             </h3>
+            <p class="mb-4 text-xs text-base-500">
+              {{ speedSummary }}
+            </p>
             <MetricsBarList :items="data.speed" :labels="SPEED_LABELS" />
           </B24Card>
         </section>

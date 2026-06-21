@@ -63,7 +63,8 @@ const K = {
   daily: 'metrics:daily',
   // issue #207: распределение «быстро/норма/медленно» по total-времени файла (бакеты классифицирует
   // backend/index.js classifySpeed по порогам TIMING_FAST_MS/TIMING_SLOW_MS). NO-TTL total — агрегат,
-  // не сырые тайминги (заказчик одобрил показ распределения в метриках).
+  // не сырые тайминги (заказчик одобрил показ распределения в метриках). Считается только по УСПЕШНО
+  // разобранным файлам (status done); ошибки/таймауты сюда не входят (их длительность не про скорость).
   speed: 'metrics:speed',
   // issue #182, channels «агент» + «сотрудник»: non-terminal agent quality signals (by code) and
   // feedback volume split by source (user 👍/👎/💡 vs agent developer-feedback), both NO-TTL totals.

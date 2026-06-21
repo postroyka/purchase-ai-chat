@@ -310,10 +310,7 @@ export function createApp(config = {}) {
   // The live NB RB rate is wired at the prod entry point (bottom of file), not here, so
   // createApp stays hermetic — no outbound api.nbrb.by call from the unit/route test suites.
   const metrics = config.metrics ?? createMetrics({ redisUrl });
-  // Пороги скорости разбора добавляем в agentConfig, чтобы processJob (module-scope) мог
-  // классифицировать файл в бакет fast/normal/slow для метрики распределения (#207). runAgent их
-  // игнорирует. Инъекция config.agentConfig (тесты) может переопределить.
-  const agentConfig = { timingFastMs, timingSlowMs, ...(config.agentConfig ?? {}) };
+  const agentConfig = config.agentConfig ?? {};
   // Rate-limiter state in Redis when available (multi-instance-safe, survives restart — #105);
   // dedicated lazy client mirroring jobs-store. Tests inject a fake via config.rateLimitRedis.
   // commandTimeout 1s (tighter than jobs-store's 3s): a rate-limit check must be fast, and a
@@ -494,7 +491,7 @@ export function createApp(config = {}) {
     await jobs.set(jobId, job); // бросает → caller чистит jobDir и отвечает 503
     activeJobs++;
     metrics.recordUpload({ fileCount: fileEntries.length }).catch(() => {}); // best-effort
-    processJob(jobId, jobs, agentConfig, metrics, agentFeedback)
+    processJob(jobId, jobs, agentConfig, metrics, agentFeedback, { fastMs: timingFastMs, slowMs: timingSlowMs })
       .then(async () => {
         if (!onDone) return;
         try { await onDone(await jobs.get(jobId)); }
@@ -854,7 +851,7 @@ export function classifySpeed(durationMs, fastMs, slowMs) {
   return 'normal';
 }
 
-async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null) {
+async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null, timing = {}) {
   const job = await jobs.get(jobId);
   if (!job) return;
 
@@ -874,8 +871,9 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       const result = await runAgent(fileEntry.path, job.responsibleUserId, {
         ...agentConfig, jobId, onMeta: (m) => { agentMeta = m; },
         // Per-job форс отзыва агента (#205): job.forceFeedback (из ?forceFeedback=1) ИЛИ глобальный
-        // флаг. undefined → runAgent сам читает env AGENT_FORCE_FEEDBACK (не перетираем false-ом).
-        forceFeedback: job.forceFeedback || agentConfig.forceFeedback,
+        // флаг. Трейлинг `|| undefined` гарантирует, что любое falsy НЕ перетрёт env-флаг
+        // AGENT_FORCE_FEEDBACK (runAgent читает `config.forceFeedback ?? env`).
+        forceFeedback: job.forceFeedback || agentConfig.forceFeedback || undefined,
       });
       // A created deal is the only success signal (prompts/main.md). Detect it up front so it can be
       // used for both the metrics outcome and the result-page badge, AND preserved through truncation.
@@ -915,9 +913,10 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       fileEntry.agentMs = (agentMeta && Number.isFinite(agentMeta.agentDurationMs)) ? agentMeta.agentDurationMs : null;
       // Метод извлечения текста (pdftotext/ocr/office) — частый ответ на «где медленно» (OCR-скан).
       fileEntry.extractMethod = (agentMeta && typeof agentMeta.extractMethod === 'string') ? agentMeta.extractMethod : null;
-      // Бакет скорости разбора для распределения на /metrics (#207) — по total-времени файла,
-      // пороги из agentConfig (фолбэк на дефолты, если не переданы при инъекции).
-      const speed = classifySpeed(durationMs, agentConfig.timingFastMs ?? 45000, agentConfig.timingSlowMs ?? 90000);
+      // Бакет скорости разбора для распределения на /metrics (#207) — по total-времени файла.
+      // Считаем только на УСПЕШНОМ разборе (status done); ошибочные/таймаут-файлы в распределение не
+      // попадают (их длительность не отражает скорость разбора). Пороги — из createApp (timing).
+      const speed = classifySpeed(durationMs, timing.fastMs, timing.slowMs);
       metrics?.recordFile({
         format, status: 'done', outcome, durationMs, agent: agentMeta,
         positions: items.length, positionsNoArticle, speed,
