@@ -83,12 +83,25 @@ class ProcureProduct
 			['ID' => 'ASC'],                 // мин. ID при дублях
 			['=PROPERTY_PURCHASE_ARTICLE' => $vendorCode] + $base,
 			false,
-			['nTopCount' => 1],
+			['nTopCount' => 2],              // #195: до 2 — заметить мультиматч (>1 товар на артикул)
 			['ID', 'NAME', 'PROPERTY_PURCHASE_ARTICLE']
 		);
-		if(is_object($exact) && ($row = $exact->Fetch()))
+		$rows = [];
+		if(is_object($exact))
 		{
-			return self::formatProduct($row);
+			while(count($rows) < 2 && ($row = $exact->Fetch()))
+			{
+				$rows[] = $row;
+			}
+		}
+		if($rows)
+		{
+			$out = self::formatProduct($rows[0]);
+			if(count($rows) >= 2)
+			{
+				$out['multi'] = true; // #195: артикул совпал с >1 товаром — молча взяли min(id)
+			}
+			return $out;
 		}
 
 		// Точного совпадения нет → товар не найден. Подмену раскладки/гомоглифов и

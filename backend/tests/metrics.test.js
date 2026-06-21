@@ -214,11 +214,35 @@ describe('metrics — agent signals & feedback (#182)', () => {
     expect(s.matching.suppliers.find((x) => x.name === '100000')).toEqual({ name: '100000', count: 2 });
   });
 
+  it('issue #195: телеметрия v2 — мультиматчи по шагам + несопоставленные артикулы (санитизация/дедуп)', async () => {
+    const m = mem();
+    // мультиматч: product дважды, supplier один раз; bogus_step — не из набора → отброшен
+    await m.recordMatching({ result: { matching: { multiMatches: ['supplier', 'product'], unmatchedArticles: ['ART-1', 'art-1', ''] } } });
+    await m.recordMatching({ result: { matching: { multiMatches: ['product', 'bogus_step'], unmatchedArticles: ['ART-2'] } } });
+    const s = await m.snapshot();
+    expect(s.matching.multi).toContainEqual({ name: 'product', count: 2 });
+    expect(s.matching.multi).toContainEqual({ name: 'supplier', count: 1 });
+    expect(s.matching.multi.find((x) => x.name === 'bogus_step')).toBeFalsy(); // не из набора шагов
+    // 'ART-1' и 'art-1' → один 'ART-1' (верхний регистр + дедуп в рамках файла); '' отброшен
+    expect(s.matching.articles).toContainEqual({ name: 'ART-1', count: 1 });
+    expect(s.matching.articles).toContainEqual({ name: 'ART-2', count: 1 });
+  });
+
+  it('issue #195: матчинг-телеметрия v2 сосуществует с v1 (supplier_not_found)', async () => {
+    const m = mem();
+    // результат с supplier_not_found И структурой matching — учитываются обе ветки
+    await m.recordMatching({ result: { error: 'supplier_not_found', unp: '100345678', matching: { multiMatches: ['contract'], unmatchedArticles: ['Z-9'] } } });
+    const s = await m.snapshot();
+    expect(s.matching.suppliers).toContainEqual({ name: '100345678', count: 1 });
+    expect(s.matching.multi).toContainEqual({ name: 'contract', count: 1 });
+    expect(s.matching.articles).toContainEqual({ name: 'Z-9', count: 1 });
+  });
+
   it('empty snapshot exposes well-formed warnings + feedback + matching', async () => {
     const s = await mem().snapshot();
     expect(s.warnings).toEqual([]);
     expect(s.feedback).toEqual({ user: [], agent: [] });
-    expect(s.matching).toEqual({ suppliers: [] });
+    expect(s.matching).toEqual({ suppliers: [], multi: [], articles: [] });
   });
 });
 

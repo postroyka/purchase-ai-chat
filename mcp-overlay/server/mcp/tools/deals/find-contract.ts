@@ -8,6 +8,8 @@ interface ContractResult {
   number?: string
   /** Contract date as returned by Bitrix24, formatted d.m.Y (e.g. "15.03.2025"). */
   date?: string
+  // #195: true, если под номер+дату подошло >1 договора (взят min id) — мультиматч.
+  multi?: boolean
 }
 
 /**

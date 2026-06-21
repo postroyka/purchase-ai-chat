@@ -46,6 +46,12 @@ const SPEED_LABELS: Record<string, string> = {
   normal: 'Норма',
   slow: 'Медленно'
 }
+// issue #195: шаги матчинга для плитки мультиматчей.
+const MULTI_STEP_LABELS: Record<string, string> = {
+  supplier: 'Поставщик',
+  contract: 'Договор',
+  product: 'Товар'
+}
 // Feedback (issue #182) — shared by the employee 👍/👎/💡 channel and the agent channel.
 const FEEDBACK_KIND_LABELS: Record<string, string> = {
   positive: '👍 Хорошо',
@@ -368,6 +374,31 @@ const sparkPoints = computed(() => {
                 Поставщики без матча (по УНП)
               </h3>
               <MetricsBarList v-if="data.matching.suppliers.length" :items="data.matching.suppliers" :labels="SUPPLIER_LABELS" />
+              <p v-else class="text-sm text-base-500">
+                Нет данных
+              </p>
+            </B24Card>
+
+            <!-- issue #195: мультиматчи (инструмент молча взял один из нескольких — риск «не тот») -->
+            <B24Card class="rounded-xl" :b24ui="{ body: 'p-5' }">
+              <h3 class="text-sm font-semibold text-base-700 mb-1">
+                Мультиматчи (взяли один из нескольких)
+              </h3>
+              <p class="text-xs text-base-500 mb-4">
+                Совпало больше одного — риск привязать не того
+              </p>
+              <MetricsBarList v-if="data.matching.multi?.length" :items="data.matching.multi" :labels="MULTI_STEP_LABELS" />
+              <p v-else class="text-sm text-base-500">
+                Нет мультиматчей
+              </p>
+            </B24Card>
+
+            <!-- issue #195: топ несопоставленных артикулов (vendorCode не найден в каталоге) -->
+            <B24Card class="rounded-xl" :b24ui="{ body: 'p-5' }">
+              <h3 class="text-sm font-semibold text-base-700 mb-4">
+                Артикулы без матча
+              </h3>
+              <MetricsBarList v-if="data.matching.articles?.length" :items="data.matching.articles" />
               <p v-else class="text-sm text-base-500">
                 Нет данных
               </p>

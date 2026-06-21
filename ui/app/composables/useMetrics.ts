@@ -45,7 +45,8 @@ export interface MetricsSnapshot {
   warnings: MetricNamedCount[]
   feedback: { user: MetricNamedCount[], agent: MetricNamedCount[] }
   // issue #182 channel «MCP»: where matching fails — suppliers (by УНП) most often not matched.
-  matching: { suppliers: MetricNamedCount[] }
+  // issue #195 v2: мультиматчи по шагам (supplier/contract/product) + топ несопоставленных артикулов.
+  matching: { suppliers: MetricNamedCount[], multi: MetricNamedCount[], articles: MetricNamedCount[] }
   daily: { date: string, files: number }[]
 }
 

@@ -31,6 +31,13 @@ describe('b24_pst_crm_find_supplier', () => {
     expect(fake.v3Call).not.toHaveBeenCalled()
   })
 
+  it('пробрасывает признак мультиматча из контроллера (#195)', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ id: 42, title: 'ООО Поставщик', unp: '123456789', multi: true }))
+
+    const result = await (tool as any).handler({ unp: '123456789' })
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ id: 42, multi: true })
+  })
+
   it('returns { id: null } when controller returns null', async () => {
     fake.v2Call.mockResolvedValue(fakeOk(null))
 
