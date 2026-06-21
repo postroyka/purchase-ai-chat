@@ -6,7 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import Redis from 'ioredis';
 import { createHash } from 'node:crypto';
-import { fileTypeFromBuffer } from 'file-type';
+import { MIME_SNIFF_BYTES, validateSniffedMime } from './file-validation.js';
 import { createJobsStore } from './jobs-store.js';
 import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
@@ -43,20 +43,8 @@ export function classifyAgentError(msg) {
 const AUTH_PLACEHOLDER = 'replace-with-secure-token';
 const BASIC_AUTH_PLACEHOLDER = 'replace-with-secure-password';
 
-const ALLOWED_MIME_TYPES = new Set([
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
-  'image/jpeg', // jpg/jpeg
-  'image/png',  // png
-  // Ambiguous containers below also match other formats — gated by the extension check
-  // after detection: application/zip → xlsx/docx, application/x-cfb (OLE2) → xls
-  'application/zip',
-  'application/x-cfb',
-]);
-
-// file-type needs ≥4096 bytes to reliably detect OOXML (xlsx/docx) formats
-const MIME_SNIFF_BYTES = 4100;
+// ALLOWED_MIME_TYPES + MIME_SNIFF_BYTES + the magic-byte validator now live in ./file-validation.js
+// so /upload (below) and the chat-bot download boundary (b24-bot-api.js, #216) share one content check.
 
 // Caps for agent-derived fields persisted to Redis and returned via the API,
 // so a malformed/oversized agent response can't bloat the store or the response.
@@ -574,25 +562,11 @@ export function createApp(config = {}) {
         }
 
         const ext = path.extname(f.originalname).slice(1).toLowerCase();
-        const detected = await fileTypeFromBuffer(buf);
-        if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
+        const verdict = await validateSniffedMime(buf, ext);
+        if (!verdict.ok) {
           cleanupTmpFiles(req.files);
           return res.status(400).json({
-            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${detected?.mime ?? 'unknown'}).`,
-          });
-        }
-        // application/zip is a structural fallback for xlsx/docx — reject if ext doesn't match
-        if (detected.mime === 'application/zip' && !['xlsx', 'docx'].includes(ext)) {
-          cleanupTmpFiles(req.files);
-          return res.status(400).json({
-            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${detected.mime}).`,
-          });
-        }
-        // application/x-cfb (OLE2 compound file) is the signature of legacy .xls — reject for other exts
-        if (detected.mime === 'application/x-cfb' && ext !== 'xls') {
-          cleanupTmpFiles(req.files);
-          return res.status(400).json({
-            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${detected.mime}).`,
+            error: `File "${path.basename(decodeOriginalName(f.originalname))}" has invalid content type (detected: ${verdict.mime ?? 'unknown'}).`,
           });
         }
       }
