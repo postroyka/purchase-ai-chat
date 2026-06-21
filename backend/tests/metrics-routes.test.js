@@ -23,6 +23,7 @@ describe('GET /metrics/data', () => {
     expect(res.status).toBe(200);
     expect(res.body.totals).toMatchObject({ uploads: 0, files: 0, ok: 0 });
     expect(Array.isArray(res.body.outcomes)).toBe(true);
+    expect(Array.isArray(res.body.speed)).toBe(true); // issue #207 — часть контракта
     expect(Array.isArray(res.body.daily)).toBe(true);
     // issue #182 — feedback/warnings breakdowns are part of the contract.
     expect(Array.isArray(res.body.warnings)).toBe(true);
@@ -133,6 +134,96 @@ describe('metrics pipeline integration (upload → processJob → /metrics/data)
     expect(res.body.economics.positions).toBe(3);
     expect(res.body.economics.positionsNoArticle).toBe(2);
     expect(res.body.economics.netSavedByn).toBeGreaterThan(0);
+    // issue #207: распределение скорости — мок-прогон укладывается в FAST-порог (45 с по умолчанию)
+    expect(res.body.speed).toContainEqual({ name: 'fast', count: 1 });
+  });
+
+  it('#205: ?forceFeedback=1 форсит тестовый отзыв агента на это задание (без env-флага)', async () => {
+    const metrics = createMetrics({ redisUrl: '' });
+    const app = appWith({
+      metrics,
+      // Результат БЕЗ feedback — форс должен его добавить (env AGENT_FORCE_FEEDBACK не задан).
+      agentConfig: {
+        spawnFn: makeAgentSpawn({ result: { deal: { dealId: '7' } } }),
+        extractFn: async () => ({ text: 'СЧЁТ', method: 'pdftotext' }),
+      },
+    });
+    const up = await request(app)
+      .post('/upload?forceFeedback=1')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .attach('files[]', validPdf(), 'invoice.pdf');
+    expect(up.status).toBe(201);
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+
+    const r = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    const fb = r.body.files[0].result?.feedback;
+    expect(Array.isArray(fb) && fb.length > 0).toBe(true); // форс добавил синтетический отзыв
+  });
+
+  it('#205: без ?forceFeedback и без env-флага отзыв НЕ форсится', async () => {
+    const metrics = createMetrics({ redisUrl: '' });
+    const app = appWith({
+      metrics,
+      agentConfig: {
+        spawnFn: makeAgentSpawn({ result: { deal: { dealId: '8' } } }),
+        extractFn: async () => ({ text: 'СЧЁТ', method: 'pdftotext' }),
+      },
+    });
+    const up = await request(app)
+      .post('/upload')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .attach('files[]', validPdf(), 'invoice.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+
+    const r = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    const fb = r.body.files[0].result?.feedback;
+    expect(fb == null || fb.length === 0).toBe(true); // без форса — отзыва нет
+  });
+
+  it('#205: глобальный AGENT_FORCE_FEEDBACK=true форсит и без query (env-путь не сломан per-job-флагом)', async () => {
+    const prev = process.env.AGENT_FORCE_FEEDBACK;
+    process.env.AGENT_FORCE_FEEDBACK = 'true';
+    try {
+      const metrics = createMetrics({ redisUrl: '' });
+      const app = appWith({
+        metrics,
+        agentConfig: {
+          spawnFn: makeAgentSpawn({ result: { deal: { dealId: '9' } } }),
+          extractFn: async () => ({ text: 'СЧЁТ', method: 'pdftotext' }),
+        },
+      });
+      const up = await request(app) // БЕЗ ?forceFeedback — форсит именно env-флаг
+        .post('/upload')
+        .set('Authorization', `Bearer ${TOKEN}`)
+        .attach('files[]', validPdf(), 'invoice.pdf');
+      expect(await waitJob(app, up.body.jobId)).toBe('done');
+      const r = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+      const fb = r.body.files[0].result?.feedback;
+      expect(Array.isArray(fb) && fb.length > 0).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.AGENT_FORCE_FEEDBACK; else process.env.AGENT_FORCE_FEEDBACK = prev;
+    }
+  });
+
+  it('#207: бакет скорости берётся из ИНЪЕКТИРОВАННЫХ порогов, а не из дефолтов', async () => {
+    const metrics = createMetrics({ redisUrl: '' });
+    // fastMs=-1 → никогда не «fast»; slowMs=0 → любая длительность ≥0 попадёт в «slow». Если бы
+    // processJob игнорировал пороги и брал дефолт 45000, быстрый мок-прогон попал бы в «fast».
+    const app = appWith({
+      metrics, timingFastMs: -1, timingSlowMs: 0,
+      agentConfig: {
+        spawnFn: makeAgentSpawn({ result: { deal: { dealId: '11' } } }),
+        extractFn: async () => ({ text: 'СЧЁТ', method: 'pdftotext' }),
+      },
+    });
+    const up = await request(app)
+      .post('/upload')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .attach('files[]', validPdf(), 'invoice.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+    const res = await request(app).get('/metrics/data').set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.body.speed).toContainEqual({ name: 'slow', count: 1 });
+    expect(res.body.speed.find((x) => x.name === 'fast')).toBeFalsy();
   });
 
   it('records a business error outcome (e.g. tool_unavailable) as done-but-not-ok', async () => {

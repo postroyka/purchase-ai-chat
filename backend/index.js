@@ -483,12 +483,15 @@ export function createApp(config = {}) {
   // Создание+запуск задания — ОБЩИЙ путь для /upload и чат-бота Б24 (b24-bot.js). files уже на диске
   // (форма [{name,path,status:'pending',result:null,error:null}]). onDone(job) — опц. колбэк по
   // завершении: UI поллит /job/:id/status и onDone не нужен, бот шлёт результат в чат.
-  async function createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId, onDone }) {
+  async function createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId, onDone, forceFeedback = false }) {
     const job = { jobId, status: 'pending', responsibleUserId, files: fileEntries, dir: jobDir, createdAt: Date.now() };
+    // Форс тестового отзыва агента на ЭТО задание (#205): альтернатива глобальному AGENT_FORCE_FEEDBACK
+    // — тестировать канал на один аплоад, без рестарта и без шума у всех. Храним только true.
+    if (forceFeedback) job.forceFeedback = true;
     await jobs.set(jobId, job); // бросает → caller чистит jobDir и отвечает 503
     activeJobs++;
     metrics.recordUpload({ fileCount: fileEntries.length }).catch(() => {}); // best-effort
-    processJob(jobId, jobs, agentConfig, metrics, agentFeedback)
+    processJob(jobId, jobs, agentConfig, metrics, agentFeedback, { fastMs: timingFastMs, slowMs: timingSlowMs })
       .then(async () => {
         if (!onDone) return;
         try { await onDone(await jobs.get(jobId)); }
@@ -605,8 +608,11 @@ export function createApp(config = {}) {
       }
 
       const responsibleUserId = hasResponsible ? String(rawResponsible) : responsibleUserIdDefault;
+      // #205: ?forceFeedback=1 форсит тестовый отзыв агента на ЭТО задание (за requireAuth — только
+      // авторизованный тест), без глобального env-флага AGENT_FORCE_FEEDBACK и рестарта.
+      const forceFeedback = ['1', 'true'].includes(String(req.query?.forceFeedback ?? '').toLowerCase());
       try {
-        await createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId });
+        await createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId, forceFeedback });
       } catch (e) {
         console.error(`[upload] failed to persist job ${jobId}:`, e.message);
         fs.rmSync(jobDir, { recursive: true, force: true });
@@ -845,7 +851,7 @@ export function classifySpeed(durationMs, fastMs, slowMs) {
   return 'normal';
 }
 
-async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null) {
+async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null, timing = {}) {
   const job = await jobs.get(jobId);
   if (!job) return;
 
@@ -864,6 +870,10 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       // when multiple jobs run concurrently. onMeta captures usage metadata (#67).
       const result = await runAgent(fileEntry.path, job.responsibleUserId, {
         ...agentConfig, jobId, onMeta: (m) => { agentMeta = m; },
+        // Per-job форс отзыва агента (#205): job.forceFeedback (из ?forceFeedback=1) ИЛИ глобальный
+        // флаг. Трейлинг `|| undefined` гарантирует, что любое falsy НЕ перетрёт env-флаг
+        // AGENT_FORCE_FEEDBACK (runAgent читает `config.forceFeedback ?? env`).
+        forceFeedback: job.forceFeedback || agentConfig.forceFeedback || undefined,
       });
       // A created deal is the only success signal (prompts/main.md). Detect it up front so it can be
       // used for both the metrics outcome and the result-page badge, AND preserved through truncation.
@@ -903,9 +913,13 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       fileEntry.agentMs = (agentMeta && Number.isFinite(agentMeta.agentDurationMs)) ? agentMeta.agentDurationMs : null;
       // Метод извлечения текста (pdftotext/ocr/office) — частый ответ на «где медленно» (OCR-скан).
       fileEntry.extractMethod = (agentMeta && typeof agentMeta.extractMethod === 'string') ? agentMeta.extractMethod : null;
+      // Бакет скорости разбора для распределения на /metrics (#207) — по total-времени файла.
+      // Считаем только на УСПЕШНОМ разборе (status done); ошибочные/таймаут-файлы в распределение не
+      // попадают (их длительность не отражает скорость разбора). Пороги — из createApp (timing).
+      const speed = classifySpeed(durationMs, timing.fastMs, timing.slowMs);
       metrics?.recordFile({
         format, status: 'done', outcome, durationMs, agent: agentMeta,
-        positions: items.length, positionsNoArticle,
+        positions: items.length, positionsNoArticle, speed,
       });
       // Channel «MCP» (issue #182): record WHICH supplier failed to match (by УНП) so the dashboard
       // can rank the suppliers that fail most. Best-effort, derived from the same result. Method-guarded

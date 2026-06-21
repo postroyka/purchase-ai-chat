@@ -40,6 +40,12 @@ const EXTRACT_LABELS: Record<string, string> = {
   office: 'Office (xls/docx)',
   unknown: 'Неизвестно'
 }
+// issue #207: распределение скорости разбора (пороги TIMING_FAST_MS/TIMING_SLOW_MS).
+const SPEED_LABELS: Record<string, string> = {
+  fast: 'Быстро',
+  normal: 'Норма',
+  slow: 'Медленно'
+}
 // Feedback (issue #182) — shared by the employee 👍/👎/💡 channel and the agent channel.
 const FEEDBACK_KIND_LABELS: Record<string, string> = {
   positive: '👍 Хорошо',
@@ -66,6 +72,17 @@ const feedbackTotal = computed(() => {
   if (!f) return 0
   const sum = (xs: { count: number }[]) => xs.reduce((n, x) => n + x.count, 0)
   return sum(f.user) + sum(f.agent)
+})
+
+// issue #207: процентное распределение скорости разбора (то самое «62% быстро / 30% норма / 8% медленно»)
+// под плиткой — счётчики MetricsBarList дополняем долями. Пустое → '' (плитка тогда не показывается).
+const speedSummary = computed(() => {
+  const items = data.value?.speed ?? []
+  const total = items.reduce((n, x) => n + x.count, 0)
+  if (!total) return ''
+  return (['fast', 'normal', 'slow'] as const)
+    .map(k => `${SPEED_LABELS[k]} ${Math.round(((items.find(i => i.name === k)?.count ?? 0) / total) * 100)}%`)
+    .join(' · ')
 })
 
 // «Проблемы матчинга» (issue #182, канал «MCP»). Fold + labels live in a pure, unit-tested module
@@ -272,6 +289,17 @@ const sparkPoints = computed(() => {
               Способ извлечения текста
             </h3>
             <MetricsBarList :items="data.extract" :labels="EXTRACT_LABELS" />
+          </B24Card>
+
+          <!-- issue #207: распределение скорости разбора (по total-времени успешно разобранных файлов) -->
+          <B24Card v-if="data.speed?.length" class="rounded-xl" :b24ui="{ body: 'p-5' }">
+            <h3 class="text-sm font-semibold text-base-700 mb-1">
+              Скорость разбора
+            </h3>
+            <p class="mb-4 text-xs text-base-500">
+              {{ speedSummary }}
+            </p>
+            <MetricsBarList :items="data.speed" :labels="SPEED_LABELS" />
           </B24Card>
         </section>
 

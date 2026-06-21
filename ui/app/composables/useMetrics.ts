@@ -38,6 +38,8 @@ export interface MetricsSnapshot {
   outcomes: MetricNamedCount[]
   formats: MetricNamedCount[]
   extract: MetricNamedCount[]
+  // issue #207: распределение скорости разбора файла (fast/normal/slow) — агрегат, не сырые тайминги.
+  speed: MetricNamedCount[]
   // issue #182: non-terminal agent quality signals (by code) + feedback volume by source/kind.
   warnings: MetricNamedCount[]
   feedback: { user: MetricNamedCount[], agent: MetricNamedCount[] }
