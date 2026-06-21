@@ -338,6 +338,24 @@ describe('makeBotApi.downloadAndSaveFiles', () => {
     expect(r.fileEntries).toHaveLength(1);
   });
 
+  it('смешанная партия: валидный сохраняется, невалидный пропускается, jobDir сохраняется (#216)', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
+    // download-url зависит от fileId; тело: f/1 — валидный PDF, f/2 — нули (не распознаётся).
+    const mixedFetch = vi.fn(async (url, opts) => {
+      if (String(url).includes('imbot.v2.File.download')) {
+        const fileId = JSON.parse(opts.body).fileId;
+        return { ok: true, json: async () => ({ result: { downloadUrl: `https://p.bitrix24.ru/f/${fileId}` } }) };
+      }
+      const valid = String(url).endsWith('/1');
+      return { ok: true, headers: { get: () => '64' }, arrayBuffer: async () => (valid ? pdfBytes(16) : new Uint8Array(64).buffer) };
+    });
+    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: mixedFetch, uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost: () => true });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'ok.pdf' }, { id: '2', name: 'bad.pdf' }], { botToken: 't', botId: '1' });
+    expect(r.fileEntries).toHaveLength(1);
+    expect(r.fileEntries[0].name).toBe('ok.pdf');
+    expect(fs.existsSync(r.jobDir)).toBe(true); // непустая партия → каталог НЕ удаляется
+  });
+
   it('невалидный MIME (содержимое ≠ разрешённый тип) пропускается (#216)', async () => {
     const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
     // download отдаёт «.pdf», но тело — нули: file-type не распознаёт разрешённый тип → файл отброшен,

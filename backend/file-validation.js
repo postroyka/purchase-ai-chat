@@ -17,8 +17,9 @@ export const ALLOWED_MIME_TYPES = new Set([
   'application/x-cfb',
 ]);
 
-// file-type нужно ≥4096 байт, чтобы надёжно определить OOXML (xlsx/docx). Читаем только столько,
-// чтобы не загружать файл целиком в память (защита от zip-bomb DoS).
+// file-type нужно ≥4096 байт, чтобы надёжно определить OOXML (xlsx/docx). Сэмплируем только столько:
+// /upload читает ровно столько с диска (fs.readSync), не загружая файл целиком — защита от zip-bomb DoS;
+// бот сэмплирует первые байты уже скачанного (ограниченного maxBytes) буфера.
 export const MIME_SNIFF_BYTES = 4100;
 
 /**
@@ -30,12 +31,13 @@ export const MIME_SNIFF_BYTES = 4100;
  * @returns {Promise<{ ok: true, mime: string } | { ok: false, mime: string|null }>}
  */
 export async function validateSniffedMime(buf, ext) {
+  const e = String(ext).toLowerCase(); // защитно нормализуем расширение (gate-проверки fail-closed)
   const detected = await fileTypeFromBuffer(buf);
   const mime = detected?.mime ?? null;
   if (!mime || !ALLOWED_MIME_TYPES.has(mime)) return { ok: false, mime };
   // application/zip — структурный фолбэк для xlsx/docx: отклоняем, если расширение не из них.
-  if (mime === 'application/zip' && !['xlsx', 'docx'].includes(ext)) return { ok: false, mime };
+  if (mime === 'application/zip' && !['xlsx', 'docx'].includes(e)) return { ok: false, mime };
   // application/x-cfb (OLE2 compound file) — подпись legacy .xls: отклоняем для остальных расширений.
-  if (mime === 'application/x-cfb' && ext !== 'xls') return { ok: false, mime };
+  if (mime === 'application/x-cfb' && e !== 'xls') return { ok: false, mime };
   return { ok: true, mime };
 }
