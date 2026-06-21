@@ -12,11 +12,12 @@ import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
 import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
-import { createSessionAuth, parseCookies, domainAllowed } from './auth.js';
+import { createSessionAuth, parseCookies, domainAllowed, normalizeDomain, defaultAppInfo, redactAuthId } from './auth.js';
 import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy } from './feedback.js';
 import { createAgentFeedbackReporter } from './agent-feedback.js';
-import { parseBotEvent, handleBotEvent } from './b24-bot.js';
+import { parseBotEvent, parseAppEvent, handleBotEvent } from './b24-bot.js';
 import { makeBotApi } from './b24-bot-api.js';
+import { createAppStore } from './app-store.js';
 import { safeCompare } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -364,6 +365,9 @@ export function createApp(config = {}) {
   // SSRF-allowlist портала (из B24_FRAME_ANCESTORS) — общий для /session/b24 (app.info) и обратных
   // вызовов чат-бота (b24-bot-api.js): один env управляет всеми исходящими к порталу.
   const portalDomains = config.portalDomains ?? parseFrameAncestorHosts(frameAncestors);
+  // app.info-проба портала: одна реализация для /session/b24 И для эндпоинта приёма ONAPPINSTALL
+  // (#217) — тесты инжектируют один мок. В проде undefined → auth.js берёт реальный fetch-пробник.
+  const appInfoImpl = config.appInfo ?? defaultAppInfo;
   const sessionAuth = config.sessionAuth ?? createSessionAuth({
     secret: sessionSecret,
     user: basicAuthUser,
@@ -371,8 +375,11 @@ export function createApp(config = {}) {
     secure: process.env.NODE_ENV === 'production',
     portalDomains,
     ttlMs: sessionTtlMs,
-    appInfo: config.appInfo, // undefined in prod → auth.js uses its real fetch-based probe
+    appInfo: appInfoImpl,
   });
+  // Стор «приложения» (#217): захваченный из ONAPPINSTALL application_token (по хешу, ключ member_id)
+  // для проверки подлинности событий бота. Тесты инжектируют фейк через config.appStore.
+  const appStore = config.appStore ?? createAppStore({ redisUrl });
   // Dedicated tight brute-force limiter for the credential/session endpoints (/login + /session/b24),
   // separate from the upload limiter: both are guessing/DoS targets (password attempts; authId
   // guessing + app.info amplification), so cap attempts per IP. Keyed by IP (these requests carry no
@@ -739,12 +746,15 @@ export function createApp(config = {}) {
 
   // POST /b24/bot/event — публичный обработчик событий чат-бота Б24 2.0 (дизайн docs/B24_BOT.md).
   // Без requireAuth (Б24 ходит снаружи server→server); защита — сверка ВЕРХНЕГО auth.application_token
-  // (constant-time) + лимит тела. Включается заданием B24_BOT_APPLICATION_TOKEN; без него любой POST
-  // отвергается (403). Тело — form-urlencoded с PHP-ключами (express.urlencoded extended).
+  // + лимит тела. Токен валиден, если он либо ЗАХВАЧЕН при установке (стор, #217), либо совпадает с
+  // env B24_BOT_APPLICATION_TOKEN (одно-портальная установка, constant-time). Без обоих — 403.
+  // Тело — form-urlencoded с PHP-ключами (express.urlencoded extended).
   const b24BotAppToken = config.b24BotApplicationToken ?? process.env.B24_BOT_APPLICATION_TOKEN ?? '';
-  app.post('/b24/bot/event', b24BotRateLimit, express.urlencoded({ extended: true, limit: '64kb' }), (req, res) => {
+  app.post('/b24/bot/event', b24BotRateLimit, express.urlencoded({ extended: true, limit: '64kb' }), async (req, res) => {
     const evt = parseBotEvent(req.body ?? {});
-    if (!b24BotAppToken || !safeCompare(evt.applicationToken, b24BotAppToken)) {
+    const envOk = Boolean(b24BotAppToken) && safeCompare(evt.applicationToken, b24BotAppToken);
+    const valid = Boolean(evt.applicationToken) && (envOk || await appStore.isKnownToken(evt.applicationToken));
+    if (!valid) {
       return res.status(403).json({ error: 'invalid application_token' });
     }
     // 200 быстро (Б24 не гарантирует повтор обработчика) — тяжёлую работу делаем асинхронно.
@@ -764,6 +774,52 @@ export function createApp(config = {}) {
       sendMessage: (m) => api.sendMessage(m),
       log: (m) => console.error(m),
     }).catch((e) => console.error('[b24bot] handler error:', e?.message));
+  });
+
+  // Захват/очистка application_token из APP-событий портала (#217). Асинхронно (Б24 не ждёт ответ).
+  // ВАЖНО по безопасности: домена-allowlist НЕДОСТАТОЧНО — он никого не аутентифицирует. Поэтому на
+  // ONAPPINSTALL проверяем access_token из события на портале (app.info, как /session/b24): только
+  // обладатель валидного портального токена может «прописать» application_token. Ключ стора — member_id.
+  //
+  // ОСТАТОЧНЫЙ РИСК (привязка member_id↔домен): app.info подтверждает, что access_token валиден ДЛЯ
+  // host, но НЕ что присланный member_id принадлежит этому host (app.info member_id не возвращает).
+  // Для нашей установки allowlist (`B24_FRAME_ANCESTORS`) — это КОНКРЕТНЫЙ портал(ы) заказчика, не
+  // широкий wildcard на чужие порталы, поэтому валидного access_token для allowlisted-домена не
+  // получить, не контролируя сам портал → подмена member_id неосуществима. Если когда-нибудь allowlist
+  // расширят на неподконтрольные порталы (широкий `*.bitrix24.*`), здесь нужно привязать member_id к
+  // подтверждённому домену (или сверять member_id из ответа app.info).
+  async function handleAppEvent(evt) {
+    const host = normalizeDomain(evt.domain) || normalizeDomain(evt.clientEndpoint);
+    if (evt.event === 'ONAPPINSTALL' || evt.event === 'ONAPPUPDATE') {
+      if (!host || !domainAllowed(host, portalDomains)) {
+        console.warn(`[b24app] install отклонён: домен не в allowlist (${host || 'нет'})`); return;
+      }
+      // access_token нужен и правдоподобен (короткий, непустой) — иначе бессмысленный app.info-хит.
+      if (!evt.memberId || !evt.applicationToken || !evt.accessToken || evt.accessToken.length > 4096) {
+        console.warn('[b24app] install отклонён: нет member_id/токенов'); return;
+      }
+      let ok = false;
+      // redactAuthId: defaultAppInfo строит URL с auth=<access_token>; ошибка fetch/redirect может нести
+      // URL — маскируем токен в логах (как /session/b24), чтобы он не утёк.
+      try { ok = await appInfoImpl(host, evt.accessToken); }
+      catch (e) { console.warn(`[b24app] app.info failed for ${host}: ${redactAuthId(e?.message ?? e)}`); ok = false; }
+      if (!ok) { console.warn(`[b24app] install отклонён: app.info не подтвердил портал ${host}`); return; }
+      await appStore.recordInstall({ memberId: evt.memberId, applicationToken: evt.applicationToken, domain: host });
+      console.log(`[b24app] application_token захвачен для member ${evt.memberId} (${host})`);
+    } else if (evt.event === 'ONAPPUNINSTALL') {
+      if (!evt.memberId) return;
+      const removed = await appStore.removeInstall({ memberId: evt.memberId, applicationToken: evt.applicationToken || undefined });
+      if (removed) console.log(`[b24app] установка удалена для member ${evt.memberId}`);
+    }
+  }
+
+  // POST /b24/app/event — публичный приём APP-событий портала (ONAPPINSTALL/ONAPPUPDATE/ONAPPUNINSTALL,
+  // #217). Без requireAuth (Б24 ходит снаружи); защита внутри handleAppEvent (allowlist + app.info +
+  // лимиты). Указывается как «Ссылка-callback для события установки» в карточке приложения.
+  app.post('/b24/app/event', b24BotRateLimit, express.urlencoded({ extended: true, limit: '16kb' }), (req, res) => {
+    const evt = parseAppEvent(req.body ?? {});
+    res.status(200).json({ ok: true }); // 200 быстро; валидация+захват — асинхронно
+    void handleAppEvent(evt).catch((e) => console.error('[b24app] handler error:', e?.message));
   });
 
   // Serve the built UI (only present in the Docker image) OPENLY so the Bitrix24 iframe can load

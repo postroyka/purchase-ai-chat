@@ -255,8 +255,9 @@ export function createSessionAuth(config = {}) {
 
 // Normalise a portal domain to a bare, lowercase hostname: strip scheme, any path/query, and a
 // :port suffix. Returns '' for anything that doesn't yield a plausible hostname. Rejecting early
-// here is the first half of the SSRF guard (the allowlist match is the second).
-function normalizeDomain(raw) {
+// here is the first half of the SSRF guard (the allowlist match is the second). Exported so the
+// B24 app-event capture endpoint (index.js, #217) reuses the SAME normalisation as /session/b24.
+export function normalizeDomain(raw) {
   if (typeof raw !== 'string') return '';
   let s = raw.trim().toLowerCase();
   if (s === '') return '';
@@ -301,9 +302,11 @@ export function domainAllowed(host, allowlist) {
 // normalised + allowlisted by the caller, so the URL host is trusted here.
 // Strip any `auth=<token>` value from a string before logging — defence in depth so a B24 access
 // token never lands in logs (fetch errors don't normally include the URL, but never risk it).
-const redactAuthId = (s) => String(s).replace(/auth=[^&\s]+/gi, 'auth=***');
+export const redactAuthId = (s) => String(s).replace(/auth=[^&\s]+/gi, 'auth=***');
 
-async function defaultAppInfo(domain, authId) {
+// Exported so the B24 app-event capture endpoint (#217) validates the installing access_token via
+// the SAME app.info probe /session/b24 uses (domain already normalised + allowlisted by the caller).
+export async function defaultAppInfo(domain, authId) {
   const url = `https://${domain}/rest/app.info?auth=${encodeURIComponent(authId)}`;
   // redirect:'error' is defence-in-depth against SSRF-via-redirect: `domain` is allowlisted, but a
   // portal that responds 3xx (compromise/MITM) must not pull us to an internal address — fail closed.

@@ -1,6 +1,6 @@
 # Дизайн: чат-бот Bitrix24 «загрузка счёта в чат»
 
-`Последняя ревизия: 2026-06-21` · Статус: **каркас реализован** (логика + эндпоинт + 30 тестов, §10); боевую часть `imbot.v2.*` + подсистему захвата токена — на портале (§10, §12–§13)
+`Последняя ревизия: 2026-06-21` · Статус: **каркас + подсистема захвата токена реализованы** (46 тестов, §10); осталось: клиентская регистрация бота (`imbot.v2.Bot.register`/`imbot.command.register`) + портал-QA (§10, §12–§13)
 
 ## 1. Что хотим
 
@@ -70,9 +70,10 @@ imbot.v2.Bot.register({
   нужна, чтобы клик кнопки порождал `ONIMBOTV2COMMANDADD` (см. §7).
 - Хранить `BOT_ID` (+ `code`) в Redis-«сторе приложения». `application_token` (см. §2.1) — туда же.
 - Идемпотентность: повтор установки → `imbot.v2.Bot.update`; удаление приложения → `imbot.v2.Bot.unregister`.
-- **Установка получает серверный шаг:** клиентский `frame.callMethod('imbot.v2.Bot.register', …)` сам по себе
-  оставляет сервер без `BOT_ID`/токена — результат и `application_token` надо **отправить POST-ом на новый
-  авторизованный backend-роут** и сохранить. Это и есть подсистема из §2.1.
+- ~~**Установка получает серверный шаг:** клиентский POST токена на backend-роут~~ — **заменено
+  (см. §2.1):** `application_token` у клиента **нет** (iframe его не отдаёт). Реализовано иначе —
+  сервер ловит токен из события `ONAPPINSTALL` на эндпоинте `POST /b24/app/event` (#217, сделано,
+  §10). Клиенту остаётся только `imbot.v2.Bot.register` + `imbot.command.register`.
 
 ## 5. Серверный эндпоинт `POST /b24/bot/event`
 
@@ -153,7 +154,7 @@ imbot.v2.Bot.register({
 
 ## 10. План реализации и статус
 
-**✅ Сделано в каркасе (тестируемо без портала, 30 тестов `backend/tests/b24-bot.test.js` + 6 в `backend/tests/file-validation.test.js`):**
+**✅ Сделано в каркасе (тестируемо без портала, 34 теста `backend/tests/b24-bot.test.js` + 6 `file-validation.test.js` + 6 `app-store.test.js`):**
 - **Рефакторы переиспользования:** `createAndStartJob` (из `/upload`) и `createFeedbackIssue` (из
   `/feedback`) — общие замыкания в `backend/index.js`; оба роута переведены на них, поведение не изменилось
   (вся существующая backend-сюита зелёная).
@@ -168,12 +169,20 @@ imbot.v2.Bot.register({
   `redirect:'error'`, лимиты файла (ext, magic-MIME (#216), Content-Length/размер, таймаут, cap числа файлов).
 - **Боевая граница** `backend/b24-bot-api.js` (`imbot.v2.File.download`, `imbot.message.add`) — написана,
   **помечена «портал-QA»**, инъектируется (в тестах — мок).
+- **✅ Подсистема захвата токена (#217):** `backend/app-store.js` (Redis, хранит sha256-хеш токена по
+  `member_id`) + публичный эндпоинт `POST /b24/app/event` (`ONAPPINSTALL`/`ONAPPUPDATE`/`ONAPPUNINSTALL`).
+  По офиц. доке Б24: `application_token` приходит **только** в серверном `ONAPPINSTALL` (не в iframe). На
+  захвате проверяем `access_token` из события на портале (`app.info`, как `/session/b24`) — allowlist
+  домена сам по себе не аутентифицирует. `/b24/bot/event` теперь валиден, если токен **захвачен** ИЛИ
+  совпал с env `B24_BOT_APPLICATION_TOKEN` (фолбэк). Покрыто юнит/интеграционными тестами.
+- **✅ Scope `imbot`** добавлен в `getRequiredRights()` (`ui/app/composables/useB24.ts`).
 
 **⏳ Осталось (нужен живой портал Б24):**
-- **Подсистема токена:** серверный install-шаг — принять результат `imbot.v2.Bot.register` +
-  `application_token` и сохранить (Redis); сейчас токен задаётся вручную через `B24_BOT_APPLICATION_TOKEN`.
-- **`imbot.command.register`** для команды `feedback` (иначе клик кнопки не породит `ONIMBOTV2COMMANDADD`).
-- **Scope `imbot`** в `getRequiredRights()` + карточке приложения.
+- **Клиентская регистрация при установке:** `imbot.v2.Bot.register` (бот, `eventMode:'webhook'`,
+  `webhookUrl=…/b24/bot/event`) + **`imbot.command.register`** для команды `feedback` (иначе клик кнопки
+  не породит `ONIMBOTV2COMMANDADD`) — код в `useInstall.ts`, исполняется на портале.
+- **Карточка приложения:** scope `imbot` + указать **«Ссылка-callback для события установки»** =
+  `https://<домен>/b24/app/event` (чтобы Б24 прислал `ONAPPINSTALL` с `application_token`); переустановить.
 - ~~**MIME-валидация как в `/upload`**~~ — **сделано (#216):** magic-byte-проверка вынесена в общий
   `backend/file-validation.js` (`validateSniffedMime`) и применяется и в `/upload`, и на границе
   скачивания бота (`b24-bot-api.js`) до записи на диск/передачи агенту. Покрыто юнит-тестами.
@@ -192,7 +201,11 @@ imbot.v2.Bot.register({
 
 **Подготовка** (на тестовом портале):
 1. Установить приложение как **локальное** (`docs/BITRIX24_APP_SETUP.md`), выдать scope **`imbot`**.
-2. Раскатать app-образ с **`B24_BOT_APPLICATION_TOKEN`** = `application_token` тестового приложения.
+2. **Захват токена (#217, предпочтительно):** в карточке приложения указать **«Ссылка-callback для
+   события установки»** = `https://<тестовый-домен>/b24/app/event` и **переустановить** — токен
+   поймается из `ONAPPINSTALL` автоматически (в логах `app`: `[b24app] application_token захвачен`).
+   *Фолбэк:* если callback не настроить — раскатать образ с env **`B24_BOT_APPLICATION_TOKEN`** =
+   `application_token` тестового приложения.
 3. Зарегистрировать бота: `imbot.v2.Bot.register` (`eventMode:'webhook'`, `webhookUrl =
    https://<тестовый-домен>/b24/bot/event`); зарегистрировать команду `feedback`
    (`imbot.command.register`).
