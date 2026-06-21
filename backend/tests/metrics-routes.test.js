@@ -287,6 +287,7 @@ describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)
     expect(typeof f.durationMs).toBe('number');
     expect(f.durationMs).toBeGreaterThanOrEqual(0);
     expect(f.agentMs).toBe(1234); // из wrapper.duration_ms (agentMeta.agentDurationMs)
+    expect(f.agentTurns).toBe(3); // число ходов агента из wrapper.num_turns (#222)
     expect(f.extractMethod).toBe('pdftotext'); // метод извлечения проброшен
     expect(typeof f.extractMs).toBe('number'); // точное время извлечения проброшено (#203.2)
     expect(f.extractMs).toBeGreaterThanOrEqual(0);
@@ -305,6 +306,7 @@ describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)
     expect(typeof f.durationMs).toBe('number');
     expect(f.durationMs).toBeGreaterThanOrEqual(0);
     expect(f.agentMs).toBeNull();
+    expect(f.agentTurns ?? null).toBeNull(); // на ошибке agentMeta пуст → agentTurns null (#222)
     expect(f.extractMethod).toBeNull();
     expect(f.extractMs ?? null).toBeNull(); // на ошибке agentMeta пуст → extractMs тоже null (#203.2)
   });

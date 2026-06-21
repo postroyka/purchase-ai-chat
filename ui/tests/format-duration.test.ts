@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mmss, humanMs, timingLine } from '../app/utils/format-duration'
+import { mmss, humanMs, timingLine, plural } from '../app/utils/format-duration'
 
 describe('format-duration (#замеры)', () => {
   it('mmss: mm:ss с паддингом, минуты не обрезаются, мусор → 00:00', () => {
@@ -44,5 +44,23 @@ describe('format-duration (#замеры)', () => {
     // extractMs без метода (метод null) — секцию извлечения не показываем вовсе
     expect(timingLine({ durationMs: 5000, extractMethod: null, extractMs: 900 }))
       .toBe('⏱ всего 5.0 с')
+  })
+
+  it('timingLine: число ходов агента со склонением (#222)', () => {
+    expect(timingLine({ durationMs: 48500, agentMs: 44200, agentTurns: 12 }))
+      .toBe('⏱ всего 48.5 с · агент 44.2 с (12 ходов)')
+    expect(timingLine({ durationMs: 48500, agentMs: 44200, agentTurns: 1 }))
+      .toBe('⏱ всего 48.5 с · агент 44.2 с (1 ход)')
+    expect(timingLine({ durationMs: 48500, agentMs: 44200, agentTurns: 3 }))
+      .toBe('⏱ всего 48.5 с · агент 44.2 с (3 хода)')
+    // ходы без agentMs (null) — секции агента нет → и ходов нет
+    expect(timingLine({ durationMs: 5000, agentMs: null, agentTurns: 9 }))
+      .toBe('⏱ всего 5.0 с')
+  })
+
+  it('plural: русское склонение ход/хода/ходов', () => {
+    expect([1, 21, 101].map(n => plural(n, ['ход', 'хода', 'ходов']))).toEqual(['ход', 'ход', 'ход'])
+    expect([2, 3, 4, 22, 34].map(n => plural(n, ['ход', 'хода', 'ходов']))).toEqual(['хода', 'хода', 'хода', 'хода', 'хода'])
+    expect([0, 5, 11, 12, 14, 25, 100].map(n => plural(n, ['ход', 'хода', 'ходов']))).toEqual(['ходов', 'ходов', 'ходов', 'ходов', 'ходов', 'ходов', 'ходов'])
   })
 })

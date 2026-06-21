@@ -276,6 +276,7 @@ interface FileEntry {
   // agentMs/durationMs — для детальных замеров в логе по готовности (остаются за флагом).
   startedAt?: number | null
   agentMs?: number | null
+  agentTurns?: number | null
   durationMs?: number | null
   extractMethod?: string | null
   extractMs?: number | null
