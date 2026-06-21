@@ -95,6 +95,22 @@ describe('metrics (in-memory)', () => {
     expect(s.outcomes.find((o) => o.name === 'totally_made_up_code')).toBeFalsy();   // never stored verbatim
   });
 
+  it('issue #207: распределение скорости — считает валидные бакеты, мусор/null пропускает', async () => {
+    const m = mem();
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 10, speed: 'fast' });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 20, speed: 'fast' });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 60000, speed: 'normal' });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 99000, speed: 'slow' });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 0, speed: null });        // не считаем
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 0, speed: 'turbo' });      // мусор → не считаем
+    const s = await m.snapshot();
+    expect(s.speed).toContainEqual({ name: 'fast', count: 2 });
+    expect(s.speed).toContainEqual({ name: 'normal', count: 1 });
+    expect(s.speed).toContainEqual({ name: 'slow', count: 1 });
+    expect(s.speed.find((x) => x.name === 'turbo')).toBeFalsy();
+    expect(s.speed.reduce((n, x) => n + x.count, 0)).toBe(4); // null/мусор не попали
+  });
+
   it('is best-effort: never throws on missing/garbage input', async () => {
     const m = mem();
     await expect(m.recordUpload({})).resolves.toBeUndefined();

@@ -40,6 +40,12 @@ const EXTRACT_LABELS: Record<string, string> = {
   office: 'Office (xls/docx)',
   unknown: 'Неизвестно'
 }
+// issue #207: распределение скорости разбора (пороги TIMING_FAST_MS/TIMING_SLOW_MS).
+const SPEED_LABELS: Record<string, string> = {
+  fast: 'Быстро',
+  normal: 'Норма',
+  slow: 'Медленно'
+}
 // Feedback (issue #182) — shared by the employee 👍/👎/💡 channel and the agent channel.
 const FEEDBACK_KIND_LABELS: Record<string, string> = {
   positive: '👍 Хорошо',
@@ -272,6 +278,14 @@ const sparkPoints = computed(() => {
               Способ извлечения текста
             </h3>
             <MetricsBarList :items="data.extract" :labels="EXTRACT_LABELS" />
+          </B24Card>
+
+          <!-- issue #207: распределение скорости разбора (по total-времени файла) -->
+          <B24Card v-if="data.speed?.length" class="rounded-xl" :b24ui="{ body: 'p-5' }">
+            <h3 class="text-sm font-semibold text-base-700 mb-4">
+              Скорость разбора
+            </h3>
+            <MetricsBarList :items="data.speed" :labels="SPEED_LABELS" />
           </B24Card>
         </section>
 
