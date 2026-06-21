@@ -44,6 +44,24 @@ export function parseBotEvent(body = {}) {
   };
 }
 
+/**
+ * Привести сырое тело APP-события (ONAPPINSTALL/ONAPPUNINSTALL) к нормализованной форме (#217).
+ * Тело — form-urlencoded с PHP-ключами (`auth[application_token]` и т.д.); все скаляры — строки.
+ * `application_token` приходит ТОЛЬКО в этих серверных событиях (не в iframe-установке).
+ * @returns {{ event:string, applicationToken:string, accessToken:string, memberId:string, domain:string, clientEndpoint:string }}
+ */
+export function parseAppEvent(body = {}) {
+  const auth = (body && typeof body.auth === 'object' && body.auth) || {};
+  return {
+    event: s(body.event).toUpperCase(),
+    applicationToken: s(auth.application_token),
+    accessToken: s(auth.access_token),
+    memberId: s(auth.member_id),
+    domain: s(auth.domain),
+    clientEndpoint: s(auth.client_endpoint),
+  };
+}
+
 // Кнопка-команда 👍/👎: COMMAND_PARAMS = "like <jobId>" / "dislike <jobId>" → отзыв.
 // kind по контракту feedback: 👍→positive, 👎→problem.
 export function parseFeedbackParams(params = '') {
