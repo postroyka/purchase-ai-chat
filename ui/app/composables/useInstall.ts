@@ -71,8 +71,11 @@ export function useInstall() {
           if (report.ok) {
             schemaStatus.value = 'ok'
           } else {
+            // report.ok=false (есть failed[]) достижимо ТОЛЬКО когда scope crm выдан и вызов дошёл до
+            // создания поля, но оно не создалось — поэтому подсказку про «crm» тут НЕ даём (она для
+            // ветки 'failed' ниже, где scope действительно мог быть не выдан).
             schemaStatus.value = 'partial'
-            schemaMsg.value = `Не удалось создать поля сделки: ${report.failed.join(', ')}. Проверьте право «crm» и переустановите.`
+            schemaMsg.value = `Не удалось создать часть полей сделки: ${report.failed.join(', ')}. Создайте их вручную (ensureSchema) или переустановите приложение.`
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
