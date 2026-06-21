@@ -35,9 +35,9 @@ describe('metrics (in-memory)', () => {
   it('computes derived totals over a mixed batch', async () => {
     const m = mem();
     await m.recordUpload({ fileCount: 4 });
-    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 1000, agent: { extractMethod: 'pdftotext', costUsd: 1, agentDurationMs: 1000 } });
-    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'tool_unavailable', durationMs: 1000, agent: { extractMethod: 'pdftotext', costUsd: 1, agentDurationMs: 3000 } });
-    await m.recordFile({ format: 'jpg', status: 'done', outcome: 'ok', durationMs: 2000, agent: { extractMethod: 'ocr', costUsd: null, agentDurationMs: 2000 } });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 1000, agent: { extractMethod: 'pdftotext', costUsd: 1, agentDurationMs: 1000, numTurns: 6 } });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'tool_unavailable', durationMs: 1000, agent: { extractMethod: 'pdftotext', costUsd: 1, agentDurationMs: 3000, numTurns: 12 } });
+    await m.recordFile({ format: 'jpg', status: 'done', outcome: 'ok', durationMs: 2000, agent: { extractMethod: 'ocr', costUsd: null, agentDurationMs: 2000, numTurns: 3 } });
     await m.recordFile({ format: 'xls', status: 'error', outcome: 'timeout', durationMs: 5000, agent: null });
 
     const s = await m.snapshot();
@@ -53,6 +53,7 @@ describe('metrics (in-memory)', () => {
     // agent_runs counts every run with agent meta (the error file had agent=null)
     expect(s.totals.agentRuns).toBe(3);
     expect(s.totals.avgAgentMs).toBe(2000);            // (1000+3000+2000)/3
+    expect(s.totals.avgAgentTurns).toBe(7);            // (6+12+3)/3 — среднее ходов (#222)
     expect(s.totals.avgFileMs).toBe(2250);             // (1000+1000+2000+5000)/4
   });
 
@@ -126,7 +127,7 @@ describe('metrics (in-memory)', () => {
 
   it('snapshot of an empty store is well-formed (no NaN)', async () => {
     const s = await mem().snapshot();
-    expect(s.totals).toMatchObject({ uploads: 0, files: 0, ok: 0, successRatePct: 0, costUsd: 0, avgAgentMs: 0, avgFileMs: 0 });
+    expect(s.totals).toMatchObject({ uploads: 0, files: 0, ok: 0, successRatePct: 0, costUsd: 0, avgAgentMs: 0, avgAgentTurns: 0, avgFileMs: 0 });
     expect(s.outcomes).toEqual([]);
     expect(s.formats).toEqual([]);
     expect(s.daily).toEqual([]);
