@@ -527,7 +527,8 @@ watch(() => (job.value?.files ?? []).map(f => f.name).join('\n'), () => {
 // Лог обработки агента по файлу (#218): что распознал / почему без сделки. Лежит в result.processingLog.
 function processingLogOf(file: FileEntry): string {
   const r = file.result as { processingLog?: unknown } | null | undefined
-  return r && typeof r === 'object' && typeof r.processingLog === 'string' ? r.processingLog.trim() : ''
+  if (!r || typeof r !== 'object' || typeof r.processingLog !== 'string') return ''
+  return r.processingLog.trim().slice(0, 10000) // cap: защита DOM от гигантского лога
 }
 
 async function submitFileFeedback(file: FileEntry) {

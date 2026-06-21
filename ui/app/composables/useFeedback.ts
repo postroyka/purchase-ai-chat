@@ -1,6 +1,8 @@
 // Employee feedback (issue #182, channel «сотрудник»). Lets the person who processed a price-list
-// rate the result (👍/👎/💡) + leave a comment, tied to the job they just ran. The submission becomes
-// a GitHub issue in the backend's configured repo (see backend/feedback.js + docs/FEEDBACK.md).
+// rate the result (👍/👎 — виджет per-file, #218) + leave an OPTIONAL comment, tied to the file/job they
+// ran. The submission becomes a GitHub issue in the backend's configured repo (see backend/feedback.js +
+// docs/FEEDBACK.md). NB: `FeedbackKind` keeps `suggestion` for the AGENT channel; the employee widget
+// offers only positive/problem.
 //
 // Goes through useApi, so the app-session cookie + X-PAI-Auth header authenticate the call — no
 // token is ever shipped to the browser bundle (#41/#105 P1). The backend probe /feedback/config
