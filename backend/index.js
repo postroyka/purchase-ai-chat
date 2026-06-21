@@ -650,7 +650,7 @@ export function createApp(config = {}) {
       files: job.files.map((f) => ({
         name: f.name, status: f.status, result: f.result, error: f.error, problem: f.problem,
         // Тайминги отдаём только при SHOW_TIMINGS (#замеры) — иначе ответ без изменений.
-        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null, speed: classifySpeed(f.durationMs, timingFastMs, timingSlowMs) } : {}),
+        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null, extractMs: f.extractMs ?? null, speed: classifySpeed(f.durationMs, timingFastMs, timingSlowMs) } : {}),
       })),
     });
   });
@@ -969,6 +969,9 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       fileEntry.agentMs = (agentMeta && Number.isFinite(agentMeta.agentDurationMs)) ? agentMeta.agentDurationMs : null;
       // Метод извлечения текста (pdftotext/ocr/office) — частый ответ на «где медленно» (OCR-скан).
       fileEntry.extractMethod = (agentMeta && typeof agentMeta.extractMethod === 'string') ? agentMeta.extractMethod : null;
+      // Точное время извлечения (#203.2): мерится вокруг extractFn в agent-runner (не «всего−агент»,
+      // там был бы ретрай-бэкофф). Для лога на странице.
+      fileEntry.extractMs = (agentMeta && Number.isFinite(agentMeta.extractMs)) ? agentMeta.extractMs : null;
       // Бакет скорости разбора для распределения на /metrics (#207) — по total-времени файла.
       // Считаем только на УСПЕШНОМ разборе (status done); ошибочные/таймаут-файлы в распределение не
       // попадают (их длительность не отражает скорость разбора). Пороги — из createApp (timing).

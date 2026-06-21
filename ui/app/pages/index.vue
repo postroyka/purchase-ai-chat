@@ -278,6 +278,7 @@ interface FileEntry {
   agentMs?: number | null
   durationMs?: number | null
   extractMethod?: string | null
+  extractMs?: number | null
   speed?: 'fast' | 'normal' | 'slow' | null
 }
 

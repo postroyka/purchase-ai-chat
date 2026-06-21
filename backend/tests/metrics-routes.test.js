@@ -288,6 +288,8 @@ describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)
     expect(f.durationMs).toBeGreaterThanOrEqual(0);
     expect(f.agentMs).toBe(1234); // из wrapper.duration_ms (agentMeta.agentDurationMs)
     expect(f.extractMethod).toBe('pdftotext'); // метод извлечения проброшен
+    expect(typeof f.extractMs).toBe('number'); // точное время извлечения проброшено (#203.2)
+    expect(f.extractMs).toBeGreaterThanOrEqual(0);
     expect(f.speed).toBe('fast'); // мок-прогон укладывается в дефолтный FAST-порог (45 с)
   });
 
@@ -304,6 +306,7 @@ describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)
     expect(f.durationMs).toBeGreaterThanOrEqual(0);
     expect(f.agentMs).toBeNull();
     expect(f.extractMethod).toBeNull();
+    expect(f.extractMs ?? null).toBeNull(); // на ошибке agentMeta пуст → extractMs тоже null (#203.2)
   });
 
   it('по умолчанию (выключено) — таймингов и флага в ответе нет', async () => {

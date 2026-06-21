@@ -37,4 +37,12 @@ describe('format-duration (#замеры)', () => {
     expect(timingLine({ durationMs: 5000, speed: 'fast', extractMethod: 'pdftotext' }))
       .toBe('⏱ всего 5.0 с — быстро · извлечение: pdftotext')
   })
+
+  it('timingLine: извлечение показывает метод + точное время extractMs (#203.2)', () => {
+    expect(timingLine({ durationMs: 120000, speed: 'slow', agentMs: 110000, extractMethod: 'ocr', extractMs: 2300 }))
+      .toBe('⏱ всего 2 мин — медленно · агент 1 мин 50 с · извлечение: ocr 2.3 с')
+    // extractMs без метода (метод null) — секцию извлечения не показываем вовсе
+    expect(timingLine({ durationMs: 5000, extractMethod: null, extractMs: 900 }))
+      .toBe('⏱ всего 5.0 с')
+  })
 })
