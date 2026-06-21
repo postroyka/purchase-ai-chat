@@ -4,6 +4,7 @@ import type { ToasterProps } from '@bitrix24/b24ui-nuxt'
 import { ref, provide, readonly } from 'vue'
 import * as locales from '@bitrix24/b24ui-nuxt/locale'
 import { sleepAction } from './utils'
+import { resolveBootLocale } from './utils/boot-locale'
 import CloudErrorIcon from '@bitrix24/b24icons-vue/main/CloudErrorIcon'
 
 const config = useRuntimeConfig()
@@ -66,18 +67,18 @@ onMounted(async () => {
       icon: CloudErrorIcon
     })
   } else {
-    if (b24Instance.isInit()) {
-      // Inside a portal the locale follows the portal's own language.
-      const targetCode = (b24Instance.get() as B24Frame).getLang()
-      if (localesI18n.value.filter(i => i.code === targetCode).length > 0) {
-        await setLocale(targetCode as never)
-      } else {
-        console.error(`[i18n] Failed to load messages for locale: ${targetCode}`)
-      }
+    // Inside a portal the locale follows the portal's own language; standalone it stays at the i18n
+    // default (Russian, DEFAULT_LOCALE), which is what makes the /login form Russian (#177). The
+    // decision is a pure function (resolveBootLocale) so it can be unit-tested — see boot-locale.ts.
+    const inB24 = b24Instance.isInit()
+    const portalLang = inB24 ? (b24Instance.get() as B24Frame).getLang() : null
+    const targetCode = resolveBootLocale(inB24, portalLang, localesI18n.value.map(i => i.code))
+    if (targetCode) {
+      await setLocale(targetCode as never)
+    } else if (inB24) {
+      // In a portal but we don't ship its language — keep the default and surface the gap.
+      console.error(`[i18n] Failed to load messages for locale: ${portalLang}`)
     }
-    // Standalone (outside Bitrix24): no portal to ask, so we intentionally leave the locale at
-    // i18n.defaultLocale, which is Russian (DEFAULT_LOCALE). This is what makes the /login form
-    // render in Russian for our Russian-speaking users (#177).
   }
 
   // Establish the backend app session: inside B24 silently via /session/b24 (from the frame's
