@@ -37,10 +37,16 @@ async function flush() {
   await Promise.resolve()
 }
 
-function frameStub(over: Partial<{ isInstallMode: boolean, installFinish: () => Promise<unknown> }> = {}) {
+// Фейковый AjaxResult для actions.v2.call.make (регистрация бота при установке, #217).
+const okResult = (result: unknown) => ({ isSuccess: true, getErrorMessages: () => [], getData: () => ({ result }) })
+
+function frameStub(over: Partial<{ isInstallMode: boolean, installFinish: () => Promise<unknown>, botMake: ReturnType<typeof vi.fn> }> = {}) {
+  const make = over.botMake ?? vi.fn(async (opts: { method: string }) =>
+    okResult(opts.method === 'imbot.v2.Bot.register' ? { bot: { id: 1 } } : 2))
   return {
     isInstallMode: true,
     installFinish: vi.fn().mockResolvedValue(undefined),
+    actions: { v2: { call: { make } } }, // v2-экшен SDK (НЕ устаревший BX24.callMethod)
     ...over
   }
 }
@@ -55,6 +61,36 @@ describe('useInstall — подтверждение установки прил�
     await flush()
 
     expect(frame.installFinish).toHaveBeenCalledTimes(1)
+    expect(state.value).toBe('done')
+  })
+
+  it('install-режим: регистрирует бота через actions.v2.call.make ДО installFinish (#217)', async () => {
+    const frame = frameStub({ isInstallMode: true })
+    b24.isInit.mockReturnValue(true)
+    b24.get.mockReturnValue(frame)
+
+    const { state } = useInstall()
+    await flush()
+
+    const make = frame.actions.v2.call.make
+    expect(make).toHaveBeenCalled()
+    expect(make.mock.calls[0]![0].method).toBe('imbot.v2.Bot.register')
+    expect(make.mock.calls[1]![0].method).toBe('imbot.command.register')
+    expect(frame.installFinish).toHaveBeenCalledTimes(1)
+    expect(state.value).toBe('done')
+  })
+
+  it('сбой регистрации бота НЕ срывает установку (best-effort): installFinish зовётся, state=done', async () => {
+    const botMake = vi.fn().mockResolvedValue({ isSuccess: false, getErrorMessages: () => ['NO_SCOPE'], getData: () => ({ result: null }) })
+    const frame = frameStub({ isInstallMode: true, botMake })
+    b24.isInit.mockReturnValue(true)
+    b24.get.mockReturnValue(frame)
+
+    const { state } = useInstall()
+    await flush()
+
+    expect(botMake).toHaveBeenCalled() // попытка регистрации была
+    expect(frame.installFinish).toHaveBeenCalledTimes(1) // но установка всё равно завершена
     expect(state.value).toBe('done')
   })
 

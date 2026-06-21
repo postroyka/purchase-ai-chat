@@ -1,6 +1,8 @@
 # Дизайн: чат-бот Bitrix24 «загрузка счёта в чат»
 
-`Последняя ревизия: 2026-06-21` · Статус: **каркас + подсистема захвата токена реализованы** (46 тестов, §10); осталось: клиентская регистрация бота (`imbot.v2.Bot.register`/`imbot.command.register`) + портал-QA (§10, §12–§13)
+`Последняя ревизия: 2026-06-21` · Статус: **код бота завершён** (каркас + захват токена + клиентская
+регистрация через v2-SDK, §10); осталось только: настройка карточки приложения (scope `imbot` +
+callback-URL) и **ручной портал-QA** на тестовом Б24 (§12–§13)
 
 ## 1. Что хотим
 
@@ -54,16 +56,22 @@
 
 ## 4. Регистрация бота (при установке)
 
-`imbot.v2.Bot.register` один раз при установке:
+✅ **Реализовано** (`ui/app/utils/register-bot.ts`, зовётся из `useInstall.ts`, #217). Вызов идёт через
+**актуальный v2-экшен SDK** `frame.actions.v2.call.make({ method, params })` — **НЕ** через устаревший
+`BX24.callMethod`. Параметры сверены с офиц. докой (`type:'bot'`, НЕ `'B'`; параметры **в `fields`**):
 
 ```jsonc
-imbot.v2.Bot.register({
-  code: 'procure_ai_invoice',
-  type: 'B',
-  eventMode: 'webhook',
-  webhookUrl: 'https://<app-домен>/b24/bot/event',   // авто-подписка на все ONIMBOTV2*
-  properties: { name: 'Импорт счетов', workPosition: 'Бросьте счёт — создам сделку', color: 'GREEN' },
-})  // → BOT_ID
+// frame.actions.v2.call.make<{ bot:{ id:number } }>({ method: 'imbot.v2.Bot.register', params: {…} })
+{
+  fields: {
+    code: 'procure_ai_invoice',
+    type: 'bot',                 // допустимые: bot/network/openline/supervisor/personal
+    eventMode: 'webhook',        // события POST-ятся на webhookUrl (авто-подписка на ONIMBOTV2*)
+    webhookUrl: 'https://<app-домен>/b24/bot/event',
+    properties: { name: 'Импорт счетов', workPosition: 'Бросьте счёт — создам сделку' },
+    // botToken НЕ шлём: регистрируемся через OAuth (iframe), события несут OAuth-токен бота.
+  },
+}  // → result.bot.id
 ```
 
 - Команды кнопок регистрируем отдельно: `imbot.command.register` (команда `feedback` с обработчиком) —
@@ -176,11 +184,13 @@ imbot.v2.Bot.register({
   домена сам по себе не аутентифицирует. `/b24/bot/event` теперь валиден, если токен **захвачен** ИЛИ
   совпал с env `B24_BOT_APPLICATION_TOKEN` (фолбэк). Покрыто юнит/интеграционными тестами.
 - **✅ Scope `imbot`** добавлен в `getRequiredRights()` (`ui/app/composables/useB24.ts`).
+- **✅ Клиентская регистрация при установке (#217):** `ui/app/utils/register-bot.ts`
+  (`imbot.v2.Bot.register` + `imbot.command.register`) через **актуальный** v2-экшен SDK
+  `frame.actions.v2.call.make` (НЕ устаревший `BX24.callMethod`); зовётся из `useInstall.ts`
+  **best-effort** (сбой не срывает установку). Параметры сверены с офиц. докой (`type:'bot'`, `fields`).
+  Покрыто юнит-тестами (`register-bot.test.ts` + интеграция в `useInstall.test.ts`).
 
 **⏳ Осталось (нужен живой портал Б24):**
-- **Клиентская регистрация при установке:** `imbot.v2.Bot.register` (бот, `eventMode:'webhook'`,
-  `webhookUrl=…/b24/bot/event`) + **`imbot.command.register`** для команды `feedback` (иначе клик кнопки
-  не породит `ONIMBOTV2COMMANDADD`) — код в `useInstall.ts`, исполняется на портале.
 - **Карточка приложения:** scope `imbot` + указать **«Ссылка-callback для события установки»** =
   `https://<домен>/b24/app/event` (чтобы Б24 прислал `ONAPPINSTALL` с `application_token`); переустановить.
 - ~~**MIME-валидация как в `/upload`**~~ — **сделано (#216):** magic-byte-проверка вынесена в общий

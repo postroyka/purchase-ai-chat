@@ -1,3 +1,5 @@
+import { registerInvoiceBot } from '../utils/register-bot'
+
 /** Состояния экрана установки приложения. */
 export type InstallState = 'installing' | 'done' | 'already' | 'standalone' | 'error'
 
@@ -36,6 +38,15 @@ export function useInstall() {
     try {
       // installFinish() работает только в install-режиме; при обычном открытии SDK реджектит.
       if (frame.isInstallMode) {
+        // Регистрируем чат-бота (issue #217) ДО installFinish, best-effort: сбой (например, не выдан
+        // scope imbot) НЕ должен срывать установку приложения. webhookUrl — наш backend на этом же
+        // домене (страница установки открыта во фрейме из нашего origin).
+        try {
+          const webhookUrl = `${window.location.origin}/b24/bot/event`
+          await registerInvoiceBot(frame, webhookUrl)
+        } catch (e) {
+          console.warn('[install] регистрация бота не удалась (best-effort):', e instanceof Error ? e.message : e)
+        }
         await frame.installFinish()
         state.value = 'done'
       } else {
