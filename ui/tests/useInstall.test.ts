@@ -37,10 +37,16 @@ async function flush() {
   await Promise.resolve()
 }
 
-function frameStub(over: Partial<{ isInstallMode: boolean, installFinish: () => Promise<unknown> }> = {}) {
+// Фейковый AjaxResult для actions.v2.call.make (регистрация бота при установке, #217).
+const okResult = (result: unknown) => ({ isSuccess: true, getErrorMessages: () => [], getData: () => ({ result }) })
+
+function frameStub(over: Partial<{ isInstallMode: boolean, installFinish: () => Promise<unknown>, botMake: ReturnType<typeof vi.fn> }> = {}) {
+  const make = over.botMake ?? vi.fn(async (opts: { method: string }) =>
+    okResult(opts.method === 'imbot.v2.Bot.register' ? { bot: { id: 1 } } : 2))
   return {
     isInstallMode: true,
     installFinish: vi.fn().mockResolvedValue(undefined),
+    actions: { v2: { call: { make } } }, // v2-экшен SDK (НЕ устаревший BX24.callMethod)
     ...over
   }
 }
@@ -58,6 +64,57 @@ describe('useInstall — подтверждение установки прил�
     expect(state.value).toBe('done')
   })
 
+  it('install-режим: регистрирует бота через actions.v2.call.make СТРОГО ДО installFinish (#217)', async () => {
+    // Лог порядка: и make, и installFinish пишут в него — проверяем, что регистрация раньше finish.
+    const order: string[] = []
+    const botMake = vi.fn(async (opts: { method: string }) => {
+      order.push(`make:${opts.method}`)
+      return okResult(opts.method === 'imbot.v2.Bot.register' ? { bot: { id: 1 } } : 2)
+    })
+    const installFinish = vi.fn(async () => {
+      order.push('installFinish')
+    })
+    const frame = frameStub({ isInstallMode: true, botMake, installFinish })
+    b24.isInit.mockReturnValue(true)
+    b24.get.mockReturnValue(frame)
+
+    const { state } = useInstall()
+    await flush()
+
+    expect(order).toEqual(['make:imbot.v2.Bot.register', 'make:imbot.command.register', 'installFinish'])
+    expect(frame.installFinish).toHaveBeenCalledTimes(1)
+    expect(state.value).toBe('done')
+  })
+
+  it('сбой регистрации (resolved isSuccess:false) — best-effort: installFinish зовётся, botWarning, state=done', async () => {
+    const botMake = vi.fn().mockResolvedValue({ isSuccess: false, getErrorMessages: () => ['NO_SCOPE'], getData: () => ({ result: null }) })
+    const frame = frameStub({ isInstallMode: true, botMake })
+    b24.isInit.mockReturnValue(true)
+    b24.get.mockReturnValue(frame)
+
+    const { state, botWarning } = useInstall()
+    await flush()
+
+    expect(botMake).toHaveBeenCalled()
+    expect(frame.installFinish).toHaveBeenCalledTimes(1) // установка всё равно завершена
+    expect(state.value).toBe('done')
+    expect(botWarning.value).toBeTruthy() // не-фатальная подсказка выставлена
+  })
+
+  it('сбой регистрации (raw reject от SDK) — тоже best-effort: installFinish зовётся, state=done', async () => {
+    const botMake = vi.fn().mockRejectedValue(new Error('network')) // именно throw, не resolved-false
+    const frame = frameStub({ isInstallMode: true, botMake })
+    b24.isInit.mockReturnValue(true)
+    b24.get.mockReturnValue(frame)
+
+    const { state, botWarning } = useInstall()
+    await flush()
+
+    expect(frame.installFinish).toHaveBeenCalledTimes(1)
+    expect(state.value).toBe('done')
+    expect(botWarning.value).toBeTruthy()
+  })
+
   it('не install-режим: installFinish НЕ зовётся, state=already', async () => {
     const frame = frameStub({ isInstallMode: false })
     b24.isInit.mockReturnValue(true)
@@ -67,6 +124,7 @@ describe('useInstall — подтверждение установки прил�
     await flush()
 
     expect(frame.installFinish).not.toHaveBeenCalled()
+    expect(frame.actions.v2.call.make).not.toHaveBeenCalled() // бота регистрируем ТОЛЬКО при установке
     expect(state.value).toBe('already')
   })
 

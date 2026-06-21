@@ -1,3 +1,7 @@
+// Относительный путь (не '~/utils/...'): vitest резолвит этот модуль как импортируемый из
+// композабла, а алиас '~' в его конфиге не настроен — '~/utils/...' уронит тест на резолве.
+import { registerInvoiceBot } from '../utils/register-bot'
+
 /** Состояния экрана установки приложения. */
 export type InstallState = 'installing' | 'done' | 'already' | 'standalone' | 'error'
 
@@ -21,6 +25,9 @@ export function useInstall() {
   const b24 = useB24()
   const state = ref<InstallState>('installing')
   const errorMsg = ref('')
+  // Не-фатальная подсказка: установка прошла, но бот не зарегистрировался (обычно — не выдан scope
+  // imbot). Показываем на экране «готово», чтобы это не терялось в одном лишь console.warn (#217).
+  const botWarning = ref('')
 
   // installFinish() допустимо вызвать строго один раз; триггер готовности фрейма может
   // сработать повторно — защищаемся флагом. Ставим его ТОЛЬКО когда фрейм реально получен,
@@ -36,6 +43,17 @@ export function useInstall() {
     try {
       // installFinish() работает только в install-режиме; при обычном открытии SDK реджектит.
       if (frame.isInstallMode) {
+        // Регистрируем чат-бота (issue #217) ДО installFinish, best-effort: сбой (например, не выдан
+        // scope imbot) НЕ должен срывать установку приложения. webhookUrl — наш backend на этом же
+        // домене (страница установки открыта во фрейме из нашего origin).
+        try {
+          const webhookUrl = `${window.location.origin}/b24/bot/event`
+          await registerInvoiceBot(frame, webhookUrl)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          console.warn('[install] регистрация бота не удалась (best-effort):', msg)
+          botWarning.value = 'Приложение установлено, но чат-бот не зарегистрирован. Проверьте право «imbot» и переустановите.'
+        }
         await frame.installFinish()
         state.value = 'done'
       } else {
@@ -65,5 +83,5 @@ export function useInstall() {
     if (standaloneTimer) clearTimeout(standaloneTimer)
   })
 
-  return { state, errorMsg }
+  return { state, errorMsg, botWarning }
 }

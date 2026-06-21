@@ -104,5 +104,7 @@ curl -X POST 'https://<portal>/rest/<user_id>/<webhook_code>/shef.purchase.api.p
 приложении:
 
 ```js
-BX24.callMethod('app.info', {}, r => console.log(r.data().INSTALLED)) // true — установка завершена
+// Актуальный SDK @bitrix24/b24jssdk (НЕ устаревший глобал BX24.callMethod):
+const r = await $b24.actions.v2.call.make({ method: 'app.info' })
+console.log(r.getData().result.INSTALLED) // true — установка завершена
 ```
