@@ -285,9 +285,11 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
       // v2 (#195) — структурная телеметрия матчинга из result.matching.
       const m = (r.matching && typeof r.matching === 'object') ? r.matching : null;
       if (m) {
-        // Мультиматчи по шагам (supplier/contract/product). Пин к известному набору.
-        const steps = (Array.isArray(m.multiMatches) ? m.multiMatches : [])
-          .map(matchStepLabel).filter(Boolean).slice(0, 10);
+        // Мультиматчи по шагам (supplier/contract/product). Пин к известному набору + ДЕДУП в рамках
+        // файла (find_product зовётся по позиции, шаг может прийти несколько раз): считаем «сколько
+        // ДОКУМЕНТОВ имели мультиматч на шаге», а не сырые срабатывания — иначе счётчик неинтерпретируем.
+        const steps = [...new Set((Array.isArray(m.multiMatches) ? m.multiMatches : [])
+          .map(matchStepLabel).filter(Boolean))];
         if (steps.length) await b.batch(steps.map((s) => ['hincrby', K.matchingMulti, s, 1]));
 
         // Несопоставленные артикулы (vendorCode не найден). Уникализируем в рамках файла, кап на новые.

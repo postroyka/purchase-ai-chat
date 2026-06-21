@@ -31,6 +31,12 @@ describe('b24_pst_crm_find_product', () => {
     expect(fake.v3Call).not.toHaveBeenCalled()
   })
 
+  it('пробрасывает признак мультиматча из контроллера (#195)', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ id: 15, name: 'Болт', vendorCode: 'SKU-001', multi: true }))
+    const result = await (tool as any).handler({ vendorCode: 'SKU-001' })
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ id: 15, multi: true })
+  })
+
   it('returns { id: null } when controller returns null', async () => {
     fake.v2Call.mockResolvedValue(fakeOk(null))
 

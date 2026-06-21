@@ -238,6 +238,31 @@ describe('metrics — agent signals & feedback (#182)', () => {
     expect(s.matching.articles).toContainEqual({ name: 'Z-9', count: 1 });
   });
 
+  it('issue #195: кап различных артикулов (>300 → __other__), известный — инкремент', async () => {
+    const m = mem();
+    let k = 0;
+    for (let call = 0; call < 6; call++) { // 6×50 = 300 различных артикулов (лимит 50 на вызов)
+      const arts = [];
+      for (let i = 0; i < 50; i++) arts.push('ART-' + (k++));
+      await m.recordMatching({ result: { matching: { unmatchedArticles: arts } } });
+    }
+    // 5 НОВЫХ сверх капа → все в __other__; ART-0 известен → инкремент (счётчик до 2)
+    await m.recordMatching({ result: { matching: { unmatchedArticles: ['NEW-1', 'NEW-2', 'NEW-3', 'NEW-4', 'NEW-5', 'ART-0'] } } });
+    const s = await m.snapshot();
+    expect(s.matching.articles.find((x) => x.name === '__other__')).toEqual({ name: '__other__', count: 5 });
+    expect(s.matching.articles.find((x) => x.name === 'ART-0')).toEqual({ name: 'ART-0', count: 2 });
+    expect(s.matching.articles.find((x) => x.name === 'NEW-1')).toBeFalsy(); // новые сверх капа не заводятся
+  });
+
+  it('issue #195: мультиматчи дедупятся в рамках файла (product зовётся по позиции)', async () => {
+    const m = mem();
+    // product дважды в одном результате (две позиции мультиматчнулись) → шаг считается ОДИН раз
+    await m.recordMatching({ result: { matching: { multiMatches: ['product', 'product', 'supplier'] } } });
+    const s = await m.snapshot();
+    expect(s.matching.multi).toContainEqual({ name: 'product', count: 1 });   // не 2 — дедуп по файлу
+    expect(s.matching.multi).toContainEqual({ name: 'supplier', count: 1 });
+  });
+
   it('empty snapshot exposes well-formed warnings + feedback + matching', async () => {
     const s = await mem().snapshot();
     expect(s.warnings).toEqual([]);
