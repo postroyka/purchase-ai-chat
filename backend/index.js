@@ -686,11 +686,13 @@ export function createApp(config = {}) {
   });
 
   // GET /health — no auth, used by Docker healthcheck.
-  // Checks Redis connectivity so nginx-proxy and Docker know when the instance is ready.
+  // Checks Redis connectivity so nginx-proxy and Docker know when the instance is ready. Readiness is
+  // driven ONLY by jobs.ping(); feedbackOutboxPending is informational (size() never throws → safe to
+  // await here) so ops can see if queued feedback is piling up during a GitHub outage (#190).
   app.get('/health', async (_req, res) => {
     try {
       await jobs.ping();
-      return res.json({ ok: true, redis: 'ok' });
+      return res.json({ ok: true, redis: 'ok', feedbackOutboxPending: await feedbackOutbox.size() });
     } catch {
       return res.status(503).json({ ok: false, redis: 'unavailable' });
     }

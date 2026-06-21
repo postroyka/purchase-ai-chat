@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createFeedbackOutbox } from '../feedback-outbox.js';
 
 vi.spyOn(console, 'log').mockImplementation(() => {});
+vi.spyOn(console, 'warn').mockImplementation(() => {}); // drop-logging is intentional; keep test output clean
 
 // A createIssue double whose behaviour is switchable: deliver, fail-retryable, or fail-permanent.
 function makeCreateIssue() {
@@ -107,6 +108,18 @@ describe.each([
     expect(await outbox.size()).toBe(0);
   });
 
+  it('drops an entry that turns non-retryable on a LATER attempt', async () => {
+    createIssue.setMode('retryable');
+    await outbox.enqueue(issue());
+    let s = await outbox.drainOnce(); // attempt 1: transient → requeued
+    expect(s).toMatchObject({ retried: 1, pending: 1 });
+    clock += 1000; // backoff elapsed → due
+    createIssue.setMode('permanent'); // the SAME note now hits a permanent error (e.g. token revoked)
+    s = await outbox.drainOnce();
+    expect(s).toMatchObject({ delivered: 0, retried: 0, dropped: 1, pending: 0 });
+    expect(await outbox.size()).toBe(0);
+  });
+
   it('bounds the queue to maxItems, dropping the oldest', async () => {
     for (let i = 0; i < 8; i++) await outbox.enqueue(issue({ title: `t${i}` }));
     expect(await outbox.size()).toBe(5); // newest 5 survive (t3..t7)
@@ -139,6 +152,46 @@ describe('feedback outbox — never throws', () => {
   it('size returns 0 when Redis throws', async () => {
     const ob = createFeedbackOutbox({ redisClient: { llen: async () => { throw new Error('x'); } }, createIssue: async () => ({}) });
     await expect(ob.size()).resolves.toBe(0);
+  });
+});
+
+// ── Drain-pass invariants (Redis budget snapshot + backoff cap) ─────────────────
+describe('feedback outbox — drain-pass invariants', () => {
+  it('an enqueue DURING a drain lands in the NEXT pass, not the current one (budget snapshot)', async () => {
+    let clock = 1000;
+    let ob; // late-bound so createIssue can enqueue back into the same outbox mid-pass
+    let injected = false;
+    const createIssue = vi.fn(async () => {
+      if (!injected) { injected = true; await ob.enqueue(issue({ title: 'late' })); }
+      return { url: 'u', number: 1 };
+    });
+    ob = createFeedbackOutbox({ redisClient: fakeRedis(), createIssue, now: () => clock, baseBackoffMs: 1000, maxItems: 5 });
+    await ob.enqueue(issue({ title: 'first' }));
+
+    const s1 = await ob.drainOnce();
+    expect(s1.delivered).toBe(1); // only 'first' — the budget was snapshotted at 1
+    expect(await ob.size()).toBe(1); // 'late' enqueued mid-pass is still pending
+
+    const s2 = await ob.drainOnce();
+    expect(s2.delivered).toBe(1); // 'late' delivered on the following pass
+    expect(await ob.size()).toBe(0);
+  });
+
+  it('caps the retry backoff at maxBackoffMs', async () => {
+    let clock = 0;
+    const ci = makeCreateIssue();
+    ci.setMode('retryable');
+    const ob = createFeedbackOutbox({ createIssue: ci, now: () => clock, baseBackoffMs: 100, maxBackoffMs: 200, maxAttempts: 20 });
+    await ob.enqueue(issue());
+    await ob.drainOnce(); // attempts=1 → next = 0 + 100
+    clock = 100; await ob.drainOnce(); // attempts=2 → next = 100 + min(200,200) = 300
+    clock = 300; await ob.drainOnce(); // attempts=3 → next = 300 + min(400,200) = 500 (CAPPED at 200, not 400)
+    const calls = ci.mock.calls.length;
+
+    clock = 499; await ob.drainOnce(); // still not due at +199
+    expect(ci.mock.calls.length).toBe(calls);
+    clock = 500; await ob.drainOnce(); // due exactly at +200 → proves backoff(3) was clamped to maxBackoffMs
+    expect(ci.mock.calls.length).toBe(calls + 1);
   });
 });
 

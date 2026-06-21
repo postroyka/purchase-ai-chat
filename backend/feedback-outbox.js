@@ -6,11 +6,20 @@
 // { title, body, labels } here, the request returns 202 ("queued"), and a background drainer retries
 // with exponential backoff until the issue lands or a small attempt budget is exhausted.
 //
-// Storage prefers Redis (multi-instance-safe, survives a restart) and falls back to an in-memory ring
-// when no Redis is wired (dev/tests) — mirroring agent-feedback.js / app-store.js. Everything is
-// BEST-EFFORT: enqueue and the drainer NEVER throw — a queue hiccup must not fail a request or crash
-// the timer. The GitHub token is NEVER stored; only the issue payload is persisted, and the live token
-// is read at drain time from the injected createIssue closure.
+// Storage prefers Redis (survives a restart; LPOP-based draining is multi-instance-safe — each tick
+// pops distinct items, so N drainers never double-deliver) and falls back to an in-memory ring when no
+// Redis is wired (dev/tests) — mirroring agent-feedback.js / app-store.js. The maxItems cap is
+// best-effort under concurrent enqueues (rpush + a separate ltrim), which is fine: the cap exists only
+// to bound a sustained outage, and dropping the oldest by a hair is acceptable.
+//
+// DELIVERY IS AT-MOST-ONCE. A drain does LPOP (remove) → await createIssue, so a crash/redeploy in
+// that window loses the in-flight note. This is deliberate: the alternative (a processing list for
+// at-least-once) would spawn a DUPLICATE GitHub issue on every crash, which is worse for low-value
+// feedback telemetry than rarely losing one — and the issue asked for a *tiny* outbox, not a broker.
+//
+// Everything is BEST-EFFORT: enqueue and the drainer NEVER throw — a queue hiccup must not fail a
+// request or crash the timer. The GitHub token is NEVER stored; only the issue payload is persisted,
+// and the live token is read at drain time from the injected createIssue closure.
 
 import { createHash } from 'node:crypto';
 
@@ -22,7 +31,9 @@ const KEY = 'fbk:outbox';
  *   createIssue: (issue: { repo: string, title: string, body: string, labels: string[] }) => Promise<{ url: string, number: number }>,
  *   now?: () => number,
  *   maxItems?: number,        // ring cap — oldest dropped past this (bounds a sustained outage)
- *   maxAttempts?: number,     // give up after this many tries (then the note is dropped + logged)
+ *   maxAttempts?: number,     // give up after this many QUEUED retries — ON TOP of the 1 online
+ *                             //   attempt in createFeedbackIssue — then drop + log the note
+
  *   baseBackoffMs?: number,   // first retry delay; doubles each attempt up to maxBackoffMs
  *   maxBackoffMs?: number,
  * }} config
@@ -96,7 +107,11 @@ export function createFeedbackOutbox({
       if (e?.retryable && attempts < maxAttempts) {
         return { keep: true, entry: { ...entry, attempts, nextAttemptAt: t + backoffFor(attempts) }, delivered: 0, retried: 1, dropped: 0 };
       }
-      // Permanent failure, or the attempt budget is spent → give up on this note.
+      // Permanent failure, or the attempt budget is spent → give up on this note. Log id/channel/
+      // attempts (NEVER the title/body — they can carry client context) so an operator can see WHICH
+      // note was lost and why, instead of only the aggregate count in the drain summary.
+      const reason = e?.retryable ? 'attempt budget exhausted' : 'permanent failure';
+      console.warn(`[feedback-outbox] dropping feedback id=${entry.id} channel=${entry.channel} after ${attempts} attempt(s): ${reason}`);
       return { keep: false, delivered: 0, retried: 0, dropped: 1 };
     }
   }
@@ -108,6 +123,11 @@ export function createFeedbackOutbox({
    * Redis path pops each item with LPOP (atomic) and RPUSHes survivors back to the tail, bounded by
    * the LLEN snapshot so re-queued items aren't reprocessed in the same pass (and concurrent enqueues
    * land beyond the budget → next pass). This keeps a single drainer safe without a transaction.
+   *
+   * Cost is O(pending) round-trips per pass (one LPOP, plus an RPUSH for each not-yet-delivered item).
+   * That's fine at maxItems≈100 / a 60s tick; revisit (peek-before-pop) only if the cap grows by orders
+   * of magnitude. NB the at-most-once window noted in the file header: an item is OUT of Redis between
+   * its LPOP and a successful createIssue / re-RPUSH.
    */
   async function drainOnce() {
     const t = now();
