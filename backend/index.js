@@ -15,6 +15,7 @@ import { runAgent, redactToken } from './agent-runner.js';
 import { createSessionAuth, parseCookies, domainAllowed, normalizeDomain, defaultAppInfo, redactAuthId } from './auth.js';
 import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy } from './feedback.js';
 import { createAgentFeedbackReporter } from './agent-feedback.js';
+import { createFeedbackOutbox } from './feedback-outbox.js';
 import { parseBotEvent, parseAppEvent, handleBotEvent } from './b24-bot.js';
 import { makeBotApi } from './b24-bot-api.js';
 import { createAppStore } from './app-store.js';
@@ -331,6 +332,20 @@ export function createApp(config = {}) {
     token: githubFeedbackToken, repo: githubFeedbackRepo, redisClient: rateLimitRedis,
   });
 
+  // Durable outbox (#190): when GitHub is briefly unreachable, a user/bot feedback issue is queued
+  // here and retried in the background instead of being lost (POST /feedback then returns 202, not
+  // 502). Redis-backed when present (survives restart / multi-instance), in-memory otherwise. The
+  // drainer timer is NOT started here — main() starts it (like the uploads-retention sweep), so
+  // importing createApp in tests never spawns a timer. createIssue closes over the configured repo/
+  // token; the token is never persisted in the queue. The agent channel keeps its own best-effort
+  // path (dedup/cap) and is intentionally NOT routed through the outbox.
+  const feedbackOutbox = config.feedbackOutbox ?? createFeedbackOutbox({
+    redisClient: rateLimitRedis,
+    createIssue: ({ repo, title, body, labels }) => createGithubIssue({
+      repo: repo || githubFeedbackRepo, token: githubFeedbackToken, title, body, labels,
+    }),
+  });
+
   // App-level signed-cookie session (auth.js) — replaces HTTP Basic so the Bitrix24 iframe can
   // load the UI. The standalone /login form's credentials are the existing PUBLIC_PAGE_BASIC_AUTH_*
   // values; a placeholder password counts as "not set" (mirrors the old basicAuthConfigured check)
@@ -420,6 +435,9 @@ export function createApp(config = {}) {
   // Expose the resolved upload dir so the prod entrypoint's retention sweep targets the SAME
   // directory createApp uses — the two must never resolve UPLOAD_DIR independently and diverge.
   app.getUploadDir = () => uploadDir;
+  // Expose the durable feedback outbox (#190) so the prod entrypoint can start/stop its drainer —
+  // the timer lives outside createApp to keep test imports timer-free, mirroring the retention sweep.
+  app.getFeedbackOutbox = () => feedbackOutbox;
 
   const bearerConfigured = () => Boolean(token) && token !== AUTH_PLACEHOLDER;
   // A session is acceptable whenever we have a signing secret — the cookie is HMAC-verified, so its
@@ -510,9 +528,21 @@ export function createApp(config = {}) {
   }
 
   // Завести GitHub-issue по отзыву (репо/токен из конфига) — общий путь для /feedback и бота.
-  async function createFeedbackIssue({ kind, comment, context }) {
+  // На ТРАНЗИЕНТНОМ сбое (GitHub недоступен / 5xx / 429) кладём готовый issue в durable-outbox (#190)
+  // и возвращаем { ok:true, queued:true } — фоновый дренер дошлёт. На постоянной ошибке (401/403/404/
+  // не настроено) пробрасываем — вызывающий отдаёт 5xx, чтобы оператор заметил.
+  async function createFeedbackIssue({ kind, comment, context, channel = 'user' }) {
     const { title, body, labels } = buildIssue({ kind, comment, context });
-    return createGithubIssue({ repo: githubFeedbackRepo, token: githubFeedbackToken, title, body, labels });
+    try {
+      const res = await createGithubIssue({ repo: githubFeedbackRepo, token: githubFeedbackToken, title, body, labels });
+      return { ok: true, url: res.url, number: res.number };
+    } catch (e) {
+      if (e?.retryable) {
+        const q = await feedbackOutbox.enqueue({ repo: githubFeedbackRepo, title, body, labels }, channel);
+        if (q.queued) return { ok: true, queued: true };
+      }
+      throw e;
+    }
   }
 
   // Отзыв из чата бота (👍/👎): счётчик пишем всегда (source:'user', как у виджета сотрудника),
@@ -522,7 +552,7 @@ export function createApp(config = {}) {
     if (!githubFeedbackToken) return;
     const comment = kind === 'positive' ? 'Оценка из чата Битрикс24: 👍 верно' : 'Оценка из чата Битрикс24: 👎 не то';
     const context = { jobId: /^[A-Za-z0-9-]{1,64}$/.test(String(jobId ?? '')) ? String(jobId) : '', reporter: String(reporter ?? '') };
-    await createFeedbackIssue({ kind, comment, context });
+    await createFeedbackIssue({ kind, comment, context, channel: 'bot' });
   }
 
   // POST /upload — two DoS guards: per-token rate limit (uploadRateLimit) bounds request
@@ -731,9 +761,14 @@ export function createApp(config = {}) {
     };
 
     try {
-      const issue = await createFeedbackIssue({ kind, comment, context });
+      const result = await createFeedbackIssue({ kind, comment, context });
       metrics.recordFeedback({ source: 'user', kind }).catch(() => {}); // best-effort, → /metrics
-      return res.status(201).json({ ok: true, url: issue.url, number: issue.number });
+      if (result.queued) {
+        // GitHub was briefly unreachable — the issue is persisted in the durable outbox and the
+        // background drainer will deliver it (#190), so we don't ask the user to retry. 202 Accepted.
+        return res.status(202).json({ ok: true, queued: true });
+      }
+      return res.status(201).json({ ok: true, url: result.url, number: result.number });
     } catch (e) {
       // Log ONLY the stable error code — createGithubIssue guarantees its message is leak-free, but
       // we still avoid logging the message (defence in depth: never let a token reach the logs).
@@ -1075,6 +1110,14 @@ if (process.argv[1] === __filename) {
   startUploadsCleanup({ dir: uploadsDir, retentionDays: uploadsRetentionDays });
   console.log(`[backend] uploads retention: deleting uploads older than ${Math.max(1, uploadsRetentionDays)}d (dir: ${uploadsDir})`);
 
+  // Durable feedback outbox (#190): start the background drainer that re-delivers issues queued while
+  // GitHub was unreachable. Started here (not inside createApp) so test imports never spawn a timer.
+  // The interval doubles as the minimum retry spacing; the entry's own backoff governs the rest.
+  const feedbackOutbox = app.getFeedbackOutbox();
+  const outboxIntervalMs = Number(process.env.FEEDBACK_OUTBOX_INTERVAL_MS) || 60_000;
+  feedbackOutbox.start({ intervalMs: outboxIntervalMs });
+  console.log(`[backend] feedback durable outbox: drainer started (every ${Math.round(outboxIntervalMs / 1000)}s)`);
+
   async function shutdown(signal) {
     console.log(`[backend] ${signal} received — graceful shutdown started`);
     // closeAllConnections() drains keep-alive connections immediately so no
@@ -1082,6 +1125,7 @@ if (process.argv[1] === __filename) {
     // stops accepting new TCP connections, not existing keep-alive ones).
     server.closeAllConnections?.();
     server.close();
+    feedbackOutbox.stop(); // halt the outbox drainer so its timer can't fire mid-shutdown
     // Wait up to 25 s — leave 5 s headroom before Docker's stop-timeout (30 s)
     // so the process exits cleanly before Docker sends SIGKILL.
     const deadline = Date.now() + 25_000;

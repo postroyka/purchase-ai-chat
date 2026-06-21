@@ -18,8 +18,12 @@ export interface FeedbackContext {
 
 export interface FeedbackResult {
   ok: boolean
-  url: string
-  number: number
+  // Present when the issue was created right away (HTTP 201). Absent when GitHub was briefly
+  // unreachable and the backend queued the issue in its durable outbox (HTTP 202) — then `queued`
+  // is true and the issue is delivered later by the backend (#190).
+  url?: string
+  number?: number
+  queued?: boolean
 }
 
 export function useFeedback() {

@@ -219,6 +219,20 @@ describe('createGithubIssue', () => {
     expect(err).toBeInstanceOf(GithubFeedbackError);
     expect(err.code).toBe('NETWORK');
   });
+
+  it('marks transient failures (network / 5xx / 429) retryable and permanent ones not (#190)', async () => {
+    const make = (fetchImpl) => createGithubIssue({ repo: 'owner/repo', token: GH_TOKEN, title: 't', body: 'b', fetchImpl }).catch((e) => e);
+    const net = await make(vi.fn(async () => { throw new Error('ECONNREFUSED'); }));
+    expect(net.code).toBe('NETWORK');
+    expect(net.retryable).toBe(true);
+    expect((await make(fakeFetch({ ok: false, status: 500 }))).retryable).toBe(true);
+    expect((await make(fakeFetch({ ok: false, status: 503 }))).retryable).toBe(true);
+    expect((await make(fakeFetch({ ok: false, status: 429 }))).retryable).toBe(true);
+    // Auth / not-found are permanent — a retry won't help, so they must NOT be queued.
+    expect((await make(fakeFetch({ ok: false, status: 401 }))).retryable).toBe(false);
+    expect((await make(fakeFetch({ ok: false, status: 403 }))).retryable).toBe(false);
+    expect((await make(fakeFetch({ ok: false, status: 404 }))).retryable).toBe(false);
+  });
 });
 
 // ── Module: checkRepoPrivacy (#190 — warn if the feedback repo is public) ──────
@@ -415,15 +429,16 @@ describe('POST /feedback', () => {
     expect(payload.body).toContain('jane-operator'); // «Кто сообщил: jane-operator»
   });
 
-  it('a FAILED GitHub attempt still consumes a rate-limit slot (discourages retry loops)', async () => {
-    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 500 })); // every GitHub call fails → 502
+  it('a transient GitHub failure is queued (202) and still consumes a rate-limit slot (#190)', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 500 })); // GitHub down → retryable → queued
     const app = appWith({ feedbackRateLimitMax: 1 });
     const first = await request(app).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
       .send({ kind: 'problem', comment: 'one' });
-    expect(first.status).toBe(502); // GitHub failed
+    expect(first.status).toBe(202); // safely queued for retry, not a 502 the user must redo
+    expect(first.body).toMatchObject({ ok: true, queued: true });
     const second = await request(app).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
       .send({ kind: 'problem', comment: 'two' });
-    expect(second.status).toBe(429); // the failed first attempt already burned the only slot
+    expect(second.status).toBe(429); // the queued first attempt already burned the only slot
   });
 
   it('enforces the per-client rate limit (default counts attempts)', async () => {
@@ -455,12 +470,52 @@ describe('POST /feedback', () => {
     const bad = await request(appWith({ metrics })).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
       .send({ kind: 'nope', comment: 'x' });
     expect(bad.status).toBe(400);
-    // 502 — GitHub fails, count line sits after createGithubIssue so it never runs
-    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 500 }));
+    // 502 — GitHub fails with a NON-retryable status (404 → not queued); count line sits after
+    // createFeedbackIssue throws, so it never runs.
+    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 404 }));
     const fail = await request(appWith({ metrics })).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
       .send({ kind: 'problem', comment: 'x' });
     expect(fail.status).toBe(502);
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  // ── Durable outbox (#190) ───────────────────────────────────────────────────
+  it('queues a transient GitHub failure (503) in the durable outbox → 202 + counts it', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 503 }));
+    const metrics = createMetrics({ redisUrl: '' });
+    const spy = vi.spyOn(metrics, 'recordFeedback');
+    const app = appWith({ metrics });
+    const res = await request(app).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'article wrong', context: { jobId: 'job-x' } });
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ ok: true, queued: true });
+    // A queued submission counts — it WILL be delivered by the drainer.
+    expect(spy).toHaveBeenCalledWith({ source: 'user', kind: 'problem' });
+    expect(await app.getFeedbackOutbox().size()).toBe(1); // persisted for retry
+  });
+
+  it('a NON-retryable GitHub failure (404) returns 502 and does NOT queue', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 404 }));
+    const app = appWith();
+    const res = await request(app).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'x' });
+    expect(res.status).toBe(502);
+    expect(await app.getFeedbackOutbox().size()).toBe(0);
+  });
+
+  it('once GitHub recovers, the queued issue is delivered on the next drain (no loss)', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ok: false, status: 500 })); // outage → queued
+    const app = appWith();
+    const res = await request(app).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'will land later' });
+    expect(res.status).toBe(202);
+
+    const healthy = fakeFetch(); // GitHub back
+    vi.stubGlobal('fetch', healthy);
+    const summary = await app.getFeedbackOutbox().drainOnce();
+    expect(summary.delivered).toBe(1);
+    expect(await app.getFeedbackOutbox().size()).toBe(0);
+    expect(JSON.parse(healthy.calls[0].init.body).body).toContain('will land later'); // original payload
   });
 });
 

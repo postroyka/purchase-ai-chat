@@ -36,11 +36,15 @@ const MAX_TITLE_LENGTH = 120;
 const MAX_CONTEXT_VALUE = 300;
 
 export class GithubFeedbackError extends Error {
-  constructor(message, code) {
+  constructor(message, code, { retryable = false } = {}) {
     super(message);
     this.name = 'GithubFeedbackError';
     // 'NOT_CONFIGURED' | 'UPSTREAM' | 'NETWORK'
     this.code = code;
+    // Could a later retry plausibly succeed? Transient transport / 5xx / 429 → true; misconfig, auth
+    // (401/403), not-found (404) and malformed payloads → false. Drives the durable outbox (#190): a
+    // retryable failure is queued and re-attempted; a permanent one surfaces to the caller as a 5xx.
+    this.retryable = retryable;
   }
 }
 
@@ -287,12 +291,13 @@ export async function createGithubIssue({ repo, token, title, body, labels = [],
     });
   } catch {
     // Deliberately swallow the cause — Node's fetch errors can include the URL and headers, which
-    // would echo the bearer token into operator logs.
-    throw new GithubFeedbackError('GitHub API is unreachable.', 'NETWORK');
+    // would echo the bearer token into operator logs. A transport failure is transient → retryable.
+    throw new GithubFeedbackError('GitHub API is unreachable.', 'NETWORK', { retryable: true });
   }
 
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
+      // Auth/permission — a retry with the same token won't help; the operator must rotate it.
       throw new GithubFeedbackError('GitHub rejected the feedback token (401/403). Rotate it and retry.', 'UPSTREAM');
     }
     if (response.status === 404) {
@@ -301,7 +306,9 @@ export async function createGithubIssue({ repo, token, title, body, labels = [],
         'UPSTREAM',
       );
     }
-    throw new GithubFeedbackError(`GitHub returned ${response.status} when creating the feedback issue.`, 'UPSTREAM');
+    // 429 (rate limited) and 5xx (GitHub-side outage) are transient → retryable; anything else isn't.
+    const retryable = response.status === 429 || response.status >= 500;
+    throw new GithubFeedbackError(`GitHub returned ${response.status} when creating the feedback issue.`, 'UPSTREAM', { retryable });
   }
 
   let data;
