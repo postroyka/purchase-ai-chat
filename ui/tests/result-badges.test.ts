@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fileBadge, jobBadge, fileSucceeded, dealIdOf, type ResultFile } from '../app/utils/result-badges'
+import { fileBadge, jobBadge, fileSucceeded, dealIdOf, outcomeCodeOf, type ResultFile } from '../app/utils/result-badges'
 
 const withDeal = (id: string | number = '5', status: ResultFile['status'] = 'done'): ResultFile =>
   ({ status, result: { deal: { dealId: id } } })
@@ -35,5 +35,15 @@ describe('result-badges (#192)', () => {
     expect(jobBadge('done', [withDeal(), noDeal()])).toEqual({ label: 'Частично', color: 'air-primary-warning' })
     expect(jobBadge('error', [noDeal('error')])).toEqual({ label: 'Ошибка', color: 'air-primary-alert' })
     expect(jobBadge('processing', [])).toEqual({ label: 'Обработка…', color: 'air-primary' })
+  })
+
+  it('outcomeCodeOf: код из result.error; не-строка/отсутствие → пусто; обрезка длины (#221)', () => {
+    expect(outcomeCodeOf(noDeal())).toBe('supplier_not_found')
+    expect(outcomeCodeOf({ status: 'error', result: { error: '  tool_unavailable  ' } })).toBe('tool_unavailable')
+    expect(outcomeCodeOf(withDeal())).toBe('') // успех — нет кода
+    expect(outcomeCodeOf({ status: 'done', result: {} })).toBe('')
+    expect(outcomeCodeOf({ status: 'done', result: { error: 123 } })).toBe('') // не строка
+    expect(outcomeCodeOf({ status: 'done' })).toBe('')
+    expect(outcomeCodeOf({ status: 'error', result: { error: 'x'.repeat(100) } })).toHaveLength(64) // cap
   })
 })

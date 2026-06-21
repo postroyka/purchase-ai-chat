@@ -15,5 +15,6 @@ export function money(value: number, currency: string): string {
   const formatted = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: maxFrac })
     .format(rounded)
     .replace(/,/g, ' ')
-  return `${formatted} ${currency.toLowerCase()}`
+  // Неизвестные коды проходят как есть (строчным); пустой код → без хвостового пробела.
+  return `${formatted} ${currency.toLowerCase()}`.trimEnd()
 }

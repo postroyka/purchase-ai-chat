@@ -133,7 +133,7 @@
 
             <!-- Код исхода (#221): компактный машинный код для разбора (рядом с причиной/ошибкой). -->
             <p
-              v-if="outcomeCodeOf(file)"
+              v-if="(file.status === 'done' || file.status === 'error') && outcomeCodeOf(file)"
               class="mt-1 font-mono text-[11px] text-base-400"
               title="Код исхода (для разбора)"
             >
@@ -253,7 +253,7 @@
 </template>
 
 <script setup lang="ts">
-import { fileBadge, jobBadge, fileSucceeded } from '~/utils/result-badges'
+import { fileBadge, jobBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
 import { mmss, timingLine } from '~/utils/format-duration'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
@@ -271,8 +271,9 @@ interface FileEntry {
   // issue #192: human-readable reason set by the backend when a 'done' file produced NO deal
   // (business error / unrecognised document) — surfaced so it isn't a bare green "Готово".
   problem?: string | null
-  // Тайминги (#замеры): приходят только при SHOW_TIMINGS на бэкенде. startedAt — для живого mm:ss,
-  // agentMs/durationMs — для замеров в логе по готовности.
+  // Тайминги (#замеры): приходят только при SHOW_TIMINGS на бэкенде. startedAt — предпочтительный
+  // (точный) источник для живого mm:ss; без флага таймер идёт от клиентского procSince (#203).
+  // agentMs/durationMs — для детальных замеров в логе по готовности (остаются за флагом).
   startedAt?: number | null
   agentMs?: number | null
   durationMs?: number | null
@@ -393,6 +394,10 @@ async function doUpload() {
   uploading.value = true
   uploadError.value = null
   job.value = null
+  // Сбросить транзитивное состояние прошлой партии: иначе при повторной загрузке БЕЗ «Загрузить ещё»
+  // у файла с тем же именем останется старый procSince (#203 — таймер показал бы чужое время) и отзыв.
+  procSince.value = {}
+  feedbackByFile.value = {}
 
   const form = new FormData()
   for (const f of files) form.append('files[]', f)
@@ -552,14 +557,6 @@ watch(() => (job.value?.files ?? []).map(f => `${f.name}:${f.status}`).join('\n'
     }
   }
 }, { immediate: true })
-
-// Код исхода по файлу (#221): бизнес-код агента (напр. articles_not_in_catalog, tool_unavailable),
-// лежит в result.error. Показываем компактно рядом с причиной — полезно для разбора.
-function outcomeCodeOf(file: FileEntry): string {
-  const r = file.result as { error?: unknown } | null | undefined
-  if (!r || typeof r !== 'object' || typeof r.error !== 'string') return ''
-  return r.error.trim().slice(0, 64)
-}
 
 // Лог обработки агента по файлу (#218): что распознал / почему без сделки. Лежит в result.processingLog.
 function processingLogOf(file: FileEntry): string {
