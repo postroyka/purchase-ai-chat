@@ -232,8 +232,9 @@ export function createApp(config = {}) {
   const githubFeedbackRepo = config.githubFeedbackRepo
     ?? process.env.GITHUB_FEEDBACK_REPO ?? 'postroyka/purchase-ai-chat';
   // Замеры времени (#замеры): при SHOW_TIMINGS=true /job/:id/status отдаёт тайминги по файлам
-  // (startedAt/agentMs/durationMs) + флаг — UI показывает живой mm:ss во время обработки и замеры в
-  // логе по готовности. Только для лога на странице, НЕ в метрики. По умолчанию выключено (opt-in).
+  // (startedAt/agentMs/durationMs) + флаг — UI показывает ДЕТАЛЬНЫЕ замеры в логе по готовности.
+  // Только для лога на странице, НЕ в метрики. По умолчанию выключено (opt-in). Живой mm:ss
+  // «обрабатывается N сек» UI показывает всегда (от клиентского procSince), независимо от флага (#203).
   const showTimings = config.showTimings ?? (String(process.env.SHOW_TIMINGS ?? '').toLowerCase() === 'true');
   // Пороги «быстро/медленно» по total-времени файла для лога замеров (#замеры): ≤FAST → fast,
   // ≥SLOW → slow, между — normal. Оценочные — калибруются реальностью через env (docs/PARSING_PERFORMANCE.md).

@@ -47,7 +47,7 @@ export function generateMockStats(locale: string, currency: string): Stat[] {
       maxValue: 500000,
       minVariation: -20,
       maxVariation: 30,
-      formatter: (val: number) => formatCurrency(val, currency, locale)
+      formatter: (val: number) => formatCurrency(val, currency)
     }
   ]
 

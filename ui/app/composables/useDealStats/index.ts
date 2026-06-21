@@ -77,8 +77,12 @@ const _useDealStats = () => {
   // Formatters (linked to the current locale)
   // ------------------------------------------------------------------------
   const formatCurrencyLocal = (value: number, currencyCode: string): string => {
+    // Standalone (вне портала): единый money()-формат, как на /metrics (#201).
+    // Внутри Битрикс24 НАМЕРЕННО используем родной форматтер портала (locale/символ валюты как в
+    // остальном UI портала) — чтобы статистика не выбивалась из портального вида. Полное сведение и
+    // in-portal к money()-суффиксу — решение заказчика (см. план).
     if (!isUseB24.value) {
-      return formatCurrency(value, currencyCode, localeCode.value)
+      return formatCurrency(value, currencyCode)
     }
 
     return stripTags(

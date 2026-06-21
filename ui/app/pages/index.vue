@@ -104,9 +104,9 @@
                 color="air-primary"
                 size="xs"
               />
-              <!-- Живой таймер обработки (#замеры, только при SHOW_TIMINGS) -->
+              <!-- Живой таймер обработки (#203): всегда вкл, успокаивает на медленных файлах. -->
               <span
-                v-if="job?.showTimings && file.startedAt"
+                v-if="elapsedMs(file) > 0"
                 class="shrink-0 text-xs tabular-nums text-base-500"
                 title="Время обработки"
               >
@@ -129,6 +129,15 @@
               :title="file.problem"
             >
               {{ file.problem }}
+            </p>
+
+            <!-- Код исхода (#221): компактный машинный код для разбора (рядом с причиной/ошибкой). -->
+            <p
+              v-if="(file.status === 'done' || file.status === 'error') && outcomeCodeOf(file)"
+              class="mt-1 font-mono text-[11px] text-base-400"
+              title="Код исхода (для разбора)"
+            >
+              код: {{ outcomeCodeOf(file) }}
             </p>
 
             <!-- Созданная сделка: внутри B24 открываем слайдером, иначе ссылкой -->
@@ -187,26 +196,30 @@
                     {{ opt.label }}
                   </B24Button>
                 </div>
-                <B24Textarea
-                  v-model="fbFor(file.name).comment"
-                  class="mt-2 w-full"
-                  :rows="2"
-                  :maxrows="6"
-                  :maxlength="5000"
-                  autoresize
-                  :disabled="fbFor(file.name).submitting"
-                  placeholder="Комментарий (необязательно): что не так / что понравилось, можно позицию."
-                />
-                <div class="mt-2 flex justify-end">
-                  <B24Button
-                    color="air-primary"
-                    size="xs"
-                    :disabled="!fbFor(file.name).kind || fbFor(file.name).submitting"
-                    @click="submitFileFeedback(file)"
-                  >
-                    {{ fbFor(file.name).submitting ? 'Отправляем…' : 'Отправить отзыв' }}
-                  </B24Button>
-                </div>
+                <!-- Поле комментария и кнопка раскрываются ТОЛЬКО после выбора оценки (#221):
+                     карточка по умолчанию компактна (для пачки из 10 файлов — 10 свёрнутых форм). -->
+                <template v-if="fbFor(file.name).kind">
+                  <B24Textarea
+                    v-model="fbFor(file.name).comment"
+                    class="mt-2 w-full"
+                    :rows="2"
+                    :maxrows="6"
+                    :maxlength="5000"
+                    autoresize
+                    :disabled="fbFor(file.name).submitting"
+                    placeholder="Комментарий (необязательно): что не так / что понравилось, можно позицию."
+                  />
+                  <div class="mt-2 flex justify-end">
+                    <B24Button
+                      color="air-primary"
+                      size="xs"
+                      :disabled="fbFor(file.name).submitting"
+                      @click="submitFileFeedback(file)"
+                    >
+                      {{ fbFor(file.name).submitting ? 'Отправляем…' : 'Отправить отзыв' }}
+                    </B24Button>
+                  </div>
+                </template>
               </template>
               <p v-else class="text-xs text-base-600">
                 Спасибо! Отзыв по файлу отправлен.
@@ -240,7 +253,7 @@
 </template>
 
 <script setup lang="ts">
-import { fileBadge, jobBadge, fileSucceeded } from '~/utils/result-badges'
+import { fileBadge, jobBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
 import { mmss, timingLine } from '~/utils/format-duration'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
@@ -258,8 +271,9 @@ interface FileEntry {
   // issue #192: human-readable reason set by the backend when a 'done' file produced NO deal
   // (business error / unrecognised document) — surfaced so it isn't a bare green "Готово".
   problem?: string | null
-  // Тайминги (#замеры): приходят только при SHOW_TIMINGS на бэкенде. startedAt — для живого mm:ss,
-  // agentMs/durationMs — для замеров в логе по готовности.
+  // Тайминги (#замеры): приходят только при SHOW_TIMINGS на бэкенде. startedAt — предпочтительный
+  // (точный) источник для живого mm:ss; без флага таймер идёт от клиентского procSince (#203).
+  // agentMs/durationMs — для детальных замеров в логе по готовности (остаются за флагом).
   startedAt?: number | null
   agentMs?: number | null
   durationMs?: number | null
@@ -284,14 +298,16 @@ const job = ref<JobStatus | null>(null)
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
-// Живой таймер обработки (#замеры, только при SHOW_TIMINGS): тикаем `nowTs` раз в секунду, пока есть
-// файлы в обработке, чтобы карточка показывала mm:ss. useIntervalFn сам останавливается при unmount.
+// Живой таймер обработки (#203): ВСЕГДА вкл (не за SHOW_TIMINGS). «Обрабатывается N сек» —
+// безобидная подсказка-успокоитель именно для медленных файлов, без ops-чувствительных деталей
+// (детальный timingLine агент/извлечение остаётся за флагом). Тикаем `nowTs` раз в секунду, пока
+// есть файлы в обработке. useIntervalFn сам останавливается при unmount.
 const nowTs = ref(Date.now())
 const clock = useIntervalFn(() => {
   nowTs.value = Date.now()
 }, 1000, { immediate: false })
 const liveTiming = computed(() =>
-  Boolean(job.value?.showTimings) && (job.value?.files.some(f => f.status === 'processing' || f.status === 'pending') ?? false))
+  job.value?.files.some(f => f.status === 'processing' || f.status === 'pending') ?? false)
 watch(liveTiming, (on) => {
   if (on) {
     nowTs.value = Date.now()
@@ -300,8 +316,13 @@ watch(liveTiming, (on) => {
     clock.pause()
   }
 }, { immediate: true })
+// Бэкенд шлёт `startedAt` только при SHOW_TIMINGS, поэтому ведём и КЛИЕНТСКИЙ «processing since»
+// (момент, когда впервые увидели файл не завершённым) — чтобы таймер шёл и без флага. Заполняется в
+// watch ниже; сбрасывается в resetState. Предпочитаем серверный startedAt (точнее), иначе — клиентский.
+const procSince = ref<Record<string, number>>({})
 function elapsedMs(file: FileEntry): number {
-  return file.startedAt ? Math.max(0, nowTs.value - file.startedAt) : 0
+  const start = file.startedAt ?? procSince.value[file.name]
+  return start ? Math.max(0, nowTs.value - start) : 0
 }
 let pollController: AbortController | null = null
 let pollErrors = 0
@@ -373,6 +394,10 @@ async function doUpload() {
   uploading.value = true
   uploadError.value = null
   job.value = null
+  // Сбросить транзитивное состояние прошлой партии: иначе при повторной загрузке БЕЗ «Загрузить ещё»
+  // у файла с тем же именем останется старый procSince (#203 — таймер показал бы чужое время) и отзыв.
+  procSince.value = {}
+  feedbackByFile.value = {}
 
   const form = new FormData()
   for (const f of files) form.append('files[]', f)
@@ -497,6 +522,7 @@ function resetState() {
   selectedFiles.value = null
   // Сбросить отзывы по файлам, чтобы для нового задания форма была чистой.
   feedbackByFile.value = {}
+  procSince.value = {} // клиентские отметки времени обработки (#203)
 }
 
 // ── Обратная связь сотрудника (issue #182) ─────────────────────────────────────
@@ -520,8 +546,16 @@ const feedbackByFile = ref<Record<string, FbState>>({})
 function fbFor(name: string): FbState {
   return feedbackByFile.value[name] ?? (feedbackByFile.value[name] = { kind: null, comment: '', sent: false, submitting: false })
 }
-watch(() => (job.value?.files ?? []).map(f => f.name).join('\n'), () => {
-  for (const f of job.value?.files ?? []) fbFor(f.name)
+// Сигнатура включает status, чтобы реагировать и на смену статусов: пред-инициализируем отзыв по
+// файлу и фиксируем клиентский «processing since» при первом не-завершённом наблюдении (#203).
+watch(() => (job.value?.files ?? []).map(f => `${f.name}:${f.status}`).join('\n'), () => {
+  const now = Date.now()
+  for (const f of job.value?.files ?? []) {
+    fbFor(f.name)
+    if ((f.status === 'processing' || f.status === 'pending') && procSince.value[f.name] == null) {
+      procSince.value[f.name] = now
+    }
+  }
 }, { immediate: true })
 
 // Лог обработки агента по файлу (#218): что распознал / почему без сделки. Лежит в result.processingLog.
