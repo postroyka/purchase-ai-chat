@@ -187,7 +187,9 @@ export function buildAgentFeedbackIssue({ kind, tool, note, context = {} }) {
   const safeNote = sanitizeComment(note);
   const firstLine = stripHostileChars(safeNote.split('\n')[0] ?? '').trim();
   const toolName = safeToolName(tool);
-  const parts = [FEEDBACK_KINDS[k], toolName, firstLine].filter(Boolean);
+  // #219: заголовок без эмодзи (kind-слово без ведущего эмодзи) и компактнее (первая строка обрезана).
+  const kindWord = (FEEDBACK_KINDS[k] ?? k).replace(/^\S+\s+/, '');
+  const parts = [kindWord, toolName, firstLine.slice(0, 60)].filter(Boolean);
   const title = stripHostileChars(`[Агент] ${parts.join(' · ')}`).slice(0, MAX_TITLE_LENGTH);
   const labels = ['agent-feedback', `feedback:${k}`];
   const body = formatAgentFeedbackBody({ tool: toolName, note: safeNote, context });

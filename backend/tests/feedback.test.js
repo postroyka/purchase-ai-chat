@@ -351,14 +351,15 @@ describe('POST /feedback', () => {
     expect(res.status).toBe(201);
   });
 
-  it('returns 400 for an invalid kind and for an empty comment', async () => {
+  it('returns 400 for an invalid kind; ПУСТОЙ комментарий теперь принимается (#218)', async () => {
     vi.stubGlobal('fetch', fakeFetch());
     const bad = await request(appWith()).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
       .send({ kind: 'bug', comment: 'x' });
     expect(bad.status).toBe(400);
+    // Комментарий не обязателен: оценка 👍/👎 без текста — валидный отзыв (issue с «(без текста)»).
     const empty = await request(appWith()).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
       .send({ kind: 'problem', comment: '   ' });
-    expect(empty.status).toBe(400);
+    expect(empty.status).toBe(201);
   });
 
   it('returns 503 when the feedback channel is not configured', async () => {
