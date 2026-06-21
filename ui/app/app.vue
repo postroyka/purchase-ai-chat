@@ -67,6 +67,7 @@ onMounted(async () => {
     })
   } else {
     if (b24Instance.isInit()) {
+      // Inside a portal the locale follows the portal's own language.
       const targetCode = (b24Instance.get() as B24Frame).getLang()
       if (localesI18n.value.filter(i => i.code === targetCode).length > 0) {
         await setLocale(targetCode as never)
@@ -74,6 +75,9 @@ onMounted(async () => {
         console.error(`[i18n] Failed to load messages for locale: ${targetCode}`)
       }
     }
+    // Standalone (outside Bitrix24): no portal to ask, so we intentionally leave the locale at
+    // i18n.defaultLocale, which is Russian (DEFAULT_LOCALE). This is what makes the /login form
+    // render in Russian for our Russian-speaking users (#177).
   }
 
   // Establish the backend app session: inside B24 silently via /session/b24 (from the frame's

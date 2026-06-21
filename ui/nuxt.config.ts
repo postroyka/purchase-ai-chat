@@ -1,4 +1,4 @@
-import { contentLocales } from './i18n/i18n'
+import { contentLocales, DEFAULT_LOCALE } from './i18n/i18n'
 
 const pagesService = [
   '/404.html'
@@ -133,6 +133,6 @@ export default defineNuxtConfig({
     strategy: 'no_prefix',
     langDir: 'locales',
     locales: contentLocales,
-    defaultLocale: 'en'
+    defaultLocale: DEFAULT_LOCALE
   }
 })

@@ -1,5 +1,11 @@
 import type { LocaleObject } from '@nuxtjs/i18n'
 
+// Default UI locale. Inside Bitrix24 the portal always overrides this via setLocale(getLang())
+// (see app.vue), so this value only governs the STANDALONE path (the /login form and the app shown
+// outside a portal). Our users are Russian-speaking, so the standalone default is Russian — without
+// this the login form rendered in English (#177).
+export const DEFAULT_LOCALE = 'ru'
+
 /** List of supported content locales */
 export const contentLocales: LocaleObject[] = [
   { code: 'en', name: 'English', file: 'en.json' },
