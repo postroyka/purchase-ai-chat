@@ -12,7 +12,7 @@ import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
 import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
-import { createSessionAuth, parseCookies, domainAllowed, normalizeDomain, defaultAppInfo } from './auth.js';
+import { createSessionAuth, parseCookies, domainAllowed, normalizeDomain, defaultAppInfo, redactAuthId } from './auth.js';
 import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy } from './feedback.js';
 import { createAgentFeedbackReporter } from './agent-feedback.js';
 import { parseBotEvent, parseAppEvent, handleBotEvent } from './b24-bot.js';
@@ -780,6 +780,14 @@ export function createApp(config = {}) {
   // ВАЖНО по безопасности: домена-allowlist НЕДОСТАТОЧНО — он никого не аутентифицирует. Поэтому на
   // ONAPPINSTALL проверяем access_token из события на портале (app.info, как /session/b24): только
   // обладатель валидного портального токена может «прописать» application_token. Ключ стора — member_id.
+  //
+  // ОСТАТОЧНЫЙ РИСК (привязка member_id↔домен): app.info подтверждает, что access_token валиден ДЛЯ
+  // host, но НЕ что присланный member_id принадлежит этому host (app.info member_id не возвращает).
+  // Для нашей установки allowlist (`B24_FRAME_ANCESTORS`) — это КОНКРЕТНЫЙ портал(ы) заказчика, не
+  // широкий wildcard на чужие порталы, поэтому валидного access_token для allowlisted-домена не
+  // получить, не контролируя сам портал → подмена member_id неосуществима. Если когда-нибудь allowlist
+  // расширят на неподконтрольные порталы (широкий `*.bitrix24.*`), здесь нужно привязать member_id к
+  // подтверждённому домену (или сверять member_id из ответа app.info).
   async function handleAppEvent(evt) {
     const host = normalizeDomain(evt.domain) || normalizeDomain(evt.clientEndpoint);
     if (evt.event === 'ONAPPINSTALL' || evt.event === 'ONAPPUPDATE') {
@@ -791,8 +799,10 @@ export function createApp(config = {}) {
         console.warn('[b24app] install отклонён: нет member_id/токенов'); return;
       }
       let ok = false;
+      // redactAuthId: defaultAppInfo строит URL с auth=<access_token>; ошибка fetch/redirect может нести
+      // URL — маскируем токен в логах (как /session/b24), чтобы он не утёк.
       try { ok = await appInfoImpl(host, evt.accessToken); }
-      catch (e) { console.warn(`[b24app] app.info failed for ${host}: ${e?.message ?? e}`); ok = false; }
+      catch (e) { console.warn(`[b24app] app.info failed for ${host}: ${redactAuthId(e?.message ?? e)}`); ok = false; }
       if (!ok) { console.warn(`[b24app] install отклонён: app.info не подтвердил портал ${host}`); return; }
       await appStore.recordInstall({ memberId: evt.memberId, applicationToken: evt.applicationToken, domain: host });
       console.log(`[b24app] application_token захвачен для member ${evt.memberId} (${host})`);

@@ -45,7 +45,7 @@ export function parseBotEvent(body = {}) {
 }
 
 /**
- * Привести сырое тело APP-события (ONAPPINSTALL/ONAPPUNINSTALL) к нормализованной форме (#217).
+ * Привести сырое тело APP-события (ONAPPINSTALL/ONAPPUPDATE/ONAPPUNINSTALL) к нормализованной форме (#217).
  * Тело — form-urlencoded с PHP-ключами (`auth[application_token]` и т.д.); все скаляры — строки.
  * `application_token` приходит ТОЛЬКО в этих серверных событиях (не в iframe-установке).
  * @returns {{ event:string, applicationToken:string, accessToken:string, memberId:string, domain:string, clientEndpoint:string }}

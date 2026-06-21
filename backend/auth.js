@@ -302,7 +302,7 @@ export function domainAllowed(host, allowlist) {
 // normalised + allowlisted by the caller, so the URL host is trusted here.
 // Strip any `auth=<token>` value from a string before logging — defence in depth so a B24 access
 // token never lands in logs (fetch errors don't normally include the URL, but never risk it).
-const redactAuthId = (s) => String(s).replace(/auth=[^&\s]+/gi, 'auth=***');
+export const redactAuthId = (s) => String(s).replace(/auth=[^&\s]+/gi, 'auth=***');
 
 // Exported so the B24 app-event capture endpoint (#217) validates the installing access_token via
 // the SAME app.info probe /session/b24 uses (domain already normalised + allowlisted by the caller).

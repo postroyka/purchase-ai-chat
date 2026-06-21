@@ -409,22 +409,44 @@ describe('POST /b24/app/event (захват токена + проверка че
     expect(ev.status).toBe(200);
   });
 
-  it('app.info вернул false → токен НЕ захвачен; событие бота с ним → 403', async () => {
-    const { app, appStore } = appWith(vi.fn(async () => false));
+  it('app.info вернул false → токен НЕ захвачен (recordInstall не вызван); событие бота с ним → 403', async () => {
+    const appInfo = vi.fn(async () => false);
+    const { app, appStore } = appWith(appInfo);
+    const recordSpy = vi.spyOn(appStore, 'recordInstall');
     await request(app).post('/b24/app/event').type('form').send(install());
-    await new Promise((r) => setTimeout(r, 60)); // дать асинхронному обработчику отработать
+    // детерминированно: ждём вызова app.info (обработчик дошёл до проверки), затем флашим микротаски
+    expect(await until(() => appInfo.mock.calls.length > 0)).toBe(true);
+    await new Promise((r) => setImmediate(r));
+    expect(recordSpy).not.toHaveBeenCalled();
     expect(await appStore.isKnownToken('APPTOK')).toBe(false);
     const ev = await request(app).post('/b24/bot/event').type('form').send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': 'APPTOK' });
     expect(ev.status).toBe(403);
   });
 
-  it('домен НЕ в allowlist → app.info даже не вызывается, токен не захвачен', async () => {
+  it('домен НЕ в allowlist → app.info даже не вызывается, recordInstall не вызван (SSRF-гард)', async () => {
     const appInfo = vi.fn(async () => true);
     const { app, appStore } = appWith(appInfo);
+    const recordSpy = vi.spyOn(appStore, 'recordInstall');
     await request(app).post('/b24/app/event').type('form').send(install({ 'auth[domain]': 'evil.example.com' }));
-    await new Promise((r) => setTimeout(r, 60));
-    expect(appInfo).not.toHaveBeenCalled(); // SSRF-гард: чужой домен не доходит до app.info
+    await new Promise((r) => setImmediate(r)); // отказ по allowlist синхронен — флаша достаточно
+    expect(appInfo).not.toHaveBeenCalled();
+    expect(recordSpy).not.toHaveBeenCalled();
     expect(await appStore.isKnownToken('APPTOK')).toBe(false);
+  });
+
+  it('слишком длинный access_token → app.info не вызывается, не захвачен', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app, appStore } = appWith(appInfo);
+    await request(app).post('/b24/app/event').type('form').send(install({ 'auth[access_token]': 'x'.repeat(4097) }));
+    await new Promise((r) => setImmediate(r));
+    expect(appInfo).not.toHaveBeenCalled(); // length-guard до исходящего вызова
+    expect(await appStore.isKnownToken('APPTOK')).toBe(false);
+  });
+
+  it('ONAPPUPDATE так же захватывает/ротирует токен', async () => {
+    const { app, appStore } = appWith(vi.fn(async () => true));
+    await request(app).post('/b24/app/event').type('form').send(install({ event: 'ONAPPUPDATE', 'auth[application_token]': 'UPDTOK' }));
+    expect(await until(() => appStore.isKnownToken('UPDTOK'))).toBe(true);
   });
 
   it('ONAPPUNINSTALL чистит захваченный токен', async () => {
@@ -434,5 +456,19 @@ describe('POST /b24/app/event (захват токена + проверка че
     await request(app).post('/b24/app/event').type('form')
       .send({ event: 'ONAPPUNINSTALL', 'auth[application_token]': 'APPTOK', 'auth[member_id]': 'm1' });
     expect(await until(async () => !(await appStore.isKnownToken('APPTOK')))).toBe(true);
+  });
+
+  it('env-токен и стор сосуществуют: проходит и env-токен, и захваченный; пустой → 403', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-evt-'));
+    const appStore = createAppStore({ redisUrl: '' });
+    await appStore.recordInstall({ memberId: 'm9', applicationToken: 'CAPTURED' });
+    const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics(), appStore, b24BotApplicationToken: 'ENVTOK', portalDomains: ['p.bitrix24.by'] });
+    const join = (tok) => request(app).post('/b24/bot/event').type('form')
+      .send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': tok, 'data[bot][id]': '1', 'data[bot][auth][access_token]': 'b' });
+    expect((await join('ENVTOK')).status).toBe(200);    // env-фолбэк не сломан стором
+    expect((await join('CAPTURED')).status).toBe(200);  // захваченный токен валиден
+    expect((await join('NOPE')).status).toBe(403);
+    expect((await join('')).status).toBe(403);          // пустой токен — 403 даже при непустом сторе
+    expect((await join('   ')).status).toBe(403);        // пробельный — тоже не «известный»
   });
 });
