@@ -289,9 +289,17 @@ describe('POST /b24/bot/event', () => {
 
 // ── b24-bot-api: фильтрация/SSRF в downloadAndSaveFiles (детерминированно, с mock fetch) ─────────
 describe('makeBotApi.downloadAndSaveFiles', () => {
-  const okFetch = (downloadUrl, bytes = 5, contentLength = '5') => vi.fn(async (url) => {
+  // Тело по умолчанию — валидный PDF (%PDF-1.4): после добавления magic-MIME-проверки (#216)
+  // «пустые» байты больше не проходят как pdf, поэтому файл-фикстуры начинаются с PDF-заголовка.
+  const PDF_HEADER = [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a]; // %PDF-1.4\n
+  const pdfBytes = (n) => {
+    const out = new Uint8Array(Math.max(n, PDF_HEADER.length));
+    out.set(PDF_HEADER);
+    return out.buffer;
+  };
+  const okFetch = (downloadUrl, bytes = 16, contentLength = '16') => vi.fn(async (url) => {
     if (String(url).includes('imbot.v2.File.download')) return { ok: true, json: async () => ({ result: { downloadUrl } }) };
-    return { ok: true, headers: { get: () => contentLength }, arrayBuffer: async () => new Uint8Array(bytes).buffer };
+    return { ok: true, headers: { get: () => contentLength }, arrayBuffer: async () => pdfBytes(bytes) };
   });
 
   it('неразрешённый ext пропускается; all-filtered → jobDir удалён', async () => {
@@ -321,5 +329,26 @@ describe('makeBotApi.downloadAndSaveFiles', () => {
     const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://p.bitrix24.ru/f'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 2, isAllowedHost: () => true });
     const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }, { id: '2', name: 'b.pdf' }, { id: '3', name: 'c.pdf' }], { botToken: 't', botId: '1' });
     expect(r.fileEntries).toHaveLength(2); // 3-й отброшен cap-ом
+  });
+
+  it('валидный по содержимому PDF сохраняется (#216)', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
+    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://p.bitrix24.ru/f'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost: () => true });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }], { botToken: 't', botId: '1' });
+    expect(r.fileEntries).toHaveLength(1);
+  });
+
+  it('невалидный MIME (содержимое ≠ разрешённый тип) пропускается (#216)', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
+    // download отдаёт «.pdf», но тело — нули: file-type не распознаёт разрешённый тип → файл отброшен,
+    // как и в /upload. Расширение allowed, размер в норме — отсекает именно magic-MIME-проверка.
+    const badFetch = vi.fn(async (url) => {
+      if (String(url).includes('imbot.v2.File.download')) return { ok: true, json: async () => ({ result: { downloadUrl: 'https://p.bitrix24.ru/f' } }) };
+      return { ok: true, headers: { get: () => '64' }, arrayBuffer: async () => new Uint8Array(64).buffer };
+    });
+    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: badFetch, uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost: () => true });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }], { botToken: 't', botId: '1' });
+    expect(r.fileEntries).toEqual([]);
+    expect(fs.existsSync(r.jobDir)).toBe(false);
   });
 });

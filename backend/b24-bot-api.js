@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
+import { validateSniffedMime, MIME_SNIFF_BYTES } from './file-validation.js';
 
 /**
  * Фабрика боевого botApi. restEndpoint/accessToken берутся из самого события (per-request).
@@ -83,6 +84,10 @@ export function makeBotApi(cfg) {
         clearTimeout(timer);
       }
       if (buf.length > cfg.maxBytes) continue; // размер сверх лимита — пропускаем
+      // MIME по «магическим байтам» — тот же контроль, что в /upload (#216): расширения+размера мало,
+      // т.к. файл приходит из недоверенного чата. Проверяем содержимое до записи на диск/передачи агенту.
+      const verdict = await validateSniffedMime(buf.subarray(0, MIME_SNIFF_BYTES), ext);
+      if (!verdict.ok) continue; // содержимое не соответствует разрешённым типам — пропускаем
       const destPath = path.join(jobDir, `${uuidv4()}.${ext}`);
       fs.writeFileSync(destPath, buf);
       fileEntries.push({ name: path.basename(f.name), path: destPath, status: 'pending', result: null, error: null });

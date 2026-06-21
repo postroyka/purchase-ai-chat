@@ -167,9 +167,9 @@ imbot.v2.Bot.register({
   `application_token` и сохранить (Redis); сейчас токен задаётся вручную через `B24_BOT_APPLICATION_TOKEN`.
 - **`imbot.command.register`** для команды `feedback` (иначе клик кнопки не породит `ONIMBOTV2COMMANDADD`).
 - **Scope `imbot`** в `getRequiredRights()` + карточке приложения.
-- **MIME-валидация как в `/upload`:** бот-граница сейчас проверяет ext+размер, но НЕ magic-byte MIME/
-  zip-bomb (которые `/upload` гонит до агента). При боевой проводке применить тот же контроль (выделить
-  общий хелпер из `/upload`). Трекается отдельным issue.
+- ~~**MIME-валидация как в `/upload`**~~ — **сделано (#216):** magic-byte-проверка вынесена в общий
+  `backend/file-validation.js` (`validateSniffedMime`) и применяется и в `/upload`, и на границе
+  скачивания бота (`b24-bot-api.js`) до записи на диск/передачи агенту. Покрыто юнит-тестами.
 - **Портал-QA:** сверить фактические форматы `imbot.v2.*` (имена методов/полей, форма файла в `message`,
   домен `downloadUrl` относительно SSRF-allowlist), прогнать сквозной сценарий (§12) и поправить по факту.
 
