@@ -31,6 +31,7 @@ export const SPEED_LABELS: Record<string, string> = { fast: 'быстро', norm
 // `— <скорость>`/`агент`/`извлечение` — только если backend их вернул (на ошибке агента нет agentMs).
 // Извлечение: показываем МЕТОД (ocr/pdftotext/office) + точное ВРЕМЯ (`extractMs`, мерится отдельно
 // вокруг extractFn в agent-runner — #203.2; раньше показывали только метод, т.к. время не мерили).
+// Время показываем ТОЛЬКО при наличии метода (время без метки бессмысленно; backend всегда шлёт оба).
 export function timingLine(
   file: { durationMs?: number | null, agentMs?: number | null, extractMethod?: string | null, extractMs?: number | null, speed?: string | null }
 ): string {
