@@ -572,13 +572,17 @@ async function submitFileFeedback(file: FileEntry) {
   if (!s.kind || s.submitting || !job.value) return // комментарий НЕ обязателен (#218)
   s.submitting = true
   try {
-    await submitFeedbackApi(s.kind, s.comment.trim(), {
+    const res = await submitFeedbackApi(s.kind, s.comment.trim(), {
       jobId: job.value.jobId,
       fileName: file.name,
       dealId: dealOf(file)?.dealId
     })
     s.sent = true
-    toast.add({ title: 'Спасибо за отзыв!', color: 'air-primary-success', duration: 4000 })
+    // queued (#190): GitHub был недоступен, отзыв сохранён на сервере и будет отправлен позже —
+    // показываем это честно, но всё равно как успех (повторять не нужно).
+    toast.add(res?.queued
+      ? { title: 'Отзыв сохранён — отправим, как только GitHub станет доступен', color: 'air-primary-success', duration: 5000 }
+      : { title: 'Спасибо за отзыв!', color: 'air-primary-success', duration: 4000 })
   } catch (e: unknown) {
     toast.add({ title: 'Не удалось отправить отзыв', description: extractErrorMessage(e), color: 'air-primary-alert', duration: 6000 })
   } finally {
