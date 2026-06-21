@@ -68,4 +68,26 @@ final class ProcureProductTest extends TestCase
 		$c = new ProcureProduct();
 		$this->assertSame(['id' => null], $c->findByVendorCodeAction('999999'));
 	}
+
+	public function testSingleMatchHasNoMultiFlag(): void
+	{
+		\CIBlockElement::$resultQueue[] = [['ID' => 7, 'NAME' => 'Болт', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'SKU']];
+		$c = new ProcureProduct();
+		$res = $c->findByVendorCodeAction('SKU');
+		$this->assertSame(7, $res['id']);
+		$this->assertArrayNotHasKey('multi', $res);
+	}
+
+	public function testMultiMatchSetsMultiFlagAndPicksMinId(): void
+	{
+		// Артикул совпал с >1 товаром → берём min(id)=7 + multi:true (#195).
+		\CIBlockElement::$resultQueue[] = [
+			['ID' => 7, 'NAME' => 'Болт', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'SKU'],
+			['ID' => 9, 'NAME' => 'Болт-дубль', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'SKU'],
+		];
+		$c = new ProcureProduct();
+		$res = $c->findByVendorCodeAction('SKU');
+		$this->assertSame(7, $res['id']);
+		$this->assertTrue($res['multi']);
+	}
 }
