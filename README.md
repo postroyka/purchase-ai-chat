@@ -405,6 +405,7 @@ claude
 - [docs/SERVER_SETUP.md](docs/SERVER_SETUP.md) — подготовка сервера (Docker, два compose-стека, проверка)
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) — **сопровождение**: что контролировать после запуска и как обновлять систему (пакеты, git/CI, docker/контейнеры, откат, бэкапы)
 - [docs/BITRIX24_APP_SETUP.md](docs/BITRIX24_APP_SETUP.md) — регистрация приложения в Битрикс24 (локальное приложение, страница установки)
+- [docs/MANUAL_TEST_PLAN.md](docs/MANUAL_TEST_PLAN.md) — **план ручного тестирования**: чек-лист приёмочной и портал-проверки (то, что не покрыто автотестами)
 - [mcp/docs/RUNBOOK.md](mcp/docs/RUNBOOK.md) — on-call MCP: алерт→действие, откат, разбор по логам
 
 **Справка и бизнес-правила:**
