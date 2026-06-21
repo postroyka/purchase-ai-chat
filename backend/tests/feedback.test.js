@@ -101,6 +101,12 @@ describe('buildIssue / formatIssueBody', () => {
     expect(title.length).toBeLessThanOrEqual(120);
   });
 
+  it('пустой комментарий (#218): тело «(без текста)», заголовок только из типа', () => {
+    expect(formatIssueBody({ kind: 'problem', comment: '   ' })).toContain('(без текста)');
+    const { title } = buildIssue({ kind: 'problem', comment: '' });
+    expect(title).toBe('[Обратная связь] 👎 Проблема');
+  });
+
   it('renders the comment inside <pre><code> with HTML escaped (Markdown/HTML inert)', () => {
     const { body } = buildIssue({ kind: 'problem', comment: '<script>alert(1)</script> & <b>x</b>' });
     expect(body).toContain('<pre><code>');
@@ -270,6 +276,8 @@ describe('buildAgentFeedbackIssue', () => {
     expect(title).toContain('b24_pst_crm_find_contract');
     expect(title).toContain('Нет способа выбрать договор по сумме');
     expect(title).not.toContain('вторая строка');            // first line only
+    expect(title).toContain('Предложение');                  // #219: слово типа без эмодзи
+    expect(title).not.toMatch(/[👍👎💡]/u);                    // #219: эмодзи в заголовке нет
     expect(labels).toEqual(['agent-feedback', 'feedback:suggestion']);
   });
 
@@ -351,14 +359,15 @@ describe('POST /feedback', () => {
     expect(res.status).toBe(201);
   });
 
-  it('returns 400 for an invalid kind and for an empty comment', async () => {
+  it('returns 400 for an invalid kind; ПУСТОЙ комментарий теперь принимается (#218)', async () => {
     vi.stubGlobal('fetch', fakeFetch());
     const bad = await request(appWith()).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
       .send({ kind: 'bug', comment: 'x' });
     expect(bad.status).toBe(400);
+    // Комментарий не обязателен: оценка 👍/👎 без текста — валидный отзыв (issue с «(без текста)»).
     const empty = await request(appWith()).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
       .send({ kind: 'problem', comment: '   ' });
-    expect(empty.status).toBe(400);
+    expect(empty.status).toBe(201);
   });
 
   it('returns 503 when the feedback channel is not configured', async () => {

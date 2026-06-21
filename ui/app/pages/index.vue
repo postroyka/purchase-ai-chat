@@ -159,81 +159,59 @@
             >
               {{ timingLine(file) }}
             </p>
-          </B24Card>
 
-          <!-- Обратная связь сотрудника (issue #182): оценка результата + комментарий → GitHub issue.
-               Показываем только когда задание завершилось и канал настроен на бэкенде. -->
-          <B24Card
-            v-if="feedbackEnabled && (job.status === 'done' || job.status === 'error')"
-            class="rounded-xl"
-            :b24ui="{ body: 'p-4 sm:p-5' }"
-          >
-            <template v-if="!feedbackSent">
-              <p class="text-sm font-medium text-base-700">
-                Как результат?
-              </p>
-              <p class="mt-1 text-xs text-base-500">
-                Помогите улучшить распознавание — особенно артикулы и определение РФ/РБ поставщика.
-              </p>
+            <!-- Лог обработки по файлу (#218): что распознал агент / почему без сделки. -->
+            <details v-if="processingLogOf(file)" class="mt-2 text-xs">
+              <summary class="cursor-pointer select-none text-base-500">
+                Лог обработки
+              </summary>
+              <pre class="mt-1 whitespace-pre-wrap break-words text-base-600">{{ processingLogOf(file) }}</pre>
+            </details>
 
-              <div class="mt-3 flex flex-wrap gap-2">
-                <B24Button
-                  v-for="opt in FEEDBACK_OPTIONS"
-                  :key="opt.kind"
-                  :color="feedbackKind === opt.kind ? 'air-primary' : 'air-tertiary'"
-                  size="sm"
-                  @click="feedbackKind = opt.kind"
-                >
-                  {{ opt.label }}
-                </B24Button>
-              </div>
-
-              <!-- К какому файлу относится отзыв (только если файлов больше одного). Выбранный файл
-                   и его сделка уезжают в issue — иначе по jobId триажить пакет из 5 файлов тяжело. -->
-              <div v-if="job.files.length > 1" class="mt-3">
-                <p class="text-xs text-base-500">
-                  К какому файлу относится?
-                </p>
-                <div class="mt-2 flex flex-wrap gap-2">
+            <!-- Обратная связь по ЭТОМУ файлу (#182, #218): 👍/👎 + опц. комментарий → GitHub issue.
+                 Под каждым файлом свой отзыв; комментарий НЕ обязателен. -->
+            <div
+              v-if="feedbackEnabled && (file.status === 'done' || file.status === 'error')"
+              class="mt-3 border-t border-base-200 pt-3"
+            >
+              <template v-if="!fbFor(file.name).sent">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-xs text-base-500">Как результат?</span>
                   <B24Button
-                    v-for="file in job.files"
-                    :key="file.name"
-                    :color="feedbackFileName === file.name ? 'air-primary' : 'air-tertiary'"
+                    v-for="opt in FEEDBACK_OPTIONS"
+                    :key="opt.kind"
+                    :color="fbFor(file.name).kind === opt.kind ? 'air-primary' : 'air-tertiary'"
                     size="xs"
-                    class="max-w-full"
-                    @click="feedbackFileName = file.name"
+                    @click="fbFor(file.name).kind = opt.kind"
                   >
-                    <span class="truncate">{{ file.name }}</span>
+                    {{ opt.label }}
                   </B24Button>
                 </div>
-              </div>
-
-              <B24Textarea
-                v-model="feedbackComment"
-                class="mt-3 w-full"
-                :rows="3"
-                :maxrows="8"
-                :maxlength="5000"
-                autoresize
-                :disabled="feedbackSubmitting"
-                placeholder="Что было не так или что понравилось? Можно указать позицию."
-              />
-
-              <div class="mt-3 flex justify-end">
-                <B24Button
-                  color="air-primary"
-                  size="sm"
-                  :disabled="!canSubmitFeedback"
-                  @click="submitFeedback"
-                >
-                  {{ feedbackSubmitting ? 'Отправляем…' : 'Отправить отзыв' }}
-                </B24Button>
-              </div>
-            </template>
-
-            <p v-else class="text-sm text-base-700">
-              Спасибо! Отзыв отправлен — он поможет улучшить распознавание.
-            </p>
+                <B24Textarea
+                  v-model="fbFor(file.name).comment"
+                  class="mt-2 w-full"
+                  :rows="2"
+                  :maxrows="6"
+                  :maxlength="5000"
+                  autoresize
+                  :disabled="fbFor(file.name).submitting"
+                  placeholder="Комментарий (необязательно): что не так / что понравилось, можно позицию."
+                />
+                <div class="mt-2 flex justify-end">
+                  <B24Button
+                    color="air-primary"
+                    size="xs"
+                    :disabled="!fbFor(file.name).kind || fbFor(file.name).submitting"
+                    @click="submitFileFeedback(file)"
+                  >
+                    {{ fbFor(file.name).submitting ? 'Отправляем…' : 'Отправить отзыв' }}
+                  </B24Button>
+                </div>
+              </template>
+              <p v-else class="text-xs text-base-600">
+                Спасибо! Отзыв по файлу отправлен.
+              </p>
+            </div>
           </B24Card>
 
           <div v-if="job.status === 'done' || job.status === 'error'" class="flex justify-center pt-2">
@@ -517,12 +495,8 @@ function resetState() {
   job.value = null
   uploadError.value = null
   selectedFiles.value = null
-  // Сбросить и форму обратной связи, чтобы для нового задания она была чистой.
-  feedbackKind.value = null
-  feedbackComment.value = ''
-  feedbackSent.value = false
-  feedbackSubmitting.value = false
-  feedbackFileName.value = null
+  // Сбросить отзывы по файлам, чтобы для нового задания форма была чистой.
+  feedbackByFile.value = {}
 }
 
 // ── Обратная связь сотрудника (issue #182) ─────────────────────────────────────
@@ -531,54 +505,48 @@ function resetState() {
 const { isEnabled: feedbackIsEnabled, submit: submitFeedbackApi } = useFeedback()
 
 type FeedbackKind = 'positive' | 'problem' | 'suggestion'
+// «Предложение» убрано по обратной связи заказчика (#218): оставляем 👍/👎.
 const FEEDBACK_OPTIONS: { kind: FeedbackKind, label: string }[] = [
   { kind: 'positive', label: '👍 Хорошо' },
-  { kind: 'problem', label: '👎 Проблема' },
-  { kind: 'suggestion', label: '💡 Предложение' }
+  { kind: 'problem', label: '👎 Проблема' }
 ]
 
 const feedbackEnabled = ref(false)
-const feedbackKind = ref<FeedbackKind | null>(null)
-const feedbackComment = ref('')
-const feedbackSubmitting = ref(false)
-const feedbackSent = ref(false)
-// Файл, к которому относится отзыв (по имени — устойчиво к смене объектов между опросами).
-// Для пакета из нескольких файлов пользователь выбирает один; для одного файла — он же по умолчанию.
-const feedbackFileName = ref<string | null>(null)
 
-// Целевой файл отзыва: выбранный по имени, иначе первый из задания. Его имя и сделка уезжают в issue.
-const feedbackTarget = computed<FileEntry | null>(() => {
-  const files = job.value?.files ?? []
-  if (!files.length) return null
-  return files.find(f => f.name === feedbackFileName.value) ?? files[0]!
-})
+// Отзыв теперь ПО КАЖДОМУ файлу (#218): состояние в карте по имени файла. Пред-инициализируем в watch,
+// чтобы шаблон только читал (без мутаций в рендере). Комментарий — НЕ обязателен.
+type FbState = { kind: FeedbackKind | null, comment: string, sent: boolean, submitting: boolean }
+const feedbackByFile = ref<Record<string, FbState>>({})
+function fbFor(name: string): FbState {
+  return feedbackByFile.value[name] ?? (feedbackByFile.value[name] = { kind: null, comment: '', sent: false, submitting: false })
+}
+watch(() => (job.value?.files ?? []).map(f => f.name).join('\n'), () => {
+  for (const f of job.value?.files ?? []) fbFor(f.name)
+}, { immediate: true })
 
-// Отправляем, только когда выбран тип и есть текст (бэкенд требует непустой комментарий).
-const canSubmitFeedback = computed(() =>
-  !!feedbackKind.value && feedbackComment.value.trim().length > 0 && !feedbackSubmitting.value
-)
+// Лог обработки агента по файлу (#218): что распознал / почему без сделки. Лежит в result.processingLog.
+function processingLogOf(file: FileEntry): string {
+  const r = file.result as { processingLog?: unknown } | null | undefined
+  if (!r || typeof r !== 'object' || typeof r.processingLog !== 'string') return ''
+  return r.processingLog.trim().slice(0, 10000) // cap: защита DOM от гигантского лога
+}
 
-async function submitFeedback() {
-  if (!feedbackKind.value || !canSubmitFeedback.value || !job.value) return
-  feedbackSubmitting.value = true
+async function submitFileFeedback(file: FileEntry) {
+  const s = fbFor(file.name)
+  if (!s.kind || s.submitting || !job.value) return // комментарий НЕ обязателен (#218)
+  s.submitting = true
   try {
-    const target = feedbackTarget.value
-    await submitFeedbackApi(feedbackKind.value, feedbackComment.value.trim(), {
+    await submitFeedbackApi(s.kind, s.comment.trim(), {
       jobId: job.value.jobId,
-      fileName: target?.name,
-      dealId: target ? dealOf(target)?.dealId : undefined
+      fileName: file.name,
+      dealId: dealOf(file)?.dealId
     })
-    feedbackSent.value = true
+    s.sent = true
     toast.add({ title: 'Спасибо за отзыв!', color: 'air-primary-success', duration: 4000 })
   } catch (e: unknown) {
-    toast.add({
-      title: 'Не удалось отправить отзыв',
-      description: extractErrorMessage(e),
-      color: 'air-primary-alert',
-      duration: 6000
-    })
+    toast.add({ title: 'Не удалось отправить отзыв', description: extractErrorMessage(e), color: 'air-primary-alert', duration: 6000 })
   } finally {
-    feedbackSubmitting.value = false
+    s.submitting = false
   }
 }
 

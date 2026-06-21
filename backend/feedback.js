@@ -18,13 +18,16 @@
 
 const GITHUB_API = 'https://api.github.com';
 
-// Canonical feedback kinds → the label/UI text. Keep the keys in lockstep with the UI widget
-// (ui/app/composables/useFeedback.ts) and the docs/FEEDBACK.md contract.
+// Канонические типы отзыва → метка/эмодзи. Все три валидны end-to-end (канал агента шлёт и suggestion);
+// при этом ВИДЖЕТ сотрудника намеренно предлагает только 👍/👎 (#218) — это подмножество, не рассинхрон.
 export const FEEDBACK_KINDS = {
   positive: '👍 Хорошо',
   problem: '👎 Проблема',
   suggestion: '💡 Предложение',
 };
+
+// Слова типов БЕЗ эмодзи — для заголовков GitHub-issue (#219). Эмодзи остаётся только в FEEDBACK_KINDS.
+const FEEDBACK_KIND_WORDS = { positive: 'Хорошо', problem: 'Проблема', suggestion: 'Предложение' };
 
 // Caps. The comment is the only large free-text field; 5000 chars is generous for a feedback note
 // and well under any GitHub body limit. Title/context values are short by construction.
@@ -187,7 +190,9 @@ export function buildAgentFeedbackIssue({ kind, tool, note, context = {} }) {
   const safeNote = sanitizeComment(note);
   const firstLine = stripHostileChars(safeNote.split('\n')[0] ?? '').trim();
   const toolName = safeToolName(tool);
-  const parts = [FEEDBACK_KINDS[k], toolName, firstLine].filter(Boolean);
+  // #219: заголовок без эмодзи (kind-слово из FEEDBACK_KIND_WORDS) и компактнее (первая строка обрезана).
+  const kindWord = FEEDBACK_KIND_WORDS[k] ?? k;
+  const parts = [kindWord, toolName, firstLine.slice(0, 60)].filter(Boolean);
   const title = stripHostileChars(`[Агент] ${parts.join(' · ')}`).slice(0, MAX_TITLE_LENGTH);
   const labels = ['agent-feedback', `feedback:${k}`];
   const body = formatAgentFeedbackBody({ tool: toolName, note: safeNote, context });

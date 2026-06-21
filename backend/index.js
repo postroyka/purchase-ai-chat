@@ -725,10 +725,8 @@ export function createApp(config = {}) {
     if (!kind) {
       return res.status(400).json({ error: 'kind must be one of: positive, problem, suggestion' });
     }
+    // Комментарий НЕ обязателен (#218): достаточно оценки 👍/👎. Пустой текст → issue с «(без текста)».
     const comment = typeof body.comment === 'string' ? body.comment : '';
-    if (comment.trim() === '') {
-      return res.status(400).json({ error: 'comment is required' });
-    }
 
     // Validate/normalise the app-captured context BEFORE it reaches buildIssue: ids are constrained
     // to safe charsets here; free-text fields (fileName, userAgent) are additionally hostile-stripped
