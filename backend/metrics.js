@@ -206,6 +206,10 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
       if (agent) {
         ops.push(['hincrby', K.totals, 'agent_runs', 1]);
         ops.push(['hincrby', K.totals, 'agent_ms', Math.max(0, Math.round(Number(agent.agentDurationMs) || 0))]);
+        // Число ходов агента (#222 «думает vs ищет»): сумма по прогонам → среднее в snapshot.
+        if (Number.isFinite(agent.numTurns)) {
+          ops.push(['hincrby', K.totals, 'agent_turns', Math.max(0, Math.round(Number(agent.numTurns)))]);
+        }
         if (typeof agent.extractMethod === 'string') {
           ops.push(['hincrby', K.extract, label(agent.extractMethod, 'unknown'), 1]);
         }
@@ -324,6 +328,8 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
         avgCostUsd: costRuns ? round4((t.cost_usd || 0) / costRuns) : 0,
         agentRuns,
         avgAgentMs: agentRuns ? Math.round((t.agent_ms || 0) / agentRuns) : 0,
+        // Среднее число ходов агента (#222): много ходов = поиск/итерации, мало = «думает».
+        avgAgentTurns: agentRuns ? round1((t.agent_turns || 0) / agentRuns) : 0,
         avgFileMs: processed ? Math.round((t.file_ms || 0) / processed) : 0,
       },
       outcomes: toSortedArray(outcomes),
