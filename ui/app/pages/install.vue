@@ -25,6 +25,10 @@
         title="Готово"
         description="Приложение установлено. Открываем…"
       />
+      <!-- Не-фатальная подсказка: установка прошла, но бот не зарегистрировался (#217). -->
+      <p v-if="state === 'done' && botWarning" class="mt-3 text-xs text-amber-600">
+        {{ botWarning }}
+      </p>
 
       <!-- Приложение открыли не в режиме установки (уже установлено) — installFinish не зовём. -->
       <B24Alert
@@ -67,5 +71,5 @@
  */
 definePageMeta({ layout: false })
 
-const { state, errorMsg } = useInstall()
+const { state, errorMsg, botWarning } = useInstall()
 </script>

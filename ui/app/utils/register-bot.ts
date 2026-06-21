@@ -43,9 +43,13 @@ export async function registerInvoiceBot(frame: B24Frame, webhookUrl: string): P
     throw new Error('imbot.v2.Bot.register: ответ без bot.id')
   }
 
-  // Команда feedback: клик кнопки COMMAND:'feedback' порождает событие команды на наш webhook
-  // (EVENT_COMMAND_ADD = тот же /b24/bot/event; handleBotEvent разбирает ONIMBOTV2COMMANDADD).
-  // HIDDEN:'Y' — служебная команда (вызывается кнопкой, не вводится вручную).
+  // Команда feedback (для кнопок 👍/👎). ⚠️ ПОРТАЛ-QA №1 (v1/v2): `imbot.command.register` —
+  // legacy-метод (v2-аналога `imbot.v2.Command.register` в доке НЕТ); его штатное событие —
+  // `ONIMCOMMANDADD`, а наш backend разбирает v2-событие `ONIMBOTV2COMMANDADD`. Доставит ли v2-бот
+  // (eventMode:webhook) клик команды как `ONIMBOTV2COMMANDADD` — официально НЕ подтверждено,
+  // проверяется только на живом портале. Если нет — переключиться на кнопки `ACTION:'SEND'` (клик
+  // шлёт текст → обычный ONIMBOTV2MESSAGEADD, парсим текст) — см. docs/B24_BOT.md §7.
+  // EVENT_COMMAND_ADD ставим на наш же /b24/bot/event; HIDDEN:'Y' — служебная (вызывается кнопкой).
   const cmd = await frame.actions.v2.call.make<number>({
     method: 'imbot.command.register',
     params: {
@@ -63,5 +67,8 @@ export async function registerInvoiceBot(frame: B24Frame, webhookUrl: string): P
     throw new Error(`imbot.command.register: ${cmd.getErrorMessages().join('; ')}`)
   }
   const commandId = cmd.getData()?.result
-  return { botId, commandId: typeof commandId === 'number' ? commandId : 0 }
+  if (typeof commandId !== 'number') {
+    throw new Error('imbot.command.register: ответ без id команды')
+  }
+  return { botId, commandId }
 }

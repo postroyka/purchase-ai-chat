@@ -57,4 +57,10 @@ describe('registerInvoiceBot (#217 — v2 SDK actions.v2.call.make)', () => {
       opts.method === 'imbot.v2.Bot.register' ? ok({ bot: { id: 7 } }) : fail(['COMMAND_ERROR']))
     await expect(registerInvoiceBot(frame, 'https://app/x')).rejects.toThrow(/imbot\.command\.register: COMMAND_ERROR/)
   })
+
+  it('успех, но ответ без bot.id → бросает, команда не регистрируется', async () => {
+    const { frame, make } = frameStub(async () => ok({})) // isSuccess:true, но result без bot
+    await expect(registerInvoiceBot(frame, 'https://app/x')).rejects.toThrow(/без bot\.id/)
+    expect(make).toHaveBeenCalledTimes(1)
+  })
 })
