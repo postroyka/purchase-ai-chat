@@ -152,10 +152,18 @@ describe('processing log + time in the issue (#237)', () => {
     expect(formatProcessingMs(1500)).toBe('1.5 с');
     expect(formatProcessingMs(65000)).toBe('1 мин 05 с');
     expect(formatProcessingMs(600000)).toBe('10 мин 00 с');
+    expect(formatProcessingMs(119999)).toBe('2 мин 00 с'); // округление секунд не даёт «1 мин 60 с»
+    expect(formatProcessingMs(0)).toBe('0.0 с'); // ноль — валиден, не дропается
     expect(formatProcessingMs(null)).toBe('');
     expect(formatProcessingMs(-5)).toBe('');
     expect(formatProcessingMs(Number.NaN)).toBe('');
     expect(formatProcessingMs('12000')).toBe(''); // not a number → dropped
+  });
+
+  it('formatIssueBody: время есть, лога нет → строка времени без секции «Лог обработки»', () => {
+    const body = formatIssueBody({ kind: 'problem', comment: 'x', context: { jobId: 'j' }, processingMs: 8000 });
+    expect(body).toContain('Время обработки:** 8.0 с');
+    expect(body).not.toContain('## Лог обработки');
   });
 
   it('sanitizeLog strips hostile chars and caps at 4000 with a marker', () => {
@@ -559,6 +567,46 @@ describe('POST /feedback', () => {
       .send({ kind: 'positive', comment: 'ок', context: { jobId: 'gone', fileName: 'x.pdf' } });
     expect(res.status).toBe(201);
     expect(JSON.parse(fetchImpl.calls[0].init.body).body).not.toContain('## Лог обработки');
+  });
+
+  it('задание найдено, но файла нет (несовпадение имени) → 201 без лога и времени', async () => {
+    const fetchImpl = fakeFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const jobs = { get: async () => ({ files: [{ name: 'other.pdf', durationMs: 999, result: { processingLog: 'X' } }] }) };
+    const res = await request(appWith({ jobs })).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'c', context: { jobId: 'job-xyz', fileName: 'invoice.pdf' } });
+    expect(res.status).toBe(201);
+    const body = JSON.parse(fetchImpl.calls[0].init.body).body;
+    expect(body).not.toContain('## Лог обработки');
+    expect(body).not.toContain('Время обработки');
+  });
+
+  it('лог из журнала — недоверенный: hostile-strip + HTML-escape + кап 4000 в issue (e2e)', async () => {
+    const fetchImpl = fakeFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const hostileLog = `<img src=x onerror=alert(1)>${RLO}злой${ZWSP}${'A'.repeat(9000)}`;
+    const jobs = { get: async () => ({ files: [{ name: 'p.pdf', durationMs: 5000, result: { processingLog: hostileLog } }] }) };
+    const res = await request(appWith({ jobs })).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'problem', comment: 'c', context: { jobId: 'j', fileName: 'p.pdf' } });
+    expect(res.status).toBe(201);
+    const body = JSON.parse(fetchImpl.calls[0].init.body).body;
+    expect(body).toContain('&lt;img src=x onerror=alert(1)&gt;'); // HTML инертен
+    expect(body).not.toContain('<img src=x'); // нет «живого» тега
+    expect(body).not.toContain(RLO); // bidi-override вырезан
+    expect(body).not.toContain('A'.repeat(4001)); // обрезано до 4000
+    expect(body).toContain('[truncated to 4000 characters]');
+  });
+
+  it('в журнале есть время, но нет processingLog → строка времени без секции лога', async () => {
+    const fetchImpl = fakeFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const jobs = { get: async () => ({ files: [{ name: 'p.pdf', durationMs: 8000 }] }) }; // result отсутствует
+    const res = await request(appWith({ jobs })).post('/feedback').set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'positive', comment: 'ок', context: { jobId: 'j', fileName: 'p.pdf' } });
+    expect(res.status).toBe(201);
+    const body = JSON.parse(fetchImpl.calls[0].init.body).body;
+    expect(body).toContain('Время обработки:** 8.0 с');
+    expect(body).not.toContain('## Лог обработки');
   });
 
   // ── Durable outbox (#190) ───────────────────────────────────────────────────

@@ -105,8 +105,9 @@ export function formatProcessingMs(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';
   const totalSec = ms / 1000;
   if (totalSec < 60) return `${totalSec.toFixed(1)} с`;
-  const min = Math.floor(totalSec / 60);
-  const sec = Math.round(totalSec - min * 60);
+  let min = Math.floor(totalSec / 60);
+  let sec = Math.round(totalSec - min * 60);
+  if (sec === 60) { min += 1; sec = 0; } // напр. 119_999 мс: round(59.999)=60 → переносим в минуту
   return `${min} мин ${String(sec).padStart(2, '0')} с`;
 }
 
