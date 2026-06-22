@@ -43,10 +43,42 @@ describe('parseBotEvent (legacy)', () => {
     });
     expect(e.event).toBe('ONIMBOTMESSAGEADD');
     expect(e.applicationToken).toBe('apptok');
-    expect(e.bot).toMatchObject({ id: '456', token: 'botok', restEndpoint: 'https://p.bitrix24.ru/rest/' });
+    expect(e.bot).toMatchObject({ id: '456', code: 'procure_ai_invoice', token: 'botok', restEndpoint: 'https://p.bitrix24.ru/rest/' });
     expect(e.dialogId).toBe('chat5');
     expect(e.message.files).toEqual([{ id: '12', name: 'schet.pdf', urlDownload: '/im_disk.php?id=12' }]);
     expect(e.user).toEqual({ id: '27', isBot: false });
+  });
+
+  it('команда (ONIMCOMMANDADD): бот-авторизация и поля команды — внутри data.COMMAND[<COMMAND_ID>]', () => {
+    // Сверено с офиц. докой: data.COMMAND = { "103": { access_token, BOT_ID, COMMAND, COMMAND_PARAMS, ... } },
+    // контекст диалога/автора — в data.PARAMS. data.BOT для события команды НЕ приходит.
+    const e = parseBotEvent({
+      event: 'ONIMCOMMANDADD',
+      auth: { application_token: 'apptok' },
+      data: {
+        COMMAND: { 103: {
+          access_token: 'botok', client_endpoint: 'https://p.bitrix24.ru/rest/', application_token: 'apptok',
+          BOT_ID: '456', BOT_CODE: 'procure_ai_invoice',
+          COMMAND: 'feedback', COMMAND_ID: '103', COMMAND_PARAMS: 'like job1', COMMAND_CONTEXT: 'KEYBOARD', MESSAGE_ID: '88',
+        } },
+        PARAMS: { DIALOG_ID: 'chat5', FROM_USER_ID: '27', MESSAGE: '/feedback like job1' },
+      },
+    });
+    expect(e.event).toBe('ONIMCOMMANDADD');
+    expect(e.bot).toMatchObject({ id: '456', code: 'procure_ai_invoice', token: 'botok', restEndpoint: 'https://p.bitrix24.ru/rest/' });
+    expect(e.dialogId).toBe('chat5');
+    expect(e.command).toEqual({ name: 'feedback', params: 'like job1', context: 'KEYBOARD' });
+    expect(e.user).toEqual({ id: '27', isBot: false });
+  });
+
+  it('USER.IS_BOT="Y" → isBot:true даже если автор ≠ BOT_ID (основной гард от эха)', () => {
+    const e = parseBotEvent({ event: 'ONIMBOTMESSAGEADD', data: { BOT: { 9: { access_token: 't' } }, PARAMS: { BOT_ID: '9', FROM_USER_ID: '42' }, USER: { ID: '42', IS_BOT: 'Y' } } });
+    expect(e.user).toEqual({ id: '42', isBot: true });
+  });
+
+  it('application_token берётся из записи бота, если top-level auth отсутствует (фолбэк)', () => {
+    const e = parseBotEvent({ event: 'ONIMBOTJOINCHAT', data: { BOT: { 1: { access_token: 't', application_token: 'frombot' } }, PARAMS: { BOT_ID: '1' } } });
+    expect(e.applicationToken).toBe('frombot');
   });
 
   it('FILES как объект (qs-массив) — записи без id и без ссылки отфильтрованы', () => {
@@ -259,10 +291,12 @@ describe('POST /b24/bot/event', () => {
 
   it('команда feedback (без токена фидбэка) → recordFeedback(source:user) и без падения', async () => {
     const { app, metrics } = appWith();
+    // Legacy-форма ONIMCOMMANDADD: команда и бот-авторизация — внутри data[COMMAND][<COMMAND_ID>].
     const res = await request(app).post('/b24/bot/event').type('form').send({
-      event: 'ONIMCOMMANDADD', 'auth[application_token]': 'secret', 'data[PARAMS][DIALOG_ID]': 'chat5', 'data[BOT][1][access_token]': 'botok',
+      event: 'ONIMCOMMANDADD', 'auth[application_token]': 'secret', 'data[PARAMS][DIALOG_ID]': 'chat5',
       'data[PARAMS][FROM_USER_ID]': '27', 'data[USER][ID]': '27',
-      'data[COMMAND]': 'feedback', 'data[COMMAND_PARAMS]': 'like job1', 'data[COMMAND_CONTEXT]': 'keyboard',
+      'data[COMMAND][103][access_token]': 'botok', 'data[COMMAND][103][BOT_ID]': '1',
+      'data[COMMAND][103][COMMAND]': 'feedback', 'data[COMMAND][103][COMMAND_PARAMS]': 'like job1', 'data[COMMAND][103][COMMAND_CONTEXT]': 'KEYBOARD',
     });
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(metrics.recordFeedback).toHaveBeenCalledWith({ source: 'user', kind: 'positive' }));
@@ -339,6 +373,14 @@ describe('makeBotApi.downloadAndSaveFiles (legacy)', () => {
     const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf', urlDownload: '/im_disk.php?id=1' }], { botToken: 'TOK' });
     expect(r.fileEntries).toHaveLength(1);
     expect(seen[0]).toBe('https://p.bitrix24.ru/im_disk.php?id=1&auth=TOK');
+  });
+
+  it('относительный urlDownload + нераспознаваемый restEndpoint → ссылка не собрана, файл пропущен (без fetch)', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, headers: { get: () => '16' }, arrayBuffer: async () => pdfBytes(16) }));
+    const api = mk({ restEndpoint: 'not-a-url', fetchImpl });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf', urlDownload: '/im_disk.php?id=1' }], { botToken: 'TOK' });
+    expect(r.fileEntries).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled(); // resolveDownloadUrl('') → continue до сетевого вызова
   });
 
   it('cap по числу файлов (maxFiles)', async () => {

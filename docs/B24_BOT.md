@@ -108,7 +108,13 @@
   сообщением.
 - Роутинг по `event`:
 
-| Событие | Действие |
+> 🔻 **LEGACY (#241):** имена событий без `V2` — `ONIMBOTMESSAGEADD` / `ONIMCOMMANDADD` / `ONIMBOTJOINCHAT` /
+> `ONIMBOTDELETE`; ответ «спасибо» — обычным `imbot.message.add` (аналога `imbot.v2.Command.answer` нет).
+> **Команда** (`ONIMCOMMANDADD`) кладёт и поля команды, и бот-авторизацию внутрь `data.COMMAND[<COMMAND_ID>]`
+> (объект-словарь), а контекст диалога — в `data.PARAMS`. У события **сообщения** бот-авторизация — в
+> `data.BOT[<BOT_ID>]`. Разбор обоих — в `parseBotEvent` (`b24-bot.js`).
+
+| Событие (v2 → описание ниже) | Действие |
 |---|---|
 | `ONIMBOTV2MESSAGEADD` + файлы в `message` | скачать файл(ы) → `uploads/` → запустить разбор; ответить «принял…» |
 | `ONIMBOTV2COMMANDADD` (`command.context='keyboard'`, наша команда `feedback`) | записать отзыв; `imbot.v2.Command.answer` «спасибо» |
@@ -117,6 +123,12 @@
 | `ONIMBOTV2DELETE` | очистка `BOT_ID`/состояния |
 
 ## 6. Файл из чата → разбор
+
+> 🔻 **LEGACY (#241):** `imbot.v2.File.download` на старом портале → 404. Берём ссылку на файл **из самого
+> события** (`data.PARAMS.FILES[].urlDownload` — относительный путь к диску → `resolveDownloadUrl` достраивает
+> origin из `client_endpoint` и добавляет `auth=<токен бота>`), затем тот же контроль host/size/MIME (#216).
+> ⚠️ Точная форма ссылки/наличие `FILES` на старом портале **не подтверждены** — снимаем сырой payload
+> дебаг-логом (`B24_BOT_DEBUG`) на первом прогоне (Портал-QA №1) и при необходимости правим `resolveDownloadUrl`.
 
 1. Из `ONIMBOTV2MESSAGEADD` взять файл(ы) из структурного объекта `message` (v2 отдаёт файлы в сообщении —
    в отличие от legacy, где их в событии не было).
@@ -235,9 +247,15 @@
    поймается из `ONAPPINSTALL` автоматически (в логах `app`: `[b24app] application_token захвачен`).
    *Фолбэк:* если callback не настроить — раскатать образ с env **`B24_BOT_APPLICATION_TOKEN`** =
    `application_token` тестового приложения.
-3. Зарегистрировать бота: `imbot.v2.Bot.register` (`eventMode:'webhook'`, `webhookUrl =
-   https://<тестовый-домен>/b24/bot/event`); зарегистрировать команду `feedback`
-   (`imbot.command.register`).
+3. Регистрация бота происходит **автоматически** при установке (`register-bot.ts` → `useInstall`):
+   **LEGACY** `imbot.register` (`EVENT_HANDLER = https://<тестовый-домен>/b24/bot/event`) + команда
+   `feedback` (`imbot.command.register`). Вручную звать не нужно. _(v2 `imbot.v2.Bot.register` → 404 на
+   старом портале; вернём при тираже, #241.)_
+
+> 🔻 **LEGACY (#241):** события приходят без `V2` (`ONIMBOTMESSAGEADD` / `ONIMCOMMANDADD` / …). Сценарий **1**
+> зависит от формы ссылки на файл старого портала — она **не подтверждена**: на первом прогоне снять
+> `docker compose … logs app | grep ONIMBOTMESSAGEADD` (при `B24_BOT_DEBUG≠false`) и при необходимости
+> поправить `resolveDownloadUrl`. Сценарий **6** (👍/👎) проверяет, что клик доходит как `ONIMCOMMANDADD`.
 
 **Сценарии** (каждый — действие → ожидаемое):
 | # | Действие | Ожидается |
@@ -263,8 +281,10 @@ allowed`; не выдан scope `imbot`.
 ## 13. Переключение на БОЕВОЙ Битрикс24
 
 1. На боевом портале установить приложение (локальное), выдать scope **`imbot`**.
-2. Зарегистрировать бота на **боевой** обработчик: `imbot.v2.Bot.register` с
-   `webhookUrl = https://<боевой-домен>/b24/bot/event`; зарегистрировать команду `feedback`.
+   _(Если боевой портал тоже старый — остаёмся на LEGACY; если новый — попросить вернуть v2-код из
+   закомментированных блоков «=== v2 (вернуть при тираже) ===», #241.)_
+2. Регистрация бота на **боевой** обработчик — автоматически при установке (LEGACY `imbot.register`,
+   `EVENT_HANDLER = https://<боевой-домен>/b24/bot/event`) + команда `feedback`.
 3. В `.env.prod` выставить **`B24_BOT_APPLICATION_TOKEN`** = `application_token` **боевого** приложения
    (после реализации подсистемы захвата — проставляется автоматически при установке), `make prod-redeploy`.
 4. Прогнать на боевом сценарии **1 и 6** из §12 (один файл + 👍).

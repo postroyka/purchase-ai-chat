@@ -818,9 +818,12 @@ export function createApp(config = {}) {
     }
     // 200 быстро (Б24 не гарантирует повтор обработчика) — тяжёлую работу делаем асинхронно.
     res.status(200).json({ ok: true });
-    // #bot debug (LEGACY портал-QA, #241): логируем форму события — ТОЛЬКО data.PARAMS (там нет токенов:
-    // access_token/application_token лежат в data.BOT и auth). Нужно, чтобы сверить структуру PARAMS.FILES
-    // старого портала и добить скачивание. Включено по умолчанию на прогон; выключить — B24_BOT_DEBUG=false.
+    // #bot debug (LEGACY портал-QA, #241): логируем форму события — ТОЛЬКО data.PARAMS. Там НЕТ токенов:
+    // access_token/application_token/client_endpoint лежат в data.BOT[<id>] (сообщение) и data.COMMAND[<id>]
+    // (команда) и в top-level auth — их НЕ логируем сознательно. Цель — сверить структуру PARAMS.FILES /
+    // ссылку на файл в MESSAGE старого портала и добить скачивание. Поля команды (COMMAND/COMMAND_PARAMS)
+    // в PARAMS не попадают (они в data.COMMAND[<id>]) — для отзыва 👍/👎 отдельный лог не нужен.
+    // ⚠️ ВКЛЮЧЕНО по умолчанию ТОЛЬКО на время портал-QA; после сверки выключить — B24_BOT_DEBUG=false.
     if (process.env.B24_BOT_DEBUG !== 'false') {
       try { console.log(`[b24bot] ${evt.event} PARAMS: ${JSON.stringify(req.body?.data?.PARAMS ?? {})}`); } catch { /* ignore */ }
     }
@@ -835,7 +838,9 @@ export function createApp(config = {}) {
       submitFeedback: submitChatFeedback,
       hasCapacity: () => activeJobs < maxConcurrentJobs,
       responsibleUserIdFor: (uid) => (/^\d+$/.test(String(uid)) ? String(uid) : responsibleUserIdDefault),
-      downloadAndSaveFiles: (files, opts) => api.downloadAndSaveFiles(files, { ...opts, botId: evt.bot.id }),
+      // LEGACY-скачивание берёт botToken из opts (см. handleBotEvent); botId здесь больше не нужен —
+      // вернётся при тираже вместе с imbot.v2.File.download (см. b24-bot-api.js, закомм. v2-блок).
+      downloadAndSaveFiles: (files, opts) => api.downloadAndSaveFiles(files, opts),
       sendMessage: (m) => api.sendMessage(m),
       log: (m) => console.error(m),
     }).catch((e) => console.error('[b24bot] handler error:', e?.message));

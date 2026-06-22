@@ -14,13 +14,21 @@ import { v4 as uuidv4 } from 'uuid';
 // Webhook-режим Б24 сериализует тело через http_build_query → ВСЕ скаляры приходят строками,
 // ключи в PHP-виде (data[bot][id]); express.urlencoded({extended:true}) парсит их в объект.
 const s = (v) => (v == null ? '' : String(v));
+// Первое значение-объект из словаря (data.BOT / data.COMMAND приходят как {<id>:{...}}).
+const firstObject = (m) => {
+  for (const v of Object.values(m || {})) if (v && typeof v === 'object') return v;
+  return {};
+};
 
 /**
  * Привести сырое тело LEGACY-вебхук-события к нормализованной форме.
- * Legacy-payload (сверено с офиц. докой): UPPERCASE-ключи —
- *   data.BOT[<botId>].{access_token, client_endpoint, application_token, AUTH{...}, BOT_CODE},
- *   data.PARAMS.{DIALOG_ID, MESSAGE, MESSAGE_ID, FROM_USER_ID, FILES, COMMAND, COMMAND_PARAMS},
- *   data.USER.{ID}, auth.{application_token, client_endpoint}.
+ * Legacy-payload (сверено с офиц. докой ONIMBOTMESSAGEADD / ONIMCOMMANDADD): UPPERCASE-ключи.
+ * Бот-авторизация (access_token, client_endpoint, application_token, AUTH{}, BOT_ID, BOT_CODE) приходит
+ * в РАЗНЫХ контейнерах в зависимости от события:
+ *   • сообщение/вход/удаление → data.BOT[<BOT_ID>] (объект-словарь, ключ = BOT_ID);
+ *   • команда (ONIMCOMMANDADD) → data.COMMAND[<COMMAND_ID>] (там же COMMAND/COMMAND_PARAMS/COMMAND_CONTEXT).
+ * Контекст диалога/автора всегда в data.PARAMS.{DIALOG_ID, MESSAGE, MESSAGE_ID, FROM_USER_ID, FILES};
+ * data.USER.{ID, IS_BOT('Y'/'N')}; top-level auth.{application_token, client_endpoint}.
  * @returns {{ event:string, applicationToken:string, bot:{id,code,token,restEndpoint}, dialogId:string,
  *   message:{id,text,files:Array<{id,name,urlDownload}>}, command:{name,params,context}, user:{id,isBot} }}
  */
@@ -29,12 +37,17 @@ export function parseBotEvent(body = {}) {
   const params = (data.PARAMS && typeof data.PARAMS === 'object' && data.PARAMS) || {};
   const user = (data.USER && typeof data.USER === 'object' && data.USER) || {};
   const topAuth = (body.auth && typeof body.auth === 'object' && body.auth) || {};
-  // BOT — объект, ключ = BOT_ID; берём указанного в PARAMS или единственного/первого.
+  // BOT/COMMAND — объекты-словари (ключ = BOT_ID / COMMAND_ID). У события команды бот-авторизация и
+  // поля команды лежат внутри записи data.COMMAND[<id>]; у остальных событий — внутри data.BOT[<id>].
   const botMap = (data.BOT && typeof data.BOT === 'object' && data.BOT) || {};
-  const botId = s(params.BOT_ID || Object.keys(botMap)[0]);
-  const botEntry = (botMap[botId] && typeof botMap[botId] === 'object' && botMap[botId])
-    || (typeof Object.values(botMap)[0] === 'object' ? Object.values(botMap)[0] : {});
-  const botAuth = (botEntry.AUTH && typeof botEntry.AUTH === 'object' && botEntry.AUTH) || {};
+  const cmdMap = (data.COMMAND && typeof data.COMMAND === 'object' && data.COMMAND) || {};
+  const cmdEntry = firstObject(cmdMap);
+  const botId = s(params.BOT_ID || cmdEntry.BOT_ID || Object.keys(botMap)[0]);
+  // authEntry — единый источник бот-авторизации: для команды это запись команды, иначе выбранный бот.
+  const authEntry = Object.keys(cmdEntry).length
+    ? cmdEntry
+    : ((botMap[botId] && typeof botMap[botId] === 'object' && botMap[botId]) || firstObject(botMap));
+  const innerAuth = (authEntry.AUTH && typeof authEntry.AUTH === 'object' && authEntry.AUTH) || {};
 
   // ⚠️ ПОРТАЛ-QA: форма файлов в legacy (data.PARAMS.FILES) зависит от версии портала — сверяем по
   // логу сырого события (#bot debug). Берём id + имя + ссылку скачивания под разными возможными ключами.
@@ -53,24 +66,25 @@ export function parseBotEvent(body = {}) {
 
   return {
     event: s(body.event).toUpperCase(),
-    applicationToken: s(topAuth.application_token || botEntry.application_token),
+    applicationToken: s(topAuth.application_token || authEntry.application_token || innerAuth.application_token),
     // restEndpoint — база REST портала для обратных вызовов бота (client_endpoint токена бота).
     bot: {
-      id: botId,
-      code: s(botEntry.BOT_CODE || botEntry.code),
-      token: s(botEntry.access_token || botAuth.access_token),
-      restEndpoint: s(botEntry.client_endpoint || botAuth.client_endpoint || topAuth.client_endpoint),
+      id: s(authEntry.BOT_ID || botId),
+      code: s(authEntry.BOT_CODE || authEntry.code),
+      token: s(authEntry.access_token || innerAuth.access_token),
+      restEndpoint: s(authEntry.client_endpoint || innerAuth.client_endpoint || topAuth.client_endpoint),
     },
-    dialogId: s(params.DIALOG_ID),
-    message: { id: s(params.MESSAGE_ID), text: s(params.MESSAGE), files },
-    // Команда (ONIMCOMMANDADD): legacy кладёт COMMAND/COMMAND_PARAMS в data или PARAMS — берём отовсюду.
+    dialogId: s(params.DIALOG_ID || cmdEntry.DIALOG_ID),
+    message: { id: s(params.MESSAGE_ID || cmdEntry.MESSAGE_ID), text: s(params.MESSAGE), files },
+    // Команда (ONIMCOMMANDADD): COMMAND/COMMAND_PARAMS/COMMAND_CONTEXT — внутри data.COMMAND[<COMMAND_ID>].
     command: {
-      name: s(data.COMMAND || params.COMMAND),
-      params: s(data.COMMAND_PARAMS || params.COMMAND_PARAMS),
-      context: s(data.COMMAND_CONTEXT || params.COMMAND_CONTEXT),
+      name: s(cmdEntry.COMMAND),
+      params: s(cmdEntry.COMMAND_PARAMS),
+      context: s(cmdEntry.COMMAND_CONTEXT),
     },
-    // isBot: сообщение от самого бота (автор == BOT_ID) — на него не реагируем.
-    user: { id: fromUserId, isBot: fromUserId !== '' && fromUserId === botId },
+    // isBot: эхо собственных сообщений бота — не реагируем. Основной признак — USER.IS_BOT='Y'
+    // (приходит в событии сообщения); фолбэк — автор совпал с BOT_ID.
+    user: { id: fromUserId, isBot: s(user.IS_BOT).toUpperCase() === 'Y' || (fromUserId !== '' && fromUserId === botId) },
   };
 }
 
