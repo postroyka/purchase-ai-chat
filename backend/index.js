@@ -527,12 +527,30 @@ export function createApp(config = {}) {
     return job;
   }
 
+  // Достать лог обработки + время файла из журнала заданий, чтобы вложить их в issue отзыва (#237).
+  // Источник истины — сервер: бэкенд всегда хранит fileEntry.durationMs и result.processingLog (флаг
+  // SHOW_TIMINGS гейтит только ответ /job/:id/status, не само хранение). Best-effort: нет jobId/файла,
+  // журнал недоступен или задание истекло → пусто, issue заводится без этой секции.
+  async function lookupFileTelemetry(jobId, fileName) {
+    if (!jobId || !fileName) return { processingLog: '', processingMs: null };
+    try {
+      const j = await jobs.get(jobId);
+      const f = j?.files?.find((x) => x && x.name === fileName);
+      if (!f) return { processingLog: '', processingMs: null };
+      const log = (f.result && typeof f.result.processingLog === 'string') ? f.result.processingLog : '';
+      const ms = Number.isFinite(f.durationMs) ? f.durationMs : null;
+      return { processingLog: log, processingMs: ms };
+    } catch {
+      return { processingLog: '', processingMs: null };
+    }
+  }
+
   // Завести GitHub-issue по отзыву (репо/токен из конфига) — общий путь для /feedback и бота.
   // На ТРАНЗИЕНТНОМ сбое (GitHub недоступен / 5xx / 429) кладём готовый issue в durable-outbox (#190)
   // и возвращаем { ok:true, queued:true } — фоновый дренер дошлёт. На постоянной ошибке (401/403/404/
   // не настроено) пробрасываем — вызывающий отдаёт 5xx, чтобы оператор заметил.
-  async function createFeedbackIssue({ kind, comment, context, channel = 'user' }) {
-    const { title, body, labels } = buildIssue({ kind, comment, context });
+  async function createFeedbackIssue({ kind, comment, context, channel = 'user', processingLog = '', processingMs = null }) {
+    const { title, body, labels } = buildIssue({ kind, comment, context, processingLog, processingMs });
     try {
       const res = await createGithubIssue({ repo: githubFeedbackRepo, token: githubFeedbackToken, title, body, labels });
       return { ok: true, url: res.url, number: res.number };
@@ -762,8 +780,12 @@ export function createApp(config = {}) {
       reporter: feedbackReporter(req),
     };
 
+    // #237: подложить в issue лог обработки + время файла (как на странице результата). Берём из
+    // журнала заданий по jobId+файлу (источник истины — не доверяем клиенту). Best-effort.
+    const { processingLog, processingMs } = await lookupFileTelemetry(context.jobId, context.fileName);
+
     try {
-      const result = await createFeedbackIssue({ kind, comment, context });
+      const result = await createFeedbackIssue({ kind, comment, context, processingLog, processingMs });
       metrics.recordFeedback({ source: 'user', kind }).catch(() => {}); // best-effort, → /metrics
       if (result.queued) {
         // GitHub was briefly unreachable — the issue is persisted in the durable outbox and the
