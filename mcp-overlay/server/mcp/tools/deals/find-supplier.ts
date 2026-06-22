@@ -7,6 +7,9 @@ interface SupplierResult {
   id: number | null
   title?: string
   unp?: string
+  // #195: PHP-контроллер ставит true, если по УНП совпало >1 компания (взят min id) — мультиматч.
+  // Прокидываем как есть в результат инструмента; агент переносит шаг в matching.multiMatches.
+  multi?: boolean
 }
 
 /**

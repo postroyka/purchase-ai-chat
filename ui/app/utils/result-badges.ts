@@ -44,6 +44,14 @@ export function fileSucceeded(file: ResultFile): boolean {
   return file.status === 'done' && dealIdOf(file) !== null
 }
 
+// Машинный код исхода агента (result.error: 'articles_not_in_catalog', 'tool_unavailable', …) — для
+// разбора рядом с причиной (#221). Отдельно от человекочитаемого `problem` (#192) и транспортной
+// ошибки задания. Не-строка/отсутствует → ''. Длину режем (защита вёрстки от мусора).
+export function outcomeCodeOf(file: ResultFile): string {
+  const err = (file.result as { error?: unknown } | undefined)?.error
+  return typeof err === 'string' ? err.trim().slice(0, 64) : ''
+}
+
 // 'done' + deal → green "Готово"; 'done' WITHOUT a deal → amber "Без сделки"; otherwise the status default.
 export function fileBadge(file: ResultFile): Badge {
   if (file.status === 'done' && dealIdOf(file) === null) {

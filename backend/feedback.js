@@ -34,13 +34,20 @@ const FEEDBACK_KIND_WORDS = { positive: 'Хорошо', problem: 'Проблем
 const MAX_COMMENT_LENGTH = 5000;
 const MAX_TITLE_LENGTH = 120;
 const MAX_CONTEXT_VALUE = 300;
+// Лог обработки (#237) — отдельный недоверенный текст агента; кап меньше комментария, его задача —
+// дать мейнтейнеру контекст разбора, а не воспроизвести гигантский документ.
+const MAX_LOG_LENGTH = 4000;
 
 export class GithubFeedbackError extends Error {
-  constructor(message, code) {
+  constructor(message, code, { retryable = false } = {}) {
     super(message);
     this.name = 'GithubFeedbackError';
     // 'NOT_CONFIGURED' | 'UPSTREAM' | 'NETWORK'
     this.code = code;
+    // Could a later retry plausibly succeed? Transient transport / 5xx / 429 → true; misconfig, auth
+    // (401/403), not-found (404) and malformed payloads → false. Drives the durable outbox (#190): a
+    // retryable failure is queued and re-attempted; a permanent one surfaces to the caller as a 5xx.
+    this.retryable = retryable;
   }
 }
 
@@ -86,17 +93,40 @@ function contextLine(label, value) {
   return `- **${label}:** ${escapeHtml(v.slice(0, MAX_CONTEXT_VALUE))}`;
 }
 
+/** Strip hostile chars from the agent's processing log and truncate to MAX_LOG_LENGTH (#237). */
+export function sanitizeLog(input) {
+  const stripped = stripHostileChars(input);
+  if (stripped.length <= MAX_LOG_LENGTH) return stripped;
+  return `${stripped.slice(0, MAX_LOG_LENGTH)}…\n\n[truncated to ${MAX_LOG_LENGTH} characters]`;
+}
+
+/** Human-readable processing time from ms (#237), or '' for missing/invalid (→ row is dropped). */
+export function formatProcessingMs(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';
+  const totalSec = ms / 1000;
+  if (totalSec < 60) return `${totalSec.toFixed(1)} с`;
+  let min = Math.floor(totalSec / 60);
+  let sec = Math.round(totalSec - min * 60);
+  if (sec === 60) { min += 1; sec = 0; } // напр. 119_999 мс: round(59.999)=60 → переносим в минуту
+  return `${min} мин ${String(sec).padStart(2, '0')} с`;
+}
+
 /**
  * Render the issue body: an app-captured context block followed by the employee's comment wrapped
  * in <pre><code> (so backticks/asterisks/HTML in it are inert). Mirrors the agent-feedback body
  * shape so maintainers triage both channels the same way.
+ *
+ * processingLog / processingMs (#237): the file's agent log + processing time, looked up server-side
+ * from the job store and rendered here so the issue carries the same context the operator saw on the
+ * result page. The log is UNTRUSTED (agent reads third-party documents) → hostile-stripped + escaped.
  */
-export function formatIssueBody({ kind, comment, context = {} }) {
+export function formatIssueBody({ kind, comment, context = {}, processingLog = '', processingMs = null }) {
   const ctxLines = [
     contextLine('Тип', FEEDBACK_KINDS[kind] ?? kind),
     contextLine('Задача (jobId)', context.jobId),
     contextLine('Файл', context.fileName),
     contextLine('Сделка', context.dealId ? `#${context.dealId}` : ''),
+    contextLine('Время обработки', formatProcessingMs(processingMs)),
     contextLine('Кто сообщил', context.reporter),
     contextLine('Версия сборки', context.appVersion),
     contextLine('User-Agent', context.userAgent),
@@ -106,6 +136,7 @@ export function formatIssueBody({ kind, comment, context = {} }) {
   // be called directly with raw input (e.g. tests), so it must neutralise Trojan-Source/zero-widths
   // on its own rather than assume a pre-sanitised comment. escapeHtml then makes HTML/Markdown inert.
   const safeComment = escapeHtml(stripHostileChars(comment)).trim() || '(без текста)';
+  const safeLog = escapeHtml(sanitizeLog(processingLog)).trim();
 
   return [
     '## Контекст',
@@ -117,6 +148,8 @@ export function formatIssueBody({ kind, comment, context = {} }) {
     '<pre><code>',
     safeComment,
     '</code></pre>',
+    // Лог обработки агента по файлу (#237) — только если он есть; недоверенный → в <pre><code>.
+    ...(safeLog ? ['', '## Лог обработки', '', '<pre><code>', safeLog, '</code></pre>'] : []),
     '',
     '---',
     '_Отправлено через форму обратной связи в приложении (issue #182, канал «сотрудник»)._',
@@ -127,14 +160,14 @@ export function formatIssueBody({ kind, comment, context = {} }) {
  * Build the { title, body, labels } for the GitHub issue from already-validated input.
  * Title = "[Обратная связь] <kind> · <first line of the comment>" (hostile-stripped, capped).
  */
-export function buildIssue({ kind, comment, context = {} }) {
+export function buildIssue({ kind, comment, context = {}, processingLog = '', processingMs = null }) {
   const safeComment = sanitizeComment(comment);
   const firstLine = stripHostileChars(safeComment.split('\n')[0] ?? '').trim();
   const kindLabel = FEEDBACK_KINDS[kind] ?? kind;
   const titleText = firstLine ? `${kindLabel} · ${firstLine}` : kindLabel;
   const title = `[Обратная связь] ${titleText}`.slice(0, MAX_TITLE_LENGTH);
   const labels = ['user-feedback', `feedback:${kind}`];
-  const body = formatIssueBody({ kind, comment: safeComment, context });
+  const body = formatIssueBody({ kind, comment: safeComment, context, processingLog, processingMs });
   return { title, body, labels };
 }
 
@@ -287,12 +320,13 @@ export async function createGithubIssue({ repo, token, title, body, labels = [],
     });
   } catch {
     // Deliberately swallow the cause — Node's fetch errors can include the URL and headers, which
-    // would echo the bearer token into operator logs.
-    throw new GithubFeedbackError('GitHub API is unreachable.', 'NETWORK');
+    // would echo the bearer token into operator logs. A transport failure is transient → retryable.
+    throw new GithubFeedbackError('GitHub API is unreachable.', 'NETWORK', { retryable: true });
   }
 
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
+      // Auth/permission — a retry with the same token won't help; the operator must rotate it.
       throw new GithubFeedbackError('GitHub rejected the feedback token (401/403). Rotate it and retry.', 'UPSTREAM');
     }
     if (response.status === 404) {
@@ -301,7 +335,9 @@ export async function createGithubIssue({ repo, token, title, body, labels = [],
         'UPSTREAM',
       );
     }
-    throw new GithubFeedbackError(`GitHub returned ${response.status} when creating the feedback issue.`, 'UPSTREAM');
+    // 429 (rate limited) and 5xx (GitHub-side outage) are transient → retryable; anything else isn't.
+    const retryable = response.status === 429 || response.status >= 500;
+    throw new GithubFeedbackError(`GitHub returned ${response.status} when creating the feedback issue.`, 'UPSTREAM', { retryable });
   }
 
   let data;

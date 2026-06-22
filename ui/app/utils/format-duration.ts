@@ -27,17 +27,33 @@ export function humanMs(ms: number): string {
 // Метки классификации total-времени файла (backend, пороги TIMING_FAST_MS/TIMING_SLOW_MS).
 export const SPEED_LABELS: Record<string, string> = { fast: 'быстро', normal: 'норма', slow: 'медленно' }
 
-// Строка замеров для лога результата: «⏱ всего 48.5 с — норма · агент 44.2 с · извлечение: ocr».
+// Русское склонение по числу: forms = [одна, две‑четыре, пять+]. plural(1,…)→[0]; 2→[1]; 5→[2]; 11→[2].
+export function plural(n: number, forms: [string, string, string]): string {
+  const a = Math.abs(n) % 100
+  const b = a % 10
+  if (a > 10 && a < 20) return forms[2]
+  if (b > 1 && b < 5) return forms[1]
+  if (b === 1) return forms[0]
+  return forms[2]
+}
+
+// Строка замеров для лога результата:
+//   «⏱ всего 48.5 с — норма · агент 44.2 с (12 ходов) · извлечение: ocr 2.3 с».
 // `— <скорость>`/`агент`/`извлечение` — только если backend их вернул (на ошибке агента нет agentMs).
-// Точное время извлечения отдельно не меряется (остаток «всего−агент» включал бы ретрай-бэкофф),
-// поэтому показываем МЕТОД извлечения (ocr/pdftotext/office) — частый ответ на «где медленно».
+// Агент: время + число ходов (#222 «думает vs ищет»): много ходов = агент много раз ходил в
+//   инструменты (поиск/итерации); мало ходов при большом времени = модель дольше «думала» на ход.
+// Извлечение: МЕТОД (ocr/pdftotext/office) + точное ВРЕМЯ (`extractMs`, мерится вокруг extractFn —
+//   #203.2). Время показываем ТОЛЬКО при наличии метода (время без метки бессмысленно; backend шлёт оба).
 export function timingLine(
-  file: { durationMs?: number | null, agentMs?: number | null, extractMethod?: string | null, speed?: string | null }
+  file: { durationMs?: number | null, agentMs?: number | null, agentTurns?: number | null, extractMethod?: string | null, extractMs?: number | null, speed?: string | null }
 ): string {
   if (file.durationMs == null) return ''
   let s = `⏱ всего ${humanMs(file.durationMs)}`
   if (file.speed && SPEED_LABELS[file.speed]) s += ` — ${SPEED_LABELS[file.speed]}`
-  if (file.agentMs != null) s += ` · агент ${humanMs(file.agentMs)}`
-  if (file.extractMethod) s += ` · извлечение: ${file.extractMethod}`
+  if (file.agentMs != null) {
+    s += ` · агент ${humanMs(file.agentMs)}`
+    if (file.agentTurns != null) s += ` (${file.agentTurns} ${plural(file.agentTurns, ['ход', 'хода', 'ходов'])})`
+  }
+  if (file.extractMethod) s += ` · извлечение: ${file.extractMethod}${file.extractMs != null ? ` ${humanMs(file.extractMs)}` : ''}`
   return s
 }

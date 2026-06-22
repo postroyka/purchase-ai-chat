@@ -71,6 +71,27 @@ final class ProcureContractTest extends TestCase
 		$this->assertArrayHasKey('PROPERTY_500', $filter); // фильтр по TYPE присутствует
 	}
 
+	public function testMultiMatchSetsMultiFlagAndPicksMinId(): void
+	{
+		// Несколько договоров подходят (без фильтра номера/даты) → min(id)=10 + multi:true (#195).
+		DogovorEntity::$rows = [
+			$this->row(10, 'A1', '01.01.2020'),
+			$this->row(20, 'B2', '02.02.2020'),
+		];
+		$c = new ProcureContract();
+		$res = $c->findAction(5);
+		$this->assertSame(10, $res['id']);
+		$this->assertTrue($res['multi']);
+	}
+
+	public function testSingleMatchHasNoMultiFlag(): void
+	{
+		DogovorEntity::$rows = [$this->row(10, 'A1', '01.01.2020')];
+		$c = new ProcureContract();
+		$res = $c->findAction(5);
+		$this->assertArrayNotHasKey('multi', $res);
+	}
+
 	public function testNumberMatchIsHomoglyphTolerant(): void
 	{
 		// В базе номер латиницей «ABC», в документе кириллицей «АВС» → должны совпасть.

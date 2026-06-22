@@ -12,11 +12,13 @@ import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
 import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
-import { createSessionAuth, parseCookies, domainAllowed } from './auth.js';
+import { createSessionAuth, parseCookies, domainAllowed, normalizeDomain, defaultAppInfo, redactAuthId } from './auth.js';
 import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy } from './feedback.js';
 import { createAgentFeedbackReporter } from './agent-feedback.js';
-import { parseBotEvent, handleBotEvent } from './b24-bot.js';
+import { createFeedbackOutbox } from './feedback-outbox.js';
+import { parseBotEvent, parseAppEvent, handleBotEvent } from './b24-bot.js';
 import { makeBotApi } from './b24-bot-api.js';
+import { createAppStore } from './app-store.js';
 import { safeCompare } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -232,8 +234,9 @@ export function createApp(config = {}) {
   const githubFeedbackRepo = config.githubFeedbackRepo
     ?? process.env.GITHUB_FEEDBACK_REPO ?? 'postroyka/purchase-ai-chat';
   // Замеры времени (#замеры): при SHOW_TIMINGS=true /job/:id/status отдаёт тайминги по файлам
-  // (startedAt/agentMs/durationMs) + флаг — UI показывает живой mm:ss во время обработки и замеры в
-  // логе по готовности. Только для лога на странице, НЕ в метрики. По умолчанию выключено (opt-in).
+  // (startedAt/agentMs/durationMs) + флаг — UI показывает ДЕТАЛЬНЫЕ замеры в логе по готовности.
+  // Только для лога на странице, НЕ в метрики. По умолчанию выключено (opt-in). Живой mm:ss
+  // «обрабатывается N сек» UI показывает всегда (от клиентского procSince), независимо от флага (#203).
   const showTimings = config.showTimings ?? (String(process.env.SHOW_TIMINGS ?? '').toLowerCase() === 'true');
   // Пороги «быстро/медленно» по total-времени файла для лога замеров (#замеры): ≤FAST → fast,
   // ≥SLOW → slow, между — normal. Оценочные — калибруются реальностью через env (docs/PARSING_PERFORMANCE.md).
@@ -329,6 +332,20 @@ export function createApp(config = {}) {
     token: githubFeedbackToken, repo: githubFeedbackRepo, redisClient: rateLimitRedis,
   });
 
+  // Durable outbox (#190): when GitHub is briefly unreachable, a user/bot feedback issue is queued
+  // here and retried in the background instead of being lost (POST /feedback then returns 202, not
+  // 502). Redis-backed when present (survives restart / multi-instance), in-memory otherwise. The
+  // drainer timer is NOT started here — main() starts it (like the uploads-retention sweep), so
+  // importing createApp in tests never spawns a timer. createIssue closes over the configured repo/
+  // token; the token is never persisted in the queue. The agent channel keeps its own best-effort
+  // path (dedup/cap) and is intentionally NOT routed through the outbox.
+  const feedbackOutbox = config.feedbackOutbox ?? createFeedbackOutbox({
+    redisClient: rateLimitRedis,
+    createIssue: ({ repo, title, body, labels }) => createGithubIssue({
+      repo: repo || githubFeedbackRepo, token: githubFeedbackToken, title, body, labels,
+    }),
+  });
+
   // App-level signed-cookie session (auth.js) — replaces HTTP Basic so the Bitrix24 iframe can
   // load the UI. The standalone /login form's credentials are the existing PUBLIC_PAGE_BASIC_AUTH_*
   // values; a placeholder password counts as "not set" (mirrors the old basicAuthConfigured check)
@@ -363,6 +380,9 @@ export function createApp(config = {}) {
   // SSRF-allowlist портала (из B24_FRAME_ANCESTORS) — общий для /session/b24 (app.info) и обратных
   // вызовов чат-бота (b24-bot-api.js): один env управляет всеми исходящими к порталу.
   const portalDomains = config.portalDomains ?? parseFrameAncestorHosts(frameAncestors);
+  // app.info-проба портала: одна реализация для /session/b24 И для эндпоинта приёма ONAPPINSTALL
+  // (#217) — тесты инжектируют один мок. В проде undefined → auth.js берёт реальный fetch-пробник.
+  const appInfoImpl = config.appInfo ?? defaultAppInfo;
   const sessionAuth = config.sessionAuth ?? createSessionAuth({
     secret: sessionSecret,
     user: basicAuthUser,
@@ -370,8 +390,11 @@ export function createApp(config = {}) {
     secure: process.env.NODE_ENV === 'production',
     portalDomains,
     ttlMs: sessionTtlMs,
-    appInfo: config.appInfo, // undefined in prod → auth.js uses its real fetch-based probe
+    appInfo: appInfoImpl,
   });
+  // Стор «приложения» (#217): захваченный из ONAPPINSTALL application_token (по хешу, ключ member_id)
+  // для проверки подлинности событий бота. Тесты инжектируют фейк через config.appStore.
+  const appStore = config.appStore ?? createAppStore({ redisUrl });
   // Dedicated tight brute-force limiter for the credential/session endpoints (/login + /session/b24),
   // separate from the upload limiter: both are guessing/DoS targets (password attempts; authId
   // guessing + app.info amplification), so cap attempts per IP. Keyed by IP (these requests carry no
@@ -412,6 +435,9 @@ export function createApp(config = {}) {
   // Expose the resolved upload dir so the prod entrypoint's retention sweep targets the SAME
   // directory createApp uses — the two must never resolve UPLOAD_DIR independently and diverge.
   app.getUploadDir = () => uploadDir;
+  // Expose the durable feedback outbox (#190) so the prod entrypoint can start/stop its drainer —
+  // the timer lives outside createApp to keep test imports timer-free, mirroring the retention sweep.
+  app.getFeedbackOutbox = () => feedbackOutbox;
 
   const bearerConfigured = () => Boolean(token) && token !== AUTH_PLACEHOLDER;
   // A session is acceptable whenever we have a signing secret — the cookie is HMAC-verified, so its
@@ -482,12 +508,15 @@ export function createApp(config = {}) {
   // Создание+запуск задания — ОБЩИЙ путь для /upload и чат-бота Б24 (b24-bot.js). files уже на диске
   // (форма [{name,path,status:'pending',result:null,error:null}]). onDone(job) — опц. колбэк по
   // завершении: UI поллит /job/:id/status и onDone не нужен, бот шлёт результат в чат.
-  async function createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId, onDone }) {
+  async function createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId, onDone, forceFeedback = false }) {
     const job = { jobId, status: 'pending', responsibleUserId, files: fileEntries, dir: jobDir, createdAt: Date.now() };
+    // Форс тестового отзыва агента на ЭТО задание (#205): альтернатива глобальному AGENT_FORCE_FEEDBACK
+    // — тестировать канал на один аплоад, без рестарта и без шума у всех. Храним только true.
+    if (forceFeedback) job.forceFeedback = true;
     await jobs.set(jobId, job); // бросает → caller чистит jobDir и отвечает 503
     activeJobs++;
     metrics.recordUpload({ fileCount: fileEntries.length }).catch(() => {}); // best-effort
-    processJob(jobId, jobs, agentConfig, metrics, agentFeedback)
+    processJob(jobId, jobs, agentConfig, metrics, agentFeedback, { fastMs: timingFastMs, slowMs: timingSlowMs })
       .then(async () => {
         if (!onDone) return;
         try { await onDone(await jobs.get(jobId)); }
@@ -498,10 +527,40 @@ export function createApp(config = {}) {
     return job;
   }
 
+  // Достать лог обработки + время файла из журнала заданий, чтобы вложить их в issue отзыва (#237).
+  // Источник истины — сервер: бэкенд всегда хранит fileEntry.durationMs и result.processingLog (флаг
+  // SHOW_TIMINGS гейтит только ответ /job/:id/status, не само хранение). Best-effort: нет jobId/файла,
+  // журнал недоступен или задание истекло → пусто, issue заводится без этой секции.
+  async function lookupFileTelemetry(jobId, fileName) {
+    if (!jobId || !fileName) return { processingLog: '', processingMs: null };
+    try {
+      const j = await jobs.get(jobId);
+      const f = j?.files?.find((x) => x && x.name === fileName);
+      if (!f) return { processingLog: '', processingMs: null };
+      const log = (f.result && typeof f.result.processingLog === 'string') ? f.result.processingLog : '';
+      const ms = Number.isFinite(f.durationMs) ? f.durationMs : null;
+      return { processingLog: log, processingMs: ms };
+    } catch {
+      return { processingLog: '', processingMs: null };
+    }
+  }
+
   // Завести GitHub-issue по отзыву (репо/токен из конфига) — общий путь для /feedback и бота.
-  async function createFeedbackIssue({ kind, comment, context }) {
-    const { title, body, labels } = buildIssue({ kind, comment, context });
-    return createGithubIssue({ repo: githubFeedbackRepo, token: githubFeedbackToken, title, body, labels });
+  // На ТРАНЗИЕНТНОМ сбое (GitHub недоступен / 5xx / 429) кладём готовый issue в durable-outbox (#190)
+  // и возвращаем { ok:true, queued:true } — фоновый дренер дошлёт. На постоянной ошибке (401/403/404/
+  // не настроено) пробрасываем — вызывающий отдаёт 5xx, чтобы оператор заметил.
+  async function createFeedbackIssue({ kind, comment, context, channel = 'user', processingLog = '', processingMs = null }) {
+    const { title, body, labels } = buildIssue({ kind, comment, context, processingLog, processingMs });
+    try {
+      const res = await createGithubIssue({ repo: githubFeedbackRepo, token: githubFeedbackToken, title, body, labels });
+      return { ok: true, url: res.url, number: res.number };
+    } catch (e) {
+      if (e?.retryable) {
+        const q = await feedbackOutbox.enqueue({ repo: githubFeedbackRepo, title, body, labels }, channel);
+        if (q.queued) return { ok: true, queued: true };
+      }
+      throw e;
+    }
   }
 
   // Отзыв из чата бота (👍/👎): счётчик пишем всегда (source:'user', как у виджета сотрудника),
@@ -511,7 +570,7 @@ export function createApp(config = {}) {
     if (!githubFeedbackToken) return;
     const comment = kind === 'positive' ? 'Оценка из чата Битрикс24: 👍 верно' : 'Оценка из чата Битрикс24: 👎 не то';
     const context = { jobId: /^[A-Za-z0-9-]{1,64}$/.test(String(jobId ?? '')) ? String(jobId) : '', reporter: String(reporter ?? '') };
-    await createFeedbackIssue({ kind, comment, context });
+    await createFeedbackIssue({ kind, comment, context, channel: 'bot' });
   }
 
   // POST /upload — two DoS guards: per-token rate limit (uploadRateLimit) bounds request
@@ -604,8 +663,11 @@ export function createApp(config = {}) {
       }
 
       const responsibleUserId = hasResponsible ? String(rawResponsible) : responsibleUserIdDefault;
+      // #205: ?forceFeedback=1 форсит тестовый отзыв агента на ЭТО задание (за requireAuth — только
+      // авторизованный тест), без глобального env-флага AGENT_FORCE_FEEDBACK и рестарта.
+      const forceFeedback = ['1', 'true'].includes(String(req.query?.forceFeedback ?? '').toLowerCase());
       try {
-        await createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId });
+        await createAndStartJob({ jobId, jobDir, fileEntries, responsibleUserId, forceFeedback });
       } catch (e) {
         console.error(`[upload] failed to persist job ${jobId}:`, e.message);
         fs.rmSync(jobDir, { recursive: true, force: true });
@@ -636,17 +698,19 @@ export function createApp(config = {}) {
       files: job.files.map((f) => ({
         name: f.name, status: f.status, result: f.result, error: f.error, problem: f.problem,
         // Тайминги отдаём только при SHOW_TIMINGS (#замеры) — иначе ответ без изменений.
-        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null, speed: classifySpeed(f.durationMs, timingFastMs, timingSlowMs) } : {}),
+        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, agentTurns: f.agentTurns ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null, extractMs: f.extractMs ?? null, speed: classifySpeed(f.durationMs, timingFastMs, timingSlowMs) } : {}),
       })),
     });
   });
 
   // GET /health — no auth, used by Docker healthcheck.
-  // Checks Redis connectivity so nginx-proxy and Docker know when the instance is ready.
+  // Checks Redis connectivity so nginx-proxy and Docker know when the instance is ready. Readiness is
+  // driven ONLY by jobs.ping(); feedbackOutboxPending is informational (size() never throws → safe to
+  // await here) so ops can see if queued feedback is piling up during a GitHub outage (#190).
   app.get('/health', async (_req, res) => {
     try {
       await jobs.ping();
-      return res.json({ ok: true, redis: 'ok' });
+      return res.json({ ok: true, redis: 'ok', feedbackOutboxPending: await feedbackOutbox.size() });
     } catch {
       return res.status(503).json({ ok: false, redis: 'unavailable' });
     }
@@ -716,10 +780,19 @@ export function createApp(config = {}) {
       reporter: feedbackReporter(req),
     };
 
+    // #237: подложить в issue лог обработки + время файла (как на странице результата). Берём из
+    // журнала заданий по jobId+файлу (источник истины — не доверяем клиенту). Best-effort.
+    const { processingLog, processingMs } = await lookupFileTelemetry(context.jobId, context.fileName);
+
     try {
-      const issue = await createFeedbackIssue({ kind, comment, context });
+      const result = await createFeedbackIssue({ kind, comment, context, processingLog, processingMs });
       metrics.recordFeedback({ source: 'user', kind }).catch(() => {}); // best-effort, → /metrics
-      return res.status(201).json({ ok: true, url: issue.url, number: issue.number });
+      if (result.queued) {
+        // GitHub was briefly unreachable — the issue is persisted in the durable outbox and the
+        // background drainer will deliver it (#190), so we don't ask the user to retry. 202 Accepted.
+        return res.status(202).json({ ok: true, queued: true });
+      }
+      return res.status(201).json({ ok: true, url: result.url, number: result.number });
     } catch (e) {
       // Log ONLY the stable error code — createGithubIssue guarantees its message is leak-free, but
       // we still avoid logging the message (defence in depth: never let a token reach the logs).
@@ -732,12 +805,15 @@ export function createApp(config = {}) {
 
   // POST /b24/bot/event — публичный обработчик событий чат-бота Б24 2.0 (дизайн docs/B24_BOT.md).
   // Без requireAuth (Б24 ходит снаружи server→server); защита — сверка ВЕРХНЕГО auth.application_token
-  // (constant-time) + лимит тела. Включается заданием B24_BOT_APPLICATION_TOKEN; без него любой POST
-  // отвергается (403). Тело — form-urlencoded с PHP-ключами (express.urlencoded extended).
+  // + лимит тела. Токен валиден, если он либо ЗАХВАЧЕН при установке (стор, #217), либо совпадает с
+  // env B24_BOT_APPLICATION_TOKEN (одно-портальная установка, constant-time). Без обоих — 403.
+  // Тело — form-urlencoded с PHP-ключами (express.urlencoded extended).
   const b24BotAppToken = config.b24BotApplicationToken ?? process.env.B24_BOT_APPLICATION_TOKEN ?? '';
-  app.post('/b24/bot/event', b24BotRateLimit, express.urlencoded({ extended: true, limit: '64kb' }), (req, res) => {
+  app.post('/b24/bot/event', b24BotRateLimit, express.urlencoded({ extended: true, limit: '64kb' }), async (req, res) => {
     const evt = parseBotEvent(req.body ?? {});
-    if (!b24BotAppToken || !safeCompare(evt.applicationToken, b24BotAppToken)) {
+    const envOk = Boolean(b24BotAppToken) && safeCompare(evt.applicationToken, b24BotAppToken);
+    const valid = Boolean(evt.applicationToken) && (envOk || await appStore.isKnownToken(evt.applicationToken));
+    if (!valid) {
       return res.status(403).json({ error: 'invalid application_token' });
     }
     // 200 быстро (Б24 не гарантирует повтор обработчика) — тяжёлую работу делаем асинхронно.
@@ -757,6 +833,52 @@ export function createApp(config = {}) {
       sendMessage: (m) => api.sendMessage(m),
       log: (m) => console.error(m),
     }).catch((e) => console.error('[b24bot] handler error:', e?.message));
+  });
+
+  // Захват/очистка application_token из APP-событий портала (#217). Асинхронно (Б24 не ждёт ответ).
+  // ВАЖНО по безопасности: домена-allowlist НЕДОСТАТОЧНО — он никого не аутентифицирует. Поэтому на
+  // ONAPPINSTALL проверяем access_token из события на портале (app.info, как /session/b24): только
+  // обладатель валидного портального токена может «прописать» application_token. Ключ стора — member_id.
+  //
+  // ОСТАТОЧНЫЙ РИСК (привязка member_id↔домен): app.info подтверждает, что access_token валиден ДЛЯ
+  // host, но НЕ что присланный member_id принадлежит этому host (app.info member_id не возвращает).
+  // Для нашей установки allowlist (`B24_FRAME_ANCESTORS`) — это КОНКРЕТНЫЙ портал(ы) заказчика, не
+  // широкий wildcard на чужие порталы, поэтому валидного access_token для allowlisted-домена не
+  // получить, не контролируя сам портал → подмена member_id неосуществима. Если когда-нибудь allowlist
+  // расширят на неподконтрольные порталы (широкий `*.bitrix24.*`), здесь нужно привязать member_id к
+  // подтверждённому домену (или сверять member_id из ответа app.info).
+  async function handleAppEvent(evt) {
+    const host = normalizeDomain(evt.domain) || normalizeDomain(evt.clientEndpoint);
+    if (evt.event === 'ONAPPINSTALL' || evt.event === 'ONAPPUPDATE') {
+      if (!host || !domainAllowed(host, portalDomains)) {
+        console.warn(`[b24app] install отклонён: домен не в allowlist (${host || 'нет'})`); return;
+      }
+      // access_token нужен и правдоподобен (короткий, непустой) — иначе бессмысленный app.info-хит.
+      if (!evt.memberId || !evt.applicationToken || !evt.accessToken || evt.accessToken.length > 4096) {
+        console.warn('[b24app] install отклонён: нет member_id/токенов'); return;
+      }
+      let ok = false;
+      // redactAuthId: defaultAppInfo строит URL с auth=<access_token>; ошибка fetch/redirect может нести
+      // URL — маскируем токен в логах (как /session/b24), чтобы он не утёк.
+      try { ok = await appInfoImpl(host, evt.accessToken); }
+      catch (e) { console.warn(`[b24app] app.info failed for ${host}: ${redactAuthId(e?.message ?? e)}`); ok = false; }
+      if (!ok) { console.warn(`[b24app] install отклонён: app.info не подтвердил портал ${host}`); return; }
+      await appStore.recordInstall({ memberId: evt.memberId, applicationToken: evt.applicationToken, domain: host });
+      console.log(`[b24app] application_token захвачен для member ${evt.memberId} (${host})`);
+    } else if (evt.event === 'ONAPPUNINSTALL') {
+      if (!evt.memberId) return;
+      const removed = await appStore.removeInstall({ memberId: evt.memberId, applicationToken: evt.applicationToken || undefined });
+      if (removed) console.log(`[b24app] установка удалена для member ${evt.memberId}`);
+    }
+  }
+
+  // POST /b24/app/event — публичный приём APP-событий портала (ONAPPINSTALL/ONAPPUPDATE/ONAPPUNINSTALL,
+  // #217). Без requireAuth (Б24 ходит снаружи); защита внутри handleAppEvent (allowlist + app.info +
+  // лимиты). Указывается как «Ссылка-callback для события установки» в карточке приложения.
+  app.post('/b24/app/event', b24BotRateLimit, express.urlencoded({ extended: true, limit: '16kb' }), (req, res) => {
+    const evt = parseAppEvent(req.body ?? {});
+    res.status(200).json({ ok: true }); // 200 быстро; валидация+захват — асинхронно
+    void handleAppEvent(evt).catch((e) => console.error('[b24app] handler error:', e?.message));
   });
 
   // Serve the built UI (only present in the Docker image) OPENLY so the Bitrix24 iframe can load
@@ -844,7 +966,7 @@ export function classifySpeed(durationMs, fastMs, slowMs) {
   return 'normal';
 }
 
-async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null) {
+async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null, timing = {}) {
   const job = await jobs.get(jobId);
   if (!job) return;
 
@@ -863,6 +985,10 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       // when multiple jobs run concurrently. onMeta captures usage metadata (#67).
       const result = await runAgent(fileEntry.path, job.responsibleUserId, {
         ...agentConfig, jobId, onMeta: (m) => { agentMeta = m; },
+        // Per-job форс отзыва агента (#205): job.forceFeedback (из ?forceFeedback=1) ИЛИ глобальный
+        // флаг. Трейлинг `|| undefined` гарантирует, что любое falsy НЕ перетрёт env-флаг
+        // AGENT_FORCE_FEEDBACK (runAgent читает `config.forceFeedback ?? env`).
+        forceFeedback: job.forceFeedback || agentConfig.forceFeedback || undefined,
       });
       // A created deal is the only success signal (prompts/main.md). Detect it up front so it can be
       // used for both the metrics outcome and the result-page badge, AND preserved through truncation.
@@ -902,9 +1028,19 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       fileEntry.agentMs = (agentMeta && Number.isFinite(agentMeta.agentDurationMs)) ? agentMeta.agentDurationMs : null;
       // Метод извлечения текста (pdftotext/ocr/office) — частый ответ на «где медленно» (OCR-скан).
       fileEntry.extractMethod = (agentMeta && typeof agentMeta.extractMethod === 'string') ? agentMeta.extractMethod : null;
+      // Точное время извлечения (#203.2): мерится вокруг extractFn в agent-runner (не «всего−агент»,
+      // там был бы ретрай-бэкофф). Для лога на странице.
+      fileEntry.extractMs = (agentMeta && Number.isFinite(agentMeta.extractMs)) ? agentMeta.extractMs : null;
+      // Число ходов агента (#222: «думает vs ищет»): много ходов = агент много раз ходил в инструменты
+      // (поиск/итерации); мало ходов при большом agentMs = модель дольше «думала» на ход. Для лога.
+      fileEntry.agentTurns = (agentMeta && Number.isFinite(agentMeta.numTurns)) ? agentMeta.numTurns : null;
+      // Бакет скорости разбора для распределения на /metrics (#207) — по total-времени файла.
+      // Считаем только на УСПЕШНОМ разборе (status done); ошибочные/таймаут-файлы в распределение не
+      // попадают (их длительность не отражает скорость разбора). Пороги — из createApp (timing).
+      const speed = classifySpeed(durationMs, timing.fastMs, timing.slowMs);
       metrics?.recordFile({
         format, status: 'done', outcome, durationMs, agent: agentMeta,
-        positions: items.length, positionsNoArticle,
+        positions: items.length, positionsNoArticle, speed,
       });
       // Channel «MCP» (issue #182): record WHICH supplier failed to match (by УНП) so the dashboard
       // can rank the suppliers that fail most. Best-effort, derived from the same result. Method-guarded
@@ -998,6 +1134,14 @@ if (process.argv[1] === __filename) {
   startUploadsCleanup({ dir: uploadsDir, retentionDays: uploadsRetentionDays });
   console.log(`[backend] uploads retention: deleting uploads older than ${Math.max(1, uploadsRetentionDays)}d (dir: ${uploadsDir})`);
 
+  // Durable feedback outbox (#190): start the background drainer that re-delivers issues queued while
+  // GitHub was unreachable. Started here (not inside createApp) so test imports never spawn a timer.
+  // The interval doubles as the minimum retry spacing; the entry's own backoff governs the rest.
+  const feedbackOutbox = app.getFeedbackOutbox();
+  const outboxIntervalMs = Number(process.env.FEEDBACK_OUTBOX_INTERVAL_MS) || 60_000;
+  feedbackOutbox.start({ intervalMs: outboxIntervalMs });
+  console.log(`[backend] feedback durable outbox: drainer started (every ${Math.round(outboxIntervalMs / 1000)}s)`);
+
   async function shutdown(signal) {
     console.log(`[backend] ${signal} received — graceful shutdown started`);
     // closeAllConnections() drains keep-alive connections immediately so no
@@ -1005,6 +1149,7 @@ if (process.argv[1] === __filename) {
     // stops accepting new TCP connections, not existing keep-alive ones).
     server.closeAllConnections?.();
     server.close();
+    feedbackOutbox.stop(); // halt the outbox drainer so its timer can't fire mid-shutdown
     // Wait up to 25 s — leave 5 s headroom before Docker's stop-timeout (30 s)
     // so the process exits cleanly before Docker sends SIGKILL.
     const deadline = Date.now() + 25_000;

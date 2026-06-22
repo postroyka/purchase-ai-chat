@@ -118,7 +118,10 @@ export const useB24 = () => {
       'user_brief',
       'crm',
       'tasks',
-      'entity'
+      'entity',
+      // issue #217: чат-бот (imbot.v2.Bot.register + события ONIMBOTV2* + imbot.message.add).
+      // Требует переустановки приложения с этим правом, чтобы бот заработал.
+      'imbot'
     ]
   }
 

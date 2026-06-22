@@ -97,20 +97,37 @@ class ProcureSupplier
 			['ID' => 'ASC'],            // мин. ID при дублях
 			$filter,
 			false,
-			['nTopCount' => 1],
+			['nTopCount' => 2],         // #195: берём до 2, чтобы заметить мультиматч (>1 совпадение)
 			['ID', 'TITLE']
 		);
 
-		if(is_object($dbResult) && ($fields = $dbResult->Fetch()))
+		// #195: считываем до 2 строк. Несколько компаний с одним УНП — берём min(id), но помечаем
+		// мультиматч (`multi:true`): тихая привязка «возможно не той» компании — сигнал телеметрии.
+		$rows = [];
+		if(is_object($dbResult))
 		{
-			return [
-				'id'    => (int)$fields['ID'],
-				'title' => (string)$fields['TITLE'],
-				'unp'   => $unp,
-			];
+			while(count($rows) < 2 && ($f = $dbResult->Fetch()))
+			{
+				$rows[] = $f;
+			}
 		}
 
-		// Не найдено — не ошибка, агент решит по бизнес-правилам.
-		return ['id' => null];
+		if(!$rows)
+		{
+			// Не найдено — не ошибка, агент решит по бизнес-правилам.
+			return ['id' => null];
+		}
+
+		$first = $rows[0];
+		$out = [
+			'id'    => (int)$first['ID'],
+			'title' => (string)$first['TITLE'],
+			'unp'   => $unp,
+		];
+		if(count($rows) >= 2)
+		{
+			$out['multi'] = true;
+		}
+		return $out;
 	}
 }

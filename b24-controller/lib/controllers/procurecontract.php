@@ -126,6 +126,9 @@ class ProcureContract
 		$wantNumber = $number !== '' ? self::matchableNumber($number) : '';
 		$wantDate   = trim($date);
 
+		// #195: собираем до 2 ПОДОШЕДШИХ под номер+дату договоров. Несколько совпадений → берём
+		// min(id) (order ID ASC + первый), но помечаем мультиматч (`multi:true`) — телеметрия.
+		$matched = [];
 		foreach($rows as $row)
 		{
 			$rowNumber = (string)($row[$numProp.'_VALUE'] ?? '');
@@ -140,12 +143,25 @@ class ProcureContract
 				continue;
 			}
 
-			// order ID ASC + первый подошедший = минимальный ID.
-			return [
+			$matched[] = [
 				'id'     => (int)$row['ID'],
 				'number' => $rowNumber,
 				'date'   => $rowDate,
 			];
+			if(count($matched) >= 2)
+			{
+				break; // достаточно двух, чтобы заметить мультиматч
+			}
+		}
+
+		if($matched)
+		{
+			$out = $matched[0]; // минимальный ID (order ID ASC + первый подошедший)
+			if(count($matched) >= 2)
+			{
+				$out['multi'] = true;
+			}
+			return $out;
 		}
 
 		return ['id' => null];

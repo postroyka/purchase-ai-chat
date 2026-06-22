@@ -1,3 +1,5 @@
+import { money } from '~/utils/money'
+
 /**
  * Converts a string with HTML entities and tags to plain text.
  *
@@ -16,23 +18,21 @@ export function stripTags(html: string) {
 }
 
 /**
- * Formats a number as a locale-appropriate currency.
+ * Formats a number as currency using the единый money() format (issue #201): пробел-разряды,
+ * точка-десятичные, валюта строчным суффиксом — тот же вид, что на /metrics. Раньше здесь был
+ * `Intl(style:'currency')` (символ-префикс, 0 знаков), из-за чего формат денег расходился между
+ * страницами статистики и метриками. Формат локале-независимый, поэтому locale больше не нужен.
  *
  * @param value - Amount to format
- * @param currencyId - Currency code (e.g., 'USD', 'RUB')
- * @param locale - Locale code (e.g., 'ru-RU', 'en-US')
- * @returns Formatted string with currency symbol
+ * @param currencyId - Currency code (e.g., 'BYN', 'USD', 'RUB')
+ * @returns Formatted string, e.g. "12 345.67 byn"
  *
  * @example
- * formatCurrency(12345.67, 'RUB', 'ru-RU') // "12,346 ₽"
- * formatCurrency(12345.67, 'USD', 'en-US') // "$12,346"
+ * formatCurrency(12345.67, 'RUB') // "12 345.67 rub"
+ * formatCurrency(12345.67, 'USD') // "12 345.67 usd"
  */
-export function formatCurrency(value: number, currencyId: string, locale: string): string {
-  return value.toLocaleString(locale, {
-    style: 'currency',
-    currency: currencyId,
-    maximumFractionDigits: 0
-  })
+export function formatCurrency(value: number, currencyId: string): string {
+  return money(value, currencyId)
 }
 
 /**
