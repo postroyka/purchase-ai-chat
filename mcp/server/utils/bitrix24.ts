@@ -91,6 +91,11 @@ export function useBitrix24(): B24Hook {
     // handler).
     const rawReason = err instanceof Error ? err.message : String(err)
     const reason = redactString(rawReason)
+    // SECURITY (#26): осознанно НЕ прикрепляем исходную `err` как `cause` — её message/stack содержит
+    // секрет вебхука, который мы только что вырезали в `reason`. Правило preserve-caught-error требует
+    // именно caught-ошибку как cause, но это прямо противоречит редактированию секрета (он утёк бы в
+    // error.cause → логгер ошибок Nuxt). Редактированная причина уже в message. Поэтому правило отключаем.
+    // eslint-disable-next-line preserve-caught-error
     throw new Error(
       `NUXT_BITRIX24_WEBHOOK_URL is not a valid Bitrix24 webhook URL `
         + `(expected https://<portal>.bitrix24.<tld>/rest/<user_id>/<secret>/): ${reason}`,
