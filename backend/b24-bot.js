@@ -28,7 +28,8 @@ const firstObject = (m) => {
  *   • сообщение/вход/удаление → data.BOT[<BOT_ID>] (объект-словарь, ключ = BOT_ID);
  *   • команда (ONIMCOMMANDADD) → data.COMMAND[<COMMAND_ID>] (там же COMMAND/COMMAND_PARAMS/COMMAND_CONTEXT).
  * Контекст диалога/автора всегда в data.PARAMS.{DIALOG_ID, MESSAGE, MESSAGE_ID, FROM_USER_ID, FILES};
- * data.USER.{ID, IS_BOT('Y'/'N')}; top-level auth.{application_token, client_endpoint}.
+ * data.USER.{ID, IS_BOT('Y'/'N') — IS_BOT приходит только в событии сообщения, не в команде};
+ * top-level auth.{application_token, client_endpoint}.
  * @returns {{ event:string, applicationToken:string, bot:{id,code,token,restEndpoint}, dialogId:string,
  *   message:{id,text,files:Array<{id,name,urlDownload}>}, command:{name,params,context}, user:{id,isBot} }}
  */
@@ -82,13 +83,14 @@ export function parseBotEvent(body = {}) {
       params: s(cmdEntry.COMMAND_PARAMS),
       context: s(cmdEntry.COMMAND_CONTEXT),
     },
-    // isBot: эхо собственных сообщений бота — не реагируем. Основной признак — USER.IS_BOT='Y'
-    // (приходит в событии сообщения); фолбэк — автор совпал с BOT_ID.
+    // isBot: эхо собственных сообщений бота — не реагируем. Признак USER.IS_BOT='Y' есть в событии
+    // СООБЩЕНИЯ; в команде/входе USER.IS_BOT не приходит — там срабатывает фолбэк «автор == BOT_ID»
+    // (для команды это не критично: роутинг идёт по command.name, цикла нет).
     user: { id: fromUserId, isBot: s(user.IS_BOT).toUpperCase() === 'Y' || (fromUserId !== '' && fromUserId === botId) },
   };
 }
 
-// === v2 parseBotEvent (вернуть при тираже — #229; события ONIMBOTV2*, payload в нижнем регистре) =====
+// === v2 parseBotEvent (вернуть при тираже — #243; события ONIMBOTV2*, payload в нижнем регистре) =====
 // export function parseBotEvent(body = {}) {
 //   const data = (body && typeof body.data === 'object' && body.data) || {};
 //   const bot = (data.bot && typeof data.bot === 'object' && data.bot) || {};

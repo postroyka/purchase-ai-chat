@@ -46,6 +46,7 @@ describe('parseBotEvent (legacy)', () => {
     expect(e.bot).toMatchObject({ id: '456', code: 'procure_ai_invoice', token: 'botok', restEndpoint: 'https://p.bitrix24.ru/rest/' });
     expect(e.dialogId).toBe('chat5');
     expect(e.message.files).toEqual([{ id: '12', name: 'schet.pdf', urlDownload: '/im_disk.php?id=12' }]);
+    expect(e.command).toEqual({ name: '', params: '', context: '' }); // у сообщения команды нет
     expect(e.user).toEqual({ id: '27', isBot: false });
   });
 
@@ -69,6 +70,21 @@ describe('parseBotEvent (legacy)', () => {
     expect(e.dialogId).toBe('chat5');
     expect(e.command).toEqual({ name: 'feedback', params: 'like job1', context: 'KEYBOARD' });
     expect(e.user).toEqual({ id: '27', isBot: false });
+  });
+
+  it('команда: запись data.COMMAND имеет приоритет над data.BOT как источник бот-авторизации', () => {
+    // Если в теле есть оба словаря, авторизацию команды берём из data.COMMAND[<id>], а не из data.BOT.
+    const e = parseBotEvent({
+      event: 'ONIMCOMMANDADD',
+      data: {
+        COMMAND: { 7: { access_token: 'cmdtok', BOT_ID: '7', COMMAND: 'feedback', COMMAND_PARAMS: 'dislike j9' } },
+        BOT: { 9: { access_token: 'bottok', BOT_CODE: 'other' } },
+        PARAMS: { DIALOG_ID: 'c', FROM_USER_ID: '3' },
+      },
+    });
+    expect(e.bot.id).toBe('7');
+    expect(e.bot.token).toBe('cmdtok');
+    expect(e.command).toEqual({ name: 'feedback', params: 'dislike j9', context: '' });
   });
 
   it('USER.IS_BOT="Y" → isBot:true даже если автор ≠ BOT_ID (основной гард от эха)', () => {

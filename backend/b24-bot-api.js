@@ -120,7 +120,7 @@ export function makeBotApi(cfg) {
 
   return { sendMessage, downloadAndSaveFiles };
 
-  // === v2 скачивание файла (вернуть при тираже — #229; на старом портале imbot.v2.File.download → 404):
+  // === v2 скачивание файла (вернуть при тираже — #243; на старом портале imbot.v2.File.download → 404):
   //   const dl = await rest('imbot.v2.File.download', botToken, { botId, fileId: f.id });
   //   const downloadUrl = dl && (dl.downloadUrl || dl.DOWNLOAD_URL);
   // …далее как в legacy (assertAllowed → fetch → size/MIME → write). Тогда же вернуть botId в сигнатуру.

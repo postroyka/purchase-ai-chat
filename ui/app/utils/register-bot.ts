@@ -73,7 +73,7 @@ export async function registerInvoiceBot(frame: B24Frame, webhookUrl: string): P
   return { botId, commandId }
 }
 
-// === v2 (вернуть при тираже — #229; портал заказчика старый, imbot.v2.* → 404) =====================
+// === v2 (вернуть при тираже — #243; портал заказчика старый, imbot.v2.* → 404) =====================
 // На современном Битрикс24 регистрировать бота надо через чат-боты 2.0 (события ONIMBOTV2*):
 //
 //   const reg = await frame.actions.v2.call.make<{ bot: { id: number } }>({

@@ -818,14 +818,17 @@ export function createApp(config = {}) {
     }
     // 200 быстро (Б24 не гарантирует повтор обработчика) — тяжёлую работу делаем асинхронно.
     res.status(200).json({ ok: true });
-    // #bot debug (LEGACY портал-QA, #241): логируем форму события — ТОЛЬКО data.PARAMS. Там НЕТ токенов:
-    // access_token/application_token/client_endpoint лежат в data.BOT[<id>] (сообщение) и data.COMMAND[<id>]
-    // (команда) и в top-level auth — их НЕ логируем сознательно. Цель — сверить структуру PARAMS.FILES /
-    // ссылку на файл в MESSAGE старого портала и добить скачивание. Поля команды (COMMAND/COMMAND_PARAMS)
-    // в PARAMS не попадают (они в data.COMMAND[<id>]) — для отзыва 👍/👎 отдельный лог не нужен.
-    // ⚠️ ВКЛЮЧЕНО по умолчанию ТОЛЬКО на время портал-QA; после сверки выключить — B24_BOT_DEBUG=false.
+    // #bot debug (LEGACY портал-QA, #241/#243): цель — увидеть, ГДЕ старый портал отдаёт ссылку на файл
+    // (структурный data.PARAMS.FILES[] или BB-код внутри MESSAGE). Логируем ТОЛЬКО эти два поля, а не весь
+    // PARAMS: тело недоверенное (эндпоинт публичный) — лишние/подставные ключи отбрасываем, объём ограничен;
+    // JSON.stringify экранирует управляющие символы (анти-лог-инъекция). Токенов тут нет — access_token/
+    // application_token/client_endpoint лежат в data.BOT[<id>]/data.COMMAND[<id>]/top-level auth (НЕ логируем).
+    // ⚠️ ВКЛЮЧЕНО по умолчанию ТОЛЬКО на время портал-QA; после сверки выключить — B24_BOT_DEBUG=false (#243).
     if (process.env.B24_BOT_DEBUG !== 'false') {
-      try { console.log(`[b24bot] ${evt.event} PARAMS: ${JSON.stringify(req.body?.data?.PARAMS ?? {})}`); } catch { /* ignore */ }
+      try {
+        const p = (req.body && req.body.data && req.body.data.PARAMS) || {};
+        console.log(`[b24bot] ${evt.event} files: ${JSON.stringify({ MESSAGE: p.MESSAGE, FILES: p.FILES }).slice(0, 2000)}`);
+      } catch { /* ignore */ }
     }
     const api = config.botApi ?? makeBotApi({
       restEndpoint: evt.bot.restEndpoint, uploadDir, allowedExtensions,
