@@ -45,7 +45,7 @@ const schemaOk = { ok: true, created: ['UF_CRM_DEAL_SH_PRCHS_AI_FILE'], existing
 // `make` отвечает по методу: register → bot.id, ensureSchema → отчёт, остальное (command) → id.
 function defaultMake() {
   return vi.fn(async (opts: { method: string }) => {
-    if (opts.method === 'imbot.v2.Bot.register') return okResult({ bot: { id: 1 } })
+    if (opts.method === 'imbot.register') return okResult(1)
     if (opts.method === ENSURE_SCHEMA_METHOD) return okResult(schemaOk)
     return okResult(2)
   })
@@ -80,7 +80,7 @@ describe('useInstall — подтверждение установки прил�
     const order: string[] = []
     const botMake = vi.fn(async (opts: { method: string }) => {
       order.push(`make:${opts.method}`)
-      if (opts.method === 'imbot.v2.Bot.register') return okResult({ bot: { id: 1 } })
+      if (opts.method === 'imbot.register') return okResult(1)
       if (opts.method === ENSURE_SCHEMA_METHOD) return okResult(schemaOk)
       return okResult(2)
     })
@@ -95,7 +95,7 @@ describe('useInstall — подтверждение установки прил�
     await flush()
 
     expect(order).toEqual([
-      'make:imbot.v2.Bot.register',
+      'make:imbot.register',
       'make:imbot.command.register',
       `make:${ENSURE_SCHEMA_METHOD}`,
       'installFinish'
@@ -136,7 +136,7 @@ describe('useInstall — подтверждение установки прил�
 
   it('ensureSchema вернул failed-поля → schemaStatus=partial, установка всё равно завершена (#176)', async () => {
     const botMake = vi.fn(async (opts: { method: string }) => {
-      if (opts.method === 'imbot.v2.Bot.register') return okResult({ bot: { id: 1 } })
+      if (opts.method === 'imbot.register') return okResult(1)
       if (opts.method === ENSURE_SCHEMA_METHOD) return okResult({ ok: false, created: [], existing: [], failed: ['UF_CRM_DEAL_DOGOVOR'] })
       return okResult(2)
     })
@@ -155,7 +155,7 @@ describe('useInstall — подтверждение установки прил�
 
   it('ensureSchema провалился (нет scope crm) → schemaStatus=failed, установка не сорвана (#176)', async () => {
     const botMake = vi.fn(async (opts: { method: string }) => {
-      if (opts.method === 'imbot.v2.Bot.register') return okResult({ bot: { id: 1 } })
+      if (opts.method === 'imbot.register') return okResult(1)
       if (opts.method === ENSURE_SCHEMA_METHOD) return { isSuccess: false, getErrorMessages: () => ['INSUFFICIENT_SCOPE'], getData: () => ({ result: null }) }
       return okResult(2)
     })
@@ -176,7 +176,7 @@ describe('useInstall — подтверждение установки прил�
   it('ensureSchema упал с исключением → best-effort: installFinish зовётся, schemaStatus=failed (#176)', async () => {
     const botMake = vi.fn(async (opts: { method: string }) => {
       if (opts.method === ENSURE_SCHEMA_METHOD) throw new Error('network')
-      if (opts.method === 'imbot.v2.Bot.register') return okResult({ bot: { id: 1 } })
+      if (opts.method === 'imbot.register') return okResult(1)
       return okResult(2)
     })
     const frame = frameStub({ isInstallMode: true, botMake })
@@ -195,7 +195,7 @@ describe('useInstall — подтверждение установки прил�
     // Контроллер отдаёт null из ensureSchemaAction при includeModules-сбое: isSuccess=true, result=null.
     // ensure-schema.ts ловит это гардом и бросает → best-effort → 'failed', установку не срывает.
     const botMake = vi.fn(async (opts: { method: string }) => {
-      if (opts.method === 'imbot.v2.Bot.register') return okResult({ bot: { id: 1 } })
+      if (opts.method === 'imbot.register') return okResult(1)
       if (opts.method === ENSURE_SCHEMA_METHOD) return okResult(null)
       return okResult(2)
     })

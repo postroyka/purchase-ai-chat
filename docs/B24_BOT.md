@@ -1,8 +1,18 @@
 # Дизайн: чат-бот Bitrix24 «загрузка счёта в чат»
 
-`Последняя ревизия: 2026-06-21` · Статус: **код бота завершён** (каркас + захват токена + клиентская
-регистрация через v2-SDK, §10); осталось только: настройка карточки приложения (scope `imbot` +
-callback-URL) и **ручной портал-QA** на тестовом Б24 (§12–§13)
+`Последняя ревизия: 2026-06-22` · Статус: **код бота завершён**; идёт **портал-QA** на тестовом Б24.
+
+> ⚠️ **ТЕКУЩАЯ РЕАЛИЗАЦИЯ — LEGACY-API (#241).** Портал заказчика (`tstb24.postroyka.by`) **старый**:
+> `imbot.v2.Bot.register` → **404**, API чат-ботов 2.0 (`imbot.v2.*`, события `ONIMBOTV2*`) недоступен.
+> Поэтому в коде сейчас **legacy**: регистрация `imbot.register`, события `ONIMBOTMESSAGEADD` /
+> `ONIMBOTJOINCHAT` / `ONIMBOTDELETE` / `ONIMCOMMANDADD`, ответ `imbot.message.add`, скачивание файла —
+> по ссылке из самого события (`data.PARAMS.FILES[].urlDownload`). **v2-код не удалён — закомментирован**
+> блоками «=== v2 (вернуть при тираже) ===» в `register-bot.ts` / `b24-bot.js` / `b24-bot-api.js`; на
+> новом проде вернёмся к v2. Разделы ниже описывают v2-дизайн — читать с поправкой на этот баннер.
+>
+> 🔎 **Открытый момент:** форма `data.PARAMS.FILES` на старом портале сверяется по дебаг-логу
+> (`B24_BOT_DEBUG`, по умолчанию вкл; логирует только `PARAMS`, без токенов) — снять на первом прогоне и
+> при необходимости поправить `resolveDownloadUrl` в `b24-bot-api.js`.
 
 ## 1. Что хотим
 
@@ -75,10 +85,10 @@ callback-URL) и **ручной портал-QA** на тестовом Б24 (§
 ```
 
 - ✅ Команда кнопок зарегистрирована отдельно: `imbot.command.register` (команда `feedback`).
-  ⚠️ **Портал-QA №1 (v1/v2):** `imbot.command.register` — legacy (v2-аналога `imbot.v2.Command.register`
-  в доке нет); его штатное событие — `ONIMCOMMANDADD`, а backend разбирает v2-событие
-  `ONIMBOTV2COMMANDADD`. Доставит ли v2-бот клик команды как `ONIMBOTV2COMMANDADD` — **официально не
-  подтверждено**, проверяется на портале. Если нет — перейти на кнопки `ACTION:'SEND'` (см. §7).
+  ⚠️ **Портал-QA — событие команды:** штатное событие `imbot.command.register` — **`ONIMCOMMANDADD`**;
+  **LEGACY (#241):** backend и разбирает `ONIMCOMMANDADD` (а НЕ v2 `ONIMBOTV2COMMANDADD`) — поля команды
+  и бот-авторизация приходят внутри `data.COMMAND[<COMMAND_ID>]`. Доходит ли клик до backend — проверяется
+  на портале; если нет — перейти на кнопки `ACTION:'SEND'` (см. §7).
 - `BOT_ID` сервером **не хранится** — он приходит в каждом событии (`data.bot.id`), отдельный стор не
   нужен. В Redis-сторе (§2.1) лежит только `application_token` (по `member_id`).
 - Идемпотентность: `imbot.v2.Bot.register` идемпотентен по `code` (повтор вернёт того же бота);
@@ -98,7 +108,13 @@ callback-URL) и **ручной портал-QA** на тестовом Б24 (§
   сообщением.
 - Роутинг по `event`:
 
-| Событие | Действие |
+> 🔻 **LEGACY (#241):** имена событий без `V2` — `ONIMBOTMESSAGEADD` / `ONIMCOMMANDADD` / `ONIMBOTJOINCHAT` /
+> `ONIMBOTDELETE`; ответ «спасибо» — обычным `imbot.message.add` (аналога `imbot.v2.Command.answer` нет).
+> **Команда** (`ONIMCOMMANDADD`) кладёт и поля команды, и бот-авторизацию внутрь `data.COMMAND[<COMMAND_ID>]`
+> (объект-словарь), а контекст диалога — в `data.PARAMS`. У события **сообщения** бот-авторизация — в
+> `data.BOT[<BOT_ID>]`. Разбор обоих — в `parseBotEvent` (`b24-bot.js`).
+
+| Событие (v2 → описание ниже) | Действие |
 |---|---|
 | `ONIMBOTV2MESSAGEADD` + файлы в `message` | скачать файл(ы) → `uploads/` → запустить разбор; ответить «принял…» |
 | `ONIMBOTV2COMMANDADD` (`command.context='keyboard'`, наша команда `feedback`) | записать отзыв; `imbot.v2.Command.answer` «спасибо» |
@@ -107,6 +123,12 @@ callback-URL) и **ручной портал-QA** на тестовом Б24 (§
 | `ONIMBOTV2DELETE` | очистка `BOT_ID`/состояния |
 
 ## 6. Файл из чата → разбор
+
+> 🔻 **LEGACY (#241):** `imbot.v2.File.download` на старом портале → 404. Берём ссылку на файл **из самого
+> события** (`data.PARAMS.FILES[].urlDownload` — относительный путь к диску → `resolveDownloadUrl` достраивает
+> origin из `client_endpoint` и добавляет `auth=<токен бота>`), затем тот же контроль host/size/MIME (#216).
+> ⚠️ Точная форма ссылки/наличие `FILES` на старом портале **не подтверждены** — снимаем сырой payload
+> дебаг-логом (`B24_BOT_DEBUG`) на первом прогоне (Портал-QA №1) и при необходимости правим `resolveDownloadUrl`.
 
 1. Из `ONIMBOTV2MESSAGEADD` взять файл(ы) из структурного объекта `message` (v2 отдаёт файлы в сообщении —
    в отличие от legacy, где их в событии не было).
@@ -167,7 +189,11 @@ callback-URL) и **ручной портал-QA** на тестовом Б24 (§
 
 ## 10. План реализации и статус
 
-**✅ Сделано в каркасе (тестируемо без портала, 34 теста `backend/tests/b24-bot.test.js` + 6 `file-validation.test.js` + 6 `app-store.test.js`):**
+> 🔻 **LEGACY (#241):** статус ниже писался под v2; фактически в коде сейчас legacy (`imbot.register`,
+> события без `V2`, скачивание файла по ссылке из события). Пункты, где это важно, поправлены инлайн;
+> возврат к v2 при тираже отслеживается в **#243**.
+
+**✅ Сделано в каркасе (тестируемо без портала, 44 теста `backend/tests/b24-bot.test.js` + 6 `file-validation.test.js` + 6 `app-store.test.js`):**
 - **Рефакторы переиспользования:** `createAndStartJob` (из `/upload`) и `createFeedbackIssue` (из
   `/feedback`) — общие замыкания в `backend/index.js`; оба роута переведены на них, поведение не изменилось
   (вся существующая backend-сюита зелёная).
@@ -180,8 +206,9 @@ callback-URL) и **ручной портал-QA** на тестовом Б24 (§
 - **Безопасность публичного эндпоинта:** IP-rate-limit (`b24BotRateLimit`), SSRF-allowlist на исходящие
   бота (`restEndpoint`/`downloadUrl` только на домены `B24_FRAME_ANCESTORS`, как у `/session/b24`) +
   `redirect:'error'`, лимиты файла (ext, magic-MIME (#216), Content-Length/размер, таймаут, cap числа файлов).
-- **Боевая граница** `backend/b24-bot-api.js` (`imbot.v2.File.download`, `imbot.message.add`) — написана,
-  **помечена «портал-QA»**, инъектируется (в тестах — мок).
+- **Боевая граница** `backend/b24-bot-api.js` (**LEGACY:** скачивание файла **по ссылке из события** —
+  `resolveDownloadUrl`, не `imbot.v2.File.download`; ответ `imbot.message.add`) — написана,
+  **помечена «портал-QA»**, инъектируется (в тестах — мок). _(v2 `imbot.v2.File.download` закомм. — #243.)_
 - **✅ Подсистема захвата токена (#217):** `backend/app-store.js` (Redis, хранит sha256-хеш токена по
   `member_id`) + публичный эндпоинт `POST /b24/app/event` (`ONAPPINSTALL`/`ONAPPUPDATE`/`ONAPPUNINSTALL`).
   По офиц. доке Б24: `application_token` приходит **только** в серверном `ONAPPINSTALL` (не в iframe). На
@@ -189,24 +216,27 @@ callback-URL) и **ручной портал-QA** на тестовом Б24 (§
   домена сам по себе не аутентифицирует. `/b24/bot/event` теперь валиден, если токен **захвачен** ИЛИ
   совпал с env `B24_BOT_APPLICATION_TOKEN` (фолбэк). Покрыто юнит/интеграционными тестами.
 - **✅ Scope `imbot`** добавлен в `getRequiredRights()` (`ui/app/composables/useB24.ts`).
-- **✅ Клиентская регистрация при установке (#217):** `ui/app/utils/register-bot.ts`
-  (`imbot.v2.Bot.register` + `imbot.command.register`) через **актуальный** v2-экшен SDK
-  `frame.actions.v2.call.make` (НЕ устаревший `BX24.callMethod`); зовётся из `useInstall.ts`
-  **best-effort** (сбой не срывает установку). Параметры сверены с офиц. докой (`type:'bot'`, `fields`).
+- **✅ Клиентская регистрация при установке (#217, LEGACY #241):** `ui/app/utils/register-bot.ts`
+  (**`imbot.register`** + `imbot.command.register`) через SDK-действие `frame.actions.v2.call.make`
+  (НЕ устаревший `BX24.callMethod`); зовётся из `useInstall.ts` **best-effort** (сбой не срывает установку).
+  Параметры сверены с офиц. докой (`TYPE:'B'`, `EVENT_HANDLER`, `PROPERTIES.NAME`; result = integer BOT_ID).
   Покрыто юнит-тестами (`register-bot.test.ts` + интеграция в `useInstall.test.ts`).
+  _(v2 `imbot.v2.Bot.register` закомментирован — #243.)_
 
 **⏳ Осталось (нужен живой портал Б24):**
-- ⚠️ **Портал-QA №1 — событие команды (v1/v2):** проверить, что клик кнопки 👍/👎 (команда
-  `feedback`, зарегистрирована legacy `imbot.command.register`) реально доходит до backend как
-  `ONIMBOTV2COMMANDADD` (его и разбирает `b24-bot.js`). Если приходит legacy `ONIMCOMMANDADD` или
-  ничего — перейти на кнопки `ACTION:'SEND'` (клик шлёт текст → `ONIMBOTV2MESSAGEADD`, парсим), §7.
+- ⚠️ **Портал-QA №2 — событие команды (LEGACY #241):** проверить, что клик кнопки 👍/👎 (команда
+  `feedback`, `imbot.command.register`) реально доходит до backend как **`ONIMCOMMANDADD`** (его и разбирает
+  `b24-bot.js`; поля команды и бот-авторизация — внутри `data.COMMAND[<COMMAND_ID>]`). Если не доходит
+  ничего — перейти на кнопки `ACTION:'SEND'` (клик шлёт текст → `ONIMBOTMESSAGEADD`, парсим), §7.
 - **Карточка приложения:** scope `imbot` + указать **«Ссылка-callback для события установки»** =
   `https://<домен>/b24/app/event` (чтобы Б24 прислал `ONAPPINSTALL` с `application_token`); переустановить.
 - ~~**MIME-валидация как в `/upload`**~~ — **сделано (#216):** magic-byte-проверка вынесена в общий
   `backend/file-validation.js` (`validateSniffedMime`) и применяется и в `/upload`, и на границе
   скачивания бота (`b24-bot-api.js`) до записи на диск/передачи агенту. Покрыто юнит-тестами.
-- **Портал-QA:** сверить фактические форматы `imbot.v2.*` (имена методов/полей, форма файла в `message`,
-  домен `downloadUrl` относительно SSRF-allowlist), прогнать сквозной сценарий (§12) и поправить по факту.
+- ⚠️ **Портал-QA №1 — форма ссылки на файл (LEGACY #241):** сверить фактическую форму **legacy**-payload
+  старого портала (где приходит ссылка на файл: `data.PARAMS.FILES[].urlDownload` или BB-код в `MESSAGE`;
+  домен `downloadUrl` относительно SSRF-allowlist) по дебаг-логу `ONIMBOTMESSAGEADD` (`B24_BOT_DEBUG`),
+  прогнать сквозной сценарий (§12) и поправить `resolveDownloadUrl`/разбор файлов по факту (#243).
 
 ## 11. Приёмка
 
@@ -225,9 +255,15 @@ callback-URL) и **ручной портал-QA** на тестовом Б24 (§
    поймается из `ONAPPINSTALL` автоматически (в логах `app`: `[b24app] application_token захвачен`).
    *Фолбэк:* если callback не настроить — раскатать образ с env **`B24_BOT_APPLICATION_TOKEN`** =
    `application_token` тестового приложения.
-3. Зарегистрировать бота: `imbot.v2.Bot.register` (`eventMode:'webhook'`, `webhookUrl =
-   https://<тестовый-домен>/b24/bot/event`); зарегистрировать команду `feedback`
-   (`imbot.command.register`).
+3. Регистрация бота происходит **автоматически** при установке (`register-bot.ts` → `useInstall`):
+   **LEGACY** `imbot.register` (`EVENT_HANDLER = https://<тестовый-домен>/b24/bot/event`) + команда
+   `feedback` (`imbot.command.register`). Вручную звать не нужно. _(v2 `imbot.v2.Bot.register` → 404 на
+   старом портале; вернём при тираже, #241.)_
+
+> 🔻 **LEGACY (#241):** события приходят без `V2` (`ONIMBOTMESSAGEADD` / `ONIMCOMMANDADD` / …). Сценарий **1**
+> зависит от формы ссылки на файл старого портала — она **не подтверждена**: на первом прогоне снять
+> `docker compose … logs app | grep ONIMBOTMESSAGEADD` (при `B24_BOT_DEBUG≠false`) и при необходимости
+> поправить `resolveDownloadUrl`. Сценарий **6** (👍/👎) проверяет, что клик доходит как `ONIMCOMMANDADD`.
 
 **Сценарии** (каждый — действие → ожидаемое):
 | # | Действие | Ожидается |
@@ -253,16 +289,19 @@ allowed`; не выдан scope `imbot`.
 ## 13. Переключение на БОЕВОЙ Битрикс24
 
 1. На боевом портале установить приложение (локальное), выдать scope **`imbot`**.
-2. Зарегистрировать бота на **боевой** обработчик: `imbot.v2.Bot.register` с
-   `webhookUrl = https://<боевой-домен>/b24/bot/event`; зарегистрировать команду `feedback`.
+   _(Если боевой портал тоже старый — остаёмся на LEGACY; если новый — попросить вернуть v2-код из
+   закомментированных блоков «=== v2 (вернуть при тираже) ===», #241.)_
+2. Регистрация бота на **боевой** обработчик — автоматически при установке (LEGACY `imbot.register`,
+   `EVENT_HANDLER = https://<боевой-домен>/b24/bot/event`) + команда `feedback`.
 3. В `.env.prod` выставить **`B24_BOT_APPLICATION_TOKEN`** = `application_token` **боевого** приложения
    (после реализации подсистемы захвата — проставляется автоматически при установке), `make prod-redeploy`.
 4. Прогнать на боевом сценарии **1 и 6** из §12 (один файл + 👍).
 5. **Откат:** очистить `B24_BOT_APPLICATION_TOKEN` (эндпоинт → 403, бот выключен) или
    `imbot.v2.Bot.unregister`; раскатать.
 
-> ⚠️ Боевую часть (`b24-bot-api.js`, форматы `imbot.v2.*`) обязательно прогнать на **тестовом** портале
-> (§12) ДО боевого — каркас протестирован юнитами, но фактические форматы Б24 сверяются только на портале.
+> ⚠️ Боевую часть (`b24-bot-api.js`, форматы API бота — **LEGACY** `imbot.*` / ссылка на файл из события)
+> обязательно прогнать на **тестовом** портале (§12) ДО боевого — каркас протестирован юнитами, но
+> фактические форматы Б24 сверяются только на портале.
 
 ---
 

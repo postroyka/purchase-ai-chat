@@ -119,7 +119,8 @@ export const useB24 = () => {
       'crm',
       'tasks',
       'entity',
-      // issue #217: чат-бот (imbot.v2.Bot.register + события ONIMBOTV2* + imbot.message.add).
+      // issue #217/#241: чат-бот. LEGACY на старом портале (imbot.register + события ONIMBOT*/
+      // ONIMCOMMANDADD + imbot.message.add); v2 закомментирован, вернём при тираже.
       // Требует переустановки приложения с этим правом, чтобы бот заработал.
       'imbot'
     ]
