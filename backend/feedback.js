@@ -34,6 +34,9 @@ const FEEDBACK_KIND_WORDS = { positive: 'Хорошо', problem: 'Проблем
 const MAX_COMMENT_LENGTH = 5000;
 const MAX_TITLE_LENGTH = 120;
 const MAX_CONTEXT_VALUE = 300;
+// Лог обработки (#237) — отдельный недоверенный текст агента; кап меньше комментария, его задача —
+// дать мейнтейнеру контекст разбора, а не воспроизвести гигантский документ.
+const MAX_LOG_LENGTH = 4000;
 
 export class GithubFeedbackError extends Error {
   constructor(message, code, { retryable = false } = {}) {
@@ -90,17 +93,39 @@ function contextLine(label, value) {
   return `- **${label}:** ${escapeHtml(v.slice(0, MAX_CONTEXT_VALUE))}`;
 }
 
+/** Strip hostile chars from the agent's processing log and truncate to MAX_LOG_LENGTH (#237). */
+export function sanitizeLog(input) {
+  const stripped = stripHostileChars(input);
+  if (stripped.length <= MAX_LOG_LENGTH) return stripped;
+  return `${stripped.slice(0, MAX_LOG_LENGTH)}…\n\n[truncated to ${MAX_LOG_LENGTH} characters]`;
+}
+
+/** Human-readable processing time from ms (#237), or '' for missing/invalid (→ row is dropped). */
+export function formatProcessingMs(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';
+  const totalSec = ms / 1000;
+  if (totalSec < 60) return `${totalSec.toFixed(1)} с`;
+  const min = Math.floor(totalSec / 60);
+  const sec = Math.round(totalSec - min * 60);
+  return `${min} мин ${String(sec).padStart(2, '0')} с`;
+}
+
 /**
  * Render the issue body: an app-captured context block followed by the employee's comment wrapped
  * in <pre><code> (so backticks/asterisks/HTML in it are inert). Mirrors the agent-feedback body
  * shape so maintainers triage both channels the same way.
+ *
+ * processingLog / processingMs (#237): the file's agent log + processing time, looked up server-side
+ * from the job store and rendered here so the issue carries the same context the operator saw on the
+ * result page. The log is UNTRUSTED (agent reads third-party documents) → hostile-stripped + escaped.
  */
-export function formatIssueBody({ kind, comment, context = {} }) {
+export function formatIssueBody({ kind, comment, context = {}, processingLog = '', processingMs = null }) {
   const ctxLines = [
     contextLine('Тип', FEEDBACK_KINDS[kind] ?? kind),
     contextLine('Задача (jobId)', context.jobId),
     contextLine('Файл', context.fileName),
     contextLine('Сделка', context.dealId ? `#${context.dealId}` : ''),
+    contextLine('Время обработки', formatProcessingMs(processingMs)),
     contextLine('Кто сообщил', context.reporter),
     contextLine('Версия сборки', context.appVersion),
     contextLine('User-Agent', context.userAgent),
@@ -110,6 +135,7 @@ export function formatIssueBody({ kind, comment, context = {} }) {
   // be called directly with raw input (e.g. tests), so it must neutralise Trojan-Source/zero-widths
   // on its own rather than assume a pre-sanitised comment. escapeHtml then makes HTML/Markdown inert.
   const safeComment = escapeHtml(stripHostileChars(comment)).trim() || '(без текста)';
+  const safeLog = escapeHtml(sanitizeLog(processingLog)).trim();
 
   return [
     '## Контекст',
@@ -121,6 +147,8 @@ export function formatIssueBody({ kind, comment, context = {} }) {
     '<pre><code>',
     safeComment,
     '</code></pre>',
+    // Лог обработки агента по файлу (#237) — только если он есть; недоверенный → в <pre><code>.
+    ...(safeLog ? ['', '## Лог обработки', '', '<pre><code>', safeLog, '</code></pre>'] : []),
     '',
     '---',
     '_Отправлено через форму обратной связи в приложении (issue #182, канал «сотрудник»)._',
@@ -131,14 +159,14 @@ export function formatIssueBody({ kind, comment, context = {} }) {
  * Build the { title, body, labels } for the GitHub issue from already-validated input.
  * Title = "[Обратная связь] <kind> · <first line of the comment>" (hostile-stripped, capped).
  */
-export function buildIssue({ kind, comment, context = {} }) {
+export function buildIssue({ kind, comment, context = {}, processingLog = '', processingMs = null }) {
   const safeComment = sanitizeComment(comment);
   const firstLine = stripHostileChars(safeComment.split('\n')[0] ?? '').trim();
   const kindLabel = FEEDBACK_KINDS[kind] ?? kind;
   const titleText = firstLine ? `${kindLabel} · ${firstLine}` : kindLabel;
   const title = `[Обратная связь] ${titleText}`.slice(0, MAX_TITLE_LENGTH);
   const labels = ['user-feedback', `feedback:${kind}`];
-  const body = formatIssueBody({ kind, comment: safeComment, context });
+  const body = formatIssueBody({ kind, comment: safeComment, context, processingLog, processingMs });
   return { title, body, labels };
 }
 
