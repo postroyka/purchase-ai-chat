@@ -242,6 +242,7 @@ describe('Issue #26 — SDK logger does not leak webhook URL or secret', () => {
           + `${(err as Error).message}. The SDK's package layout changed; `
           + `update the createRequire chain in tests/unit/utils/sdk-logger-leak.test.ts. `
           + `See docs/SECURITY-AUDIT.md.`,
+          { cause: err }, // preserve-caught-error: тест-хелпер, секрета нет — прикрепляем исходную ошибку
         )
       }
       // Dynamic import is outside the resolve-chain try/catch so that a
