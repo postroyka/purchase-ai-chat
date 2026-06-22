@@ -1,7 +1,13 @@
 // ⚠️ ГРАНИЦА, ТРЕБУЮЩАЯ ПОРТАЛ-QA (docs/B24_BOT.md §10, «Осталось → Портал-QA»).
-// Боевые REST-вызовы к Битрикс24 для чат-бота 2.0. Точные имена методов/полей (imbot.v2.File.download,
-// imbot.message.add KEYBOARD) и форма ответа — СВЕРИТЬ на живом портале при реализации. Вся логика
-// разбора/роутинга — в b24-bot.js (тестируется без портала); этот модуль инъектируется как deps.
+// Боевые REST-вызовы к Битрикс24 для чат-бота. Вся логика разбора/роутинга — в b24-bot.js (тестируется
+// без портала); этот модуль инъектируется как deps.
+//
+// ⚠️ LEGACY-режим (портал заказчика старый — imbot.v2.* → 404):
+//   • отправка ответа — imbot.message.add (он И ТАК legacy — не меняется);
+//   • скачивание файла — НЕ через imbot.v2.File.download (его нет), а по ссылке из самого события
+//     (data.PARAMS.FILES[].urlDownload), с авторизацией токеном бота. ⚠️ ТОЧНАЯ форма ссылки на старом
+//     портале зависит от версии — снимаем сырой payload события в логе (#bot debug) и при необходимости
+//     правим resolveDownloadUrl. Версия для v2 (imbot.v2.File.download) закомментирована ниже.
 import fs from 'node:fs';
 import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
@@ -58,8 +64,25 @@ export function makeBotApi(cfg) {
     return rest('imbot.message.add', botToken, params);
   }
 
-  // imbot.v2.File.download(botId,fileId)→downloadUrl → скачать → проверить host/размер/ext → сохранить.
-  async function downloadAndSaveFiles(files, { botToken, botId }) {
+  // LEGACY: ссылка на файл уже в событии (data.PARAMS.FILES[].urlDownload). Привести к абсолютному URL
+  // (на старом портале часто относительный путь im_disk.php) и добавить auth токеном бота.
+  // ⚠️ ПОРТАЛ-QA: точная форма/необходимость auth зависят от версии портала — сверить по логу события.
+  function resolveDownloadUrl(raw, botToken) {
+    if (!raw) return '';
+    let url = String(raw);
+    if (url.startsWith('/')) {
+      let origin;
+      try { origin = new URL(cfg.restEndpoint).origin; } catch { return ''; }
+      url = origin + url;
+    }
+    if (botToken && !/[?&]auth=/.test(url)) {
+      url += (url.includes('?') ? '&' : '?') + `auth=${encodeURIComponent(botToken)}`;
+    }
+    return url;
+  }
+
+  // Скачать файл(ы) из чата по ссылке из события → проверить host/размер/ext/MIME → сохранить.
+  async function downloadAndSaveFiles(files, { botToken }) {
     const list = Array.isArray(files) ? files.slice(0, cfg.maxFiles ?? files.length) : []; // cap числа файлов
     const jobId = uuidv4();
     const jobDir = path.join(cfg.uploadDir, jobId);
@@ -68,10 +91,9 @@ export function makeBotApi(cfg) {
     for (const f of list) {
       const ext = path.extname(f.name).slice(1).toLowerCase();
       if (!cfg.allowedExtensions.includes(ext)) continue; // тип не разрешён
-      const dl = await rest('imbot.v2.File.download', botToken, { botId, fileId: f.id });
-      const downloadUrl = dl && (dl.downloadUrl || dl.DOWNLOAD_URL);
+      const downloadUrl = resolveDownloadUrl(f.urlDownload, botToken);
       if (!downloadUrl) continue;
-      assertAllowed(downloadUrl); // SSRF на downloadUrl (CDN портала)
+      assertAllowed(downloadUrl); // SSRF на downloadUrl (диск портала)
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), timeoutMs);
       let buf;
@@ -97,4 +119,9 @@ export function makeBotApi(cfg) {
   }
 
   return { sendMessage, downloadAndSaveFiles };
+
+  // === v2 скачивание файла (вернуть при тираже — #229; на старом портале imbot.v2.File.download → 404):
+  //   const dl = await rest('imbot.v2.File.download', botToken, { botId, fileId: f.id });
+  //   const downloadUrl = dl && (dl.downloadUrl || dl.DOWNLOAD_URL);
+  // …далее как в legacy (assertAllowed → fetch → size/MIME → write). Тогда же вернуть botId в сигнатуру.
 }

@@ -9,6 +9,9 @@ import { makeBotApi } from '../b24-bot-api.js';
 import { createApp } from '../index.js';
 import { createAppStore } from '../app-store.js';
 
+// LEGACY-режим (#241): портал заказчика старый (imbot.v2.* → 404). События ONIMBOT*/ONIMCOMMANDADD,
+// payload с UPPERCASE-ключами (data.BOT[id], data.PARAMS, data.USER). Скачивание — по ссылке из события.
+
 // Мок агент-спавна (как в metrics-routes.test): успешный прогон с заданным result.
 function makeAgentSpawn({ result = { status: 'stub' } } = {}) {
   return vi.fn(() => {
@@ -26,28 +29,34 @@ function makeAgentSpawn({ result = { status: 'stub' } } = {}) {
 }
 
 // ── Чистые функции ────────────────────────────────────────────────────────────
-describe('parseBotEvent', () => {
-  it('нормализует PHP-ключи/строки события в объект', () => {
+describe('parseBotEvent (legacy)', () => {
+  it('нормализует UPPERCASE PHP-ключи/строки события в объект', () => {
     const e = parseBotEvent({
-      event: 'ONIMBOTV2MESSAGEADD',
+      event: 'ONIMBOTMESSAGEADD',
       auth: { application_token: 'apptok', client_endpoint: 'https://p.bitrix24.ru/rest/' },
       data: {
-        bot: { id: '456', code: 'procure_ai_invoice', auth: { access_token: 'botok', client_endpoint: 'https://p.bitrix24.ru/rest/' } },
-        message: { id: '789', dialogId: 'chat5', text: 'привет', files: [{ id: '12', name: 'schet.pdf' }] },
-        user: { id: '27', bot: '0' },
+        BOT: { 456: { access_token: 'botok', client_endpoint: 'https://p.bitrix24.ru/rest/', BOT_CODE: 'procure_ai_invoice' } },
+        PARAMS: { BOT_ID: '456', DIALOG_ID: 'chat5', MESSAGE_ID: '789', MESSAGE: 'привет', FROM_USER_ID: '27',
+          FILES: [{ id: '12', name: 'schet.pdf', urlDownload: '/im_disk.php?id=12' }] },
+        USER: { ID: '27' },
       },
     });
-    expect(e.event).toBe('ONIMBOTV2MESSAGEADD');
+    expect(e.event).toBe('ONIMBOTMESSAGEADD');
     expect(e.applicationToken).toBe('apptok');
     expect(e.bot).toMatchObject({ id: '456', token: 'botok', restEndpoint: 'https://p.bitrix24.ru/rest/' });
     expect(e.dialogId).toBe('chat5');
-    expect(e.message.files).toEqual([{ id: '12', name: 'schet.pdf' }]);
+    expect(e.message.files).toEqual([{ id: '12', name: 'schet.pdf', urlDownload: '/im_disk.php?id=12' }]);
     expect(e.user).toEqual({ id: '27', isBot: false });
   });
 
-  it('files как объект (qs-массив) — пустые id отфильтрованы', () => {
-    const e = parseBotEvent({ event: 'x', data: { message: { files: { 0: { id: '1', name: 'a.pdf' }, 1: { id: '', name: 'b' } } } } });
-    expect(e.message.files).toEqual([{ id: '1', name: 'a.pdf' }]);
+  it('FILES как объект (qs-массив) — записи без id и без ссылки отфильтрованы', () => {
+    const e = parseBotEvent({ event: 'x', data: { PARAMS: { FILES: { 0: { id: '1', name: 'a.pdf' }, 1: { id: '', name: 'b' } } } } });
+    expect(e.message.files).toEqual([{ id: '1', name: 'a.pdf', urlDownload: '' }]);
+  });
+
+  it('сообщение от самого бота: FROM_USER_ID == BOT_ID → isBot:true', () => {
+    const e = parseBotEvent({ event: 'ONIMBOTMESSAGEADD', data: { BOT: { 5: { access_token: 't' } }, PARAMS: { BOT_ID: '5', FROM_USER_ID: '5' } } });
+    expect(e.user).toEqual({ id: '5', isBot: true });
   });
 
   it('пустое тело → безопасные дефолты', () => {
@@ -103,8 +112,9 @@ function makeDeps(over = {}) {
     ...over,
   };
 }
+// Нормализованное событие (как из parseBotEvent) — событие legacy ONIMBOTMESSAGEADD.
 const msgEvt = (files, over = {}) => ({
-  event: 'ONIMBOTV2MESSAGEADD', dialogId: 'chat5', bot: { id: '456', token: 't' },
+  event: 'ONIMBOTMESSAGEADD', dialogId: 'chat5', bot: { id: '456', token: 't' },
   message: { id: '1', text: '', files }, command: {}, user: { id: '27', isBot: false }, ...over,
 });
 
@@ -163,7 +173,7 @@ describe('handleBotEvent', () => {
   it('команда feedback like → submitFeedback(positive, jobId, reporter)', async () => {
     const deps = makeDeps();
     const r = await handleBotEvent({
-      event: 'ONIMBOTV2COMMANDADD', dialogId: 'chat5', bot: { id: '456', token: 't' }, message: {},
+      event: 'ONIMCOMMANDADD', dialogId: 'chat5', bot: { id: '456', token: 't' }, message: {},
       command: { name: 'feedback', params: 'like job1', context: 'keyboard' }, user: { id: '27', isBot: false },
     }, deps);
     expect(r).toBe('feedback');
@@ -173,7 +183,7 @@ describe('handleBotEvent', () => {
   it('команда /feedback dislike → problem', async () => {
     const deps = makeDeps();
     await handleBotEvent({
-      event: 'ONIMBOTV2COMMANDADD', dialogId: 'c', bot: { id: '1', token: 't' }, message: {},
+      event: 'ONIMCOMMANDADD', dialogId: 'c', bot: { id: '1', token: 't' }, message: {},
       command: { name: '/feedback', params: 'dislike j2', context: 'keyboard' }, user: { id: '5', isBot: false },
     }, deps);
     expect(deps.submitFeedback).toHaveBeenCalledWith({ kind: 'problem', jobId: 'j2', reporter: 'b24/user:5' });
@@ -181,7 +191,7 @@ describe('handleBotEvent', () => {
 
   it('join → приветствие', async () => {
     const deps = makeDeps();
-    const r = await handleBotEvent({ event: 'ONIMBOTV2JOINCHAT', dialogId: 'c', bot: { id: '1', token: 't' }, message: {}, command: {}, user: {} }, deps);
+    const r = await handleBotEvent({ event: 'ONIMBOTJOINCHAT', dialogId: 'c', bot: { id: '1', token: 't' }, message: {}, command: {}, user: {} }, deps);
     expect(r).toBe('welcome');
     expect(deps.sendMessage).toHaveBeenCalled();
   });
@@ -196,7 +206,7 @@ describe('handleBotEvent', () => {
   it('команда feedback с мусорными params → submitFeedback НЕ вызывается', async () => {
     const deps = makeDeps();
     const r = await handleBotEvent({
-      event: 'ONIMBOTV2COMMANDADD', dialogId: 'c', bot: { id: '1', token: 't' }, message: {},
+      event: 'ONIMCOMMANDADD', dialogId: 'c', bot: { id: '1', token: 't' }, message: {},
       command: { name: 'feedback', params: 'garbage', context: 'keyboard' }, user: { id: '5', isBot: false },
     }, deps);
     expect(r).toBe('ignored:bad_feedback_params');
@@ -204,7 +214,7 @@ describe('handleBotEvent', () => {
   });
 });
 
-// ── Роут POST /b24/bot/event (валидация токена + проводка) ──────────────────────
+// ── Роут POST /b24/bot/event (валидация токена + проводка), legacy-payload ──────
 describe('POST /b24/bot/event', () => {
   const fakeMetrics = () => ({
     recordUpload: vi.fn(async () => {}), recordFeedback: vi.fn(async () => {}),
@@ -221,7 +231,7 @@ describe('POST /b24/bot/event', () => {
   it('неверный application_token → 403, обработчик не запускается', async () => {
     const { app, botApi } = appWith();
     const res = await request(app).post('/b24/bot/event').type('form')
-      .send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': 'WRONG', 'data[dialogId]': 'chat5', 'data[bot][id]': '1' });
+      .send({ event: 'ONIMBOTJOINCHAT', 'auth[application_token]': 'WRONG', 'data[PARAMS][DIALOG_ID]': 'chat5', 'data[BOT][1][access_token]': 'b' });
     expect(res.status).toBe(403);
     expect(botApi.sendMessage).not.toHaveBeenCalled();
   });
@@ -229,7 +239,7 @@ describe('POST /b24/bot/event', () => {
   it('верный токен → 200 быстро + обработчик вызван (join → приветствие)', async () => {
     const { app, botApi } = appWith();
     const res = await request(app).post('/b24/bot/event').type('form')
-      .send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': 'secret', 'data[dialogId]': 'chat5', 'data[bot][id]': '1', 'data[bot][auth][access_token]': 'botok' });
+      .send({ event: 'ONIMBOTJOINCHAT', 'auth[application_token]': 'secret', 'data[PARAMS][DIALOG_ID]': 'chat5', 'data[BOT][1][access_token]': 'botok' });
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(botApi.sendMessage).toHaveBeenCalled());
   });
@@ -240,7 +250,7 @@ describe('POST /b24/bot/event', () => {
     try {
       const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-off-'));
       const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics() }); // без b24BotApplicationToken
-      const res = await request(app).post('/b24/bot/event').type('form').send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': '' });
+      const res = await request(app).post('/b24/bot/event').type('form').send({ event: 'ONIMBOTJOINCHAT', 'auth[application_token]': '' });
       expect(res.status).toBe(403);
     } finally {
       if (prev !== undefined) process.env.B24_BOT_APPLICATION_TOKEN = prev;
@@ -250,9 +260,9 @@ describe('POST /b24/bot/event', () => {
   it('команда feedback (без токена фидбэка) → recordFeedback(source:user) и без падения', async () => {
     const { app, metrics } = appWith();
     const res = await request(app).post('/b24/bot/event').type('form').send({
-      event: 'ONIMBOTV2COMMANDADD', 'auth[application_token]': 'secret', 'data[dialogId]': 'chat5', 'data[bot][id]': '1',
-      'data[bot][auth][access_token]': 'botok', 'data[user][id]': '27',
-      'data[command][command]': 'feedback', 'data[command][params]': 'like job1', 'data[command][context]': 'keyboard',
+      event: 'ONIMCOMMANDADD', 'auth[application_token]': 'secret', 'data[PARAMS][DIALOG_ID]': 'chat5', 'data[BOT][1][access_token]': 'botok',
+      'data[PARAMS][FROM_USER_ID]': '27', 'data[USER][ID]': '27',
+      'data[COMMAND]': 'feedback', 'data[COMMAND_PARAMS]': 'like job1', 'data[COMMAND_CONTEXT]': 'keyboard',
     });
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(metrics.recordFeedback).toHaveBeenCalledWith({ source: 'user', kind: 'positive' }));
@@ -273,9 +283,10 @@ describe('POST /b24/bot/event', () => {
       agentConfig: { spawnFn: makeAgentSpawn({ result: { deal: { dealId: '5' } } }), extractFn: async () => ({ text: 'СЧЁТ', method: 'pdftotext' }) },
     });
     const res = await request(app).post('/b24/bot/event').type('form').send({
-      event: 'ONIMBOTV2MESSAGEADD', 'auth[application_token]': 'secret', 'data[dialogId]': 'chat5',
-      'data[bot][id]': '1', 'data[bot][auth][access_token]': 'botok', 'data[user][id]': '27',
-      'data[message][id]': '1', 'data[message][files][0][id]': '12', 'data[message][files][0][name]': 'schet.pdf',
+      event: 'ONIMBOTMESSAGEADD', 'auth[application_token]': 'secret', 'data[PARAMS][DIALOG_ID]': 'chat5',
+      'data[BOT][1][access_token]': 'botok', 'data[PARAMS][FROM_USER_ID]': '27', 'data[USER][ID]': '27',
+      'data[PARAMS][MESSAGE_ID]': '1', 'data[PARAMS][FILES][0][id]': '12', 'data[PARAMS][FILES][0][name]': 'schet.pdf',
+      'data[PARAMS][FILES][0][urlDownload]': 'https://p.bitrix24.ru/f',
     });
     expect(res.status).toBe(200);
     expect(botApi.downloadAndSaveFiles).toHaveBeenCalled();
@@ -288,97 +299,95 @@ describe('POST /b24/bot/event', () => {
   });
 });
 
-// ── b24-bot-api: фильтрация/SSRF в downloadAndSaveFiles (детерминированно, с mock fetch) ─────────
-describe('makeBotApi.downloadAndSaveFiles', () => {
-  // Тело по умолчанию — валидный PDF (%PDF-1.4): после добавления magic-MIME-проверки (#216)
-  // «пустые» байты больше не проходят как pdf, поэтому файл-фикстуры начинаются с PDF-заголовка.
+// ── b24-bot-api: фильтрация/SSRF в downloadAndSaveFiles (legacy: качаем по urlDownload из события) ─
+describe('makeBotApi.downloadAndSaveFiles (legacy)', () => {
   const PDF_HEADER = [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a]; // %PDF-1.4\n
   const pdfBytes = (n) => {
     const out = new Uint8Array(Math.max(n, PDF_HEADER.length));
     out.set(PDF_HEADER);
     return out.buffer;
   };
-  const okFetch = (downloadUrl, bytes = 16, contentLength = '16') => vi.fn(async (url) => {
-    if (String(url).includes('imbot.v2.File.download')) return { ok: true, json: async () => ({ result: { downloadUrl } }) };
-    return { ok: true, headers: { get: () => contentLength }, arrayBuffer: async () => pdfBytes(bytes) };
+  // Любой fetch (это уже скачивание файла — отдельного imbot.v2.File.download больше нет).
+  const okFetch = (bytes = 16, contentLength = '16') => vi.fn(async () =>
+    ({ ok: true, headers: { get: () => contentLength }, arrayBuffer: async () => pdfBytes(bytes) }));
+  const mk = (over = {}) => makeBotApi({
+    restEndpoint: 'https://p.bitrix24.ru/rest/', uploadDir: fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-')),
+    allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost: () => true, ...over,
   });
 
   it('неразрешённый ext пропускается; all-filtered → jobDir удалён', async () => {
-    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
-    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://p.bitrix24.ru/f'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost: () => true });
-    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.exe' }], { botToken: 't', botId: '1' });
+    const api = mk({ fetchImpl: okFetch() });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.exe', urlDownload: 'https://p.bitrix24.ru/f' }], { botToken: 't' });
     expect(r.fileEntries).toEqual([]);
     expect(fs.existsSync(r.jobDir)).toBe(false);
   });
 
   it('oversize по Content-Length пропускается', async () => {
-    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
-    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://p.bitrix24.ru/f', 9999, '9999'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 100, maxFiles: 10, isAllowedHost: () => true });
-    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }], { botToken: 't', botId: '1' });
+    const api = mk({ fetchImpl: okFetch(9999, '9999'), maxBytes: 100 });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf', urlDownload: 'https://p.bitrix24.ru/f' }], { botToken: 't' });
     expect(r.fileEntries).toEqual([]);
   });
 
-  it('SSRF: downloadUrl на чужом домене → throw (host not allowed)', async () => {
-    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
-    const isAllowedHost = (h) => h.endsWith('.bitrix24.ru');
-    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://evil.example.com/f'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost });
-    await expect(api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }], { botToken: 't', botId: '1' })).rejects.toThrow(/not allowed/);
+  it('SSRF: urlDownload на чужом домене → throw (host not allowed)', async () => {
+    const api = mk({ fetchImpl: okFetch(), isAllowedHost: (h) => h.endsWith('.bitrix24.ru') });
+    await expect(api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf', urlDownload: 'https://evil.example.com/f' }], { botToken: 't' })).rejects.toThrow(/not allowed/);
+  });
+
+  it('относительный urlDownload → префикс домена из restEndpoint + auth токеном бота', async () => {
+    const seen = [];
+    const api = mk({ fetchImpl: vi.fn(async (url) => { seen.push(String(url)); return { ok: true, headers: { get: () => '16' }, arrayBuffer: async () => pdfBytes(16) }; }) });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf', urlDownload: '/im_disk.php?id=1' }], { botToken: 'TOK' });
+    expect(r.fileEntries).toHaveLength(1);
+    expect(seen[0]).toBe('https://p.bitrix24.ru/im_disk.php?id=1&auth=TOK');
   });
 
   it('cap по числу файлов (maxFiles)', async () => {
-    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
-    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://p.bitrix24.ru/f'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 2, isAllowedHost: () => true });
-    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }, { id: '2', name: 'b.pdf' }, { id: '3', name: 'c.pdf' }], { botToken: 't', botId: '1' });
+    const api = mk({ fetchImpl: okFetch(), maxFiles: 2 });
+    const r = await api.downloadAndSaveFiles([
+      { id: '1', name: 'a.pdf', urlDownload: 'https://p.bitrix24.ru/a' },
+      { id: '2', name: 'b.pdf', urlDownload: 'https://p.bitrix24.ru/b' },
+      { id: '3', name: 'c.pdf', urlDownload: 'https://p.bitrix24.ru/c' },
+    ], { botToken: 't' });
     expect(r.fileEntries).toHaveLength(2); // 3-й отброшен cap-ом
   });
 
   it('валидный по содержимому PDF сохраняется (#216)', async () => {
-    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
-    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: okFetch('https://p.bitrix24.ru/f'), uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost: () => true });
-    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }], { botToken: 't', botId: '1' });
+    const api = mk({ fetchImpl: okFetch() });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf', urlDownload: 'https://p.bitrix24.ru/f' }], { botToken: 't' });
     expect(r.fileEntries).toHaveLength(1);
   });
 
   it('смешанная партия: валидный сохраняется, невалидный пропускается, jobDir сохраняется (#216)', async () => {
-    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
-    // download-url зависит от fileId; тело: f/1 — валидный PDF, f/2 — нули (не распознаётся).
-    const mixedFetch = vi.fn(async (url, opts) => {
-      if (String(url).includes('imbot.v2.File.download')) {
-        const fileId = JSON.parse(opts.body).fileId;
-        return { ok: true, json: async () => ({ result: { downloadUrl: `https://p.bitrix24.ru/f/${fileId}` } }) };
-      }
-      const valid = String(url).endsWith('/1');
+    // тело зависит от URL: .../1 — валидный PDF, .../2 — нули (не распознаётся).
+    const mixedFetch = vi.fn(async (url) => {
+      const valid = String(url).startsWith('https://p.bitrix24.ru/1');
       return { ok: true, headers: { get: () => '64' }, arrayBuffer: async () => (valid ? pdfBytes(16) : new Uint8Array(64).buffer) };
     });
-    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: mixedFetch, uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost: () => true });
-    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'ok.pdf' }, { id: '2', name: 'bad.pdf' }], { botToken: 't', botId: '1' });
+    const api = mk({ fetchImpl: mixedFetch });
+    const r = await api.downloadAndSaveFiles([
+      { id: '1', name: 'ok.pdf', urlDownload: 'https://p.bitrix24.ru/1' },
+      { id: '2', name: 'bad.pdf', urlDownload: 'https://p.bitrix24.ru/2' },
+    ], { botToken: 't' });
     expect(r.fileEntries).toHaveLength(1);
     expect(r.fileEntries[0].name).toBe('ok.pdf');
     expect(fs.existsSync(r.jobDir)).toBe(true); // непустая партия → каталог НЕ удаляется
   });
 
   it('невалидный MIME (содержимое ≠ разрешённый тип) пропускается (#216)', async () => {
-    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-api-'));
-    // download отдаёт «.pdf», но тело — нули: file-type не распознаёт разрешённый тип → файл отброшен,
-    // как и в /upload. Расширение allowed, размер в норме — отсекает именно magic-MIME-проверка.
-    const badFetch = vi.fn(async (url) => {
-      if (String(url).includes('imbot.v2.File.download')) return { ok: true, json: async () => ({ result: { downloadUrl: 'https://p.bitrix24.ru/f' } }) };
-      return { ok: true, headers: { get: () => '64' }, arrayBuffer: async () => new Uint8Array(64).buffer };
-    });
-    const api = makeBotApi({ restEndpoint: 'https://p.bitrix24.ru/rest/', fetchImpl: badFetch, uploadDir, allowedExtensions: ['pdf'], maxBytes: 1024, maxFiles: 10, isAllowedHost: () => true });
-    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }], { botToken: 't', botId: '1' });
+    const badFetch = vi.fn(async () => ({ ok: true, headers: { get: () => '64' }, arrayBuffer: async () => new Uint8Array(64).buffer }));
+    const api = mk({ fetchImpl: badFetch });
+    const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf', urlDownload: 'https://p.bitrix24.ru/f' }], { botToken: 't' });
     expect(r.fileEntries).toEqual([]);
     expect(fs.existsSync(r.jobDir)).toBe(false);
   });
 });
 
-// ── POST /b24/app/event — захват application_token (#217) ───────────────────────────────────────
+// ── POST /b24/app/event — захват application_token (#217), не затронут legacy-переключением ───────
 describe('POST /b24/app/event (захват токена + проверка через app.info)', () => {
   const fakeMetrics = () => ({
     recordUpload: vi.fn(async () => {}), recordFeedback: vi.fn(async () => {}), recordFile: vi.fn(async () => {}),
     recordMatching: vi.fn(async () => {}), recordWarnings: vi.fn(async () => {}), snapshot: vi.fn(async () => ({})), ping: vi.fn(async () => {}),
   });
-  // handleAppEvent выполняется АСИНХРОННО после 200 — ждём условие с таймаутом.
   const until = async (fn, ms = 1000) => {
     const end = Date.now() + ms;
     while (Date.now() < end) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 10)); }
@@ -387,7 +396,6 @@ describe('POST /b24/app/event (захват токена + проверка че
   function appWith(appInfo) {
     const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-evt-'));
     const appStore = createAppStore({ redisUrl: '' });
-    // portalDomains задаём напрямую; appInfo инжектируем (одна проба и для /session/b24, и для захвата).
     const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics(), appStore, appInfo, portalDomains: ['p.bitrix24.by'] });
     return { app, appStore };
   }
@@ -395,6 +403,9 @@ describe('POST /b24/app/event (захват токена + проверка че
     event: 'ONAPPINSTALL', 'auth[application_token]': 'APPTOK', 'auth[access_token]': 'ACC',
     'auth[member_id]': 'm1', 'auth[domain]': 'p.bitrix24.by', ...over,
   });
+  // join-событие бота с legacy-ключами (для проверки валидности токена через стор).
+  const botJoin = (app, tok) => request(app).post('/b24/bot/event').type('form')
+    .send({ event: 'ONIMBOTJOINCHAT', 'auth[application_token]': tok, 'data[BOT][1][access_token]': 'b' });
 
   it('валидный install (app.info ок, домен в allowlist) → токен захвачен, событие бота с ним проходит', async () => {
     const appInfo = vi.fn(async () => true);
@@ -403,10 +414,7 @@ describe('POST /b24/app/event (захват токена + проверка че
     expect(res.status).toBe(200);
     expect(await until(() => appStore.isKnownToken('APPTOK'))).toBe(true);
     expect(appInfo).toHaveBeenCalledWith('p.bitrix24.by', 'ACC');
-    // теперь /b24/bot/event с этим токеном валиден БЕЗ env-токена (B24_BOT_APPLICATION_TOKEN не задан)
-    const ev = await request(app).post('/b24/bot/event').type('form')
-      .send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': 'APPTOK', 'data[bot][id]': '1', 'data[bot][auth][access_token]': 'b' });
-    expect(ev.status).toBe(200);
+    expect((await botJoin(app, 'APPTOK')).status).toBe(200);
   });
 
   it('app.info вернул false → токен НЕ захвачен (recordInstall не вызван); событие бота с ним → 403', async () => {
@@ -414,13 +422,11 @@ describe('POST /b24/app/event (захват токена + проверка че
     const { app, appStore } = appWith(appInfo);
     const recordSpy = vi.spyOn(appStore, 'recordInstall');
     await request(app).post('/b24/app/event').type('form').send(install());
-    // детерминированно: ждём вызова app.info (обработчик дошёл до проверки), затем флашим микротаски
     expect(await until(() => appInfo.mock.calls.length > 0)).toBe(true);
     await new Promise((r) => setImmediate(r));
     expect(recordSpy).not.toHaveBeenCalled();
     expect(await appStore.isKnownToken('APPTOK')).toBe(false);
-    const ev = await request(app).post('/b24/bot/event').type('form').send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': 'APPTOK' });
-    expect(ev.status).toBe(403);
+    expect((await botJoin(app, 'APPTOK')).status).toBe(403);
   });
 
   it('домен НЕ в allowlist → app.info даже не вызывается, recordInstall не вызван (SSRF-гард)', async () => {
@@ -428,7 +434,7 @@ describe('POST /b24/app/event (захват токена + проверка че
     const { app, appStore } = appWith(appInfo);
     const recordSpy = vi.spyOn(appStore, 'recordInstall');
     await request(app).post('/b24/app/event').type('form').send(install({ 'auth[domain]': 'evil.example.com' }));
-    await new Promise((r) => setImmediate(r)); // отказ по allowlist синхронен — флаша достаточно
+    await new Promise((r) => setImmediate(r));
     expect(appInfo).not.toHaveBeenCalled();
     expect(recordSpy).not.toHaveBeenCalled();
     expect(await appStore.isKnownToken('APPTOK')).toBe(false);
@@ -439,7 +445,7 @@ describe('POST /b24/app/event (захват токена + проверка че
     const { app, appStore } = appWith(appInfo);
     await request(app).post('/b24/app/event').type('form').send(install({ 'auth[access_token]': 'x'.repeat(4097) }));
     await new Promise((r) => setImmediate(r));
-    expect(appInfo).not.toHaveBeenCalled(); // length-guard до исходящего вызова
+    expect(appInfo).not.toHaveBeenCalled();
     expect(await appStore.isKnownToken('APPTOK')).toBe(false);
   });
 
@@ -463,12 +469,10 @@ describe('POST /b24/app/event (захват токена + проверка че
     const appStore = createAppStore({ redisUrl: '' });
     await appStore.recordInstall({ memberId: 'm9', applicationToken: 'CAPTURED' });
     const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics(), appStore, b24BotApplicationToken: 'ENVTOK', portalDomains: ['p.bitrix24.by'] });
-    const join = (tok) => request(app).post('/b24/bot/event').type('form')
-      .send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': tok, 'data[bot][id]': '1', 'data[bot][auth][access_token]': 'b' });
-    expect((await join('ENVTOK')).status).toBe(200);    // env-фолбэк не сломан стором
-    expect((await join('CAPTURED')).status).toBe(200);  // захваченный токен валиден
-    expect((await join('NOPE')).status).toBe(403);
-    expect((await join('')).status).toBe(403);          // пустой токен — 403 даже при непустом сторе
-    expect((await join('   ')).status).toBe(403);        // пробельный — тоже не «известный»
+    expect((await botJoin(app, 'ENVTOK')).status).toBe(200);    // env-фолбэк не сломан стором
+    expect((await botJoin(app, 'CAPTURED')).status).toBe(200);  // захваченный токен валиден
+    expect((await botJoin(app, 'NOPE')).status).toBe(403);
+    expect((await botJoin(app, '')).status).toBe(403);          // пустой токен — 403 даже при непустом сторе
+    expect((await botJoin(app, '   ')).status).toBe(403);        // пробельный — тоже не «известный»
   });
 });

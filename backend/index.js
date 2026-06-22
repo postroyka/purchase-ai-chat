@@ -818,6 +818,12 @@ export function createApp(config = {}) {
     }
     // 200 быстро (Б24 не гарантирует повтор обработчика) — тяжёлую работу делаем асинхронно.
     res.status(200).json({ ok: true });
+    // #bot debug (LEGACY портал-QA, #241): логируем форму события — ТОЛЬКО data.PARAMS (там нет токенов:
+    // access_token/application_token лежат в data.BOT и auth). Нужно, чтобы сверить структуру PARAMS.FILES
+    // старого портала и добить скачивание. Включено по умолчанию на прогон; выключить — B24_BOT_DEBUG=false.
+    if (process.env.B24_BOT_DEBUG !== 'false') {
+      try { console.log(`[b24bot] ${evt.event} PARAMS: ${JSON.stringify(req.body?.data?.PARAMS ?? {})}`); } catch { /* ignore */ }
+    }
     const api = config.botApi ?? makeBotApi({
       restEndpoint: evt.bot.restEndpoint, uploadDir, allowedExtensions,
       maxBytes: maxFileSizeMb * 1024 * 1024, maxFiles: maxFilesPerRequest,

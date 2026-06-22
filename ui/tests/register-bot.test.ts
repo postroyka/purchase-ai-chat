@@ -11,24 +11,23 @@ function frameStub(makeImpl: (opts: { method: string, params: Record<string, unk
   return { frame: { actions: { v2: { call: { make } } } } as never, make }
 }
 
-describe('registerInvoiceBot (#217 — v2 SDK actions.v2.call.make)', () => {
-  it('регистрирует бота и команду с верными методами/параметрами', async () => {
+describe('registerInvoiceBot (#217 — LEGACY imbot.register; портал старый)', () => {
+  it('регистрирует бота и команду с верными legacy-методами/параметрами', async () => {
     const { frame, make } = frameStub(async (opts) => {
-      if (opts.method === 'imbot.v2.Bot.register') return ok({ bot: { id: 456 } })
+      if (opts.method === 'imbot.register') return ok(456) // imbot.register → BOT_ID как integer
       if (opts.method === 'imbot.command.register') return ok(99)
       throw new Error(`unexpected ${opts.method}`)
     })
     const r = await registerInvoiceBot(frame, 'https://app.example/b24/bot/event')
     expect(r).toEqual({ botId: 456, commandId: 99 })
 
-    // 1-й вызов: imbot.v2.Bot.register — параметры В fields, type:'bot' (НЕ 'B'), eventMode:'webhook'
+    // 1-й вызов: imbot.register — TYPE:'B', EVENT_HANDLER (один URL на все события), PROPERTIES.NAME
     const reg = make.mock.calls[0]![0]
-    expect(reg.method).toBe('imbot.v2.Bot.register')
-    expect(reg.params.fields).toMatchObject({
-      code: BOT_CODE, type: 'bot', eventMode: 'webhook', webhookUrl: 'https://app.example/b24/bot/event'
+    expect(reg.method).toBe('imbot.register')
+    expect(reg.params).toMatchObject({
+      CODE: BOT_CODE, TYPE: 'B', EVENT_HANDLER: 'https://app.example/b24/bot/event'
     })
-    expect((reg.params.fields as { properties: { name: string } }).properties.name).toBeTruthy()
-    expect((reg.params.fields as Record<string, unknown>).botToken).toBeUndefined() // OAuth — токен не шлём
+    expect((reg.params.PROPERTIES as { NAME: string }).NAME).toBeTruthy()
 
     // 2-й вызов: imbot.command.register с BOT_ID из ответа регистрации
     const cmd = make.mock.calls[1]![0]
@@ -41,26 +40,26 @@ describe('registerInvoiceBot (#217 — v2 SDK actions.v2.call.make)', () => {
 
   it('работает БЕЗ BX24.callMethod — только через actions.v2.call.make (2 вызова)', async () => {
     const { frame, make } = frameStub(async opts =>
-      opts.method === 'imbot.v2.Bot.register' ? ok({ bot: { id: 1 } }) : ok(2))
+      opts.method === 'imbot.register' ? ok(1) : ok(2))
     await registerInvoiceBot(frame, 'https://app/x')
     expect(make).toHaveBeenCalledTimes(2)
   })
 
   it('ошибка регистрации бота → бросает; команда не регистрируется', async () => {
-    const { frame, make } = frameStub(async () => fail(['BOT_WEBHOOK_URL_REQUIRED']))
-    await expect(registerInvoiceBot(frame, '')).rejects.toThrow(/imbot\.v2\.Bot\.register: BOT_WEBHOOK_URL_REQUIRED/)
+    const { frame, make } = frameStub(async () => fail(['CODE_ERROR']))
+    await expect(registerInvoiceBot(frame, '')).rejects.toThrow(/imbot\.register: CODE_ERROR/)
     expect(make).toHaveBeenCalledTimes(1) // до команды не дошли
   })
 
   it('ошибка регистрации команды → бросает', async () => {
     const { frame } = frameStub(async opts =>
-      opts.method === 'imbot.v2.Bot.register' ? ok({ bot: { id: 7 } }) : fail(['COMMAND_ERROR']))
+      opts.method === 'imbot.register' ? ok(7) : fail(['COMMAND_ERROR']))
     await expect(registerInvoiceBot(frame, 'https://app/x')).rejects.toThrow(/imbot\.command\.register: COMMAND_ERROR/)
   })
 
-  it('успех, но ответ без bot.id → бросает, команда не регистрируется', async () => {
-    const { frame, make } = frameStub(async () => ok({})) // isSuccess:true, но result без bot
-    await expect(registerInvoiceBot(frame, 'https://app/x')).rejects.toThrow(/без bot\.id/)
+  it('успех, но ответ без BOT_ID → бросает, команда не регистрируется', async () => {
+    const { frame, make } = frameStub(async () => ok(null)) // isSuccess:true, но result не число
+    await expect(registerInvoiceBot(frame, 'https://app/x')).rejects.toThrow(/без BOT_ID/)
     expect(make).toHaveBeenCalledTimes(1)
   })
 })

@@ -1,7 +1,12 @@
 // Чат-бот Битрикс24 (дизайн — docs/B24_BOT.md): чистая логика разбора/роутинга событий бота.
 // Весь I/O (скачивание файла, отправка сообщения, запуск задания, отзыв) ИНЪЕКТИРУЕТСЯ через deps —
-// поэтому модуль тестируется без живого портала. Боевые REST-вызовы imbot.v2.* — в b24-bot-api.js
-// (граница, требующая портал-QA). Используем API чат-ботов 2.0 (события ONIMBOTV2*).
+// поэтому модуль тестируется без живого портала. Боевые REST-вызовы — в b24-bot-api.js (граница,
+// требующая портал-QA).
+//
+// ⚠️ LEGACY-режим (портал заказчика старый — imbot.v2.* → 404). Разбираем устаревшие события
+// ONIMBOTMESSAGEADD / ONIMCOMMANDADD / ONIMBOTJOINCHAT / ONIMBOTDELETE с UPPERCASE-payload
+// (data.BOT[id], data.PARAMS, auth). Версия для v2 (события ONIMBOTV2*) НЕ удалена — закомментирована
+// блоками «=== v2 (вернуть при тираже) ===»; на новом портале вернёмся к ней.
 
 import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
@@ -11,38 +16,87 @@ import { v4 as uuidv4 } from 'uuid';
 const s = (v) => (v == null ? '' : String(v));
 
 /**
- * Привести сырое тело вебхук-события к нормализованной форме.
- * @returns {{ event:string, applicationToken:string, bot:{id,code,token}, dialogId:string,
- *   message:{id,text,files:Array<{id,name}>}, command:{name,params,context}, user:{id,isBot} }}
+ * Привести сырое тело LEGACY-вебхук-события к нормализованной форме.
+ * Legacy-payload (сверено с офиц. докой): UPPERCASE-ключи —
+ *   data.BOT[<botId>].{access_token, client_endpoint, application_token, AUTH{...}, BOT_CODE},
+ *   data.PARAMS.{DIALOG_ID, MESSAGE, MESSAGE_ID, FROM_USER_ID, FILES, COMMAND, COMMAND_PARAMS},
+ *   data.USER.{ID}, auth.{application_token, client_endpoint}.
+ * @returns {{ event:string, applicationToken:string, bot:{id,code,token,restEndpoint}, dialogId:string,
+ *   message:{id,text,files:Array<{id,name,urlDownload}>}, command:{name,params,context}, user:{id,isBot} }}
  */
 export function parseBotEvent(body = {}) {
   const data = (body && typeof body.data === 'object' && body.data) || {};
-  const bot = (data.bot && typeof data.bot === 'object' && data.bot) || {};
-  const botAuth = (bot.auth && typeof bot.auth === 'object' && bot.auth) || {};
-  const msg = (data.message && typeof data.message === 'object' && data.message) || {};
-  const cmd = (data.command && typeof data.command === 'object' && data.command) || {};
-  const user = (data.user && typeof data.user === 'object' && data.user) || {};
+  const params = (data.PARAMS && typeof data.PARAMS === 'object' && data.PARAMS) || {};
+  const user = (data.USER && typeof data.USER === 'object' && data.USER) || {};
   const topAuth = (body.auth && typeof body.auth === 'object' && body.auth) || {};
+  // BOT — объект, ключ = BOT_ID; берём указанного в PARAMS или единственного/первого.
+  const botMap = (data.BOT && typeof data.BOT === 'object' && data.BOT) || {};
+  const botId = s(params.BOT_ID || Object.keys(botMap)[0]);
+  const botEntry = (botMap[botId] && typeof botMap[botId] === 'object' && botMap[botId])
+    || (typeof Object.values(botMap)[0] === 'object' ? Object.values(botMap)[0] : {});
+  const botAuth = (botEntry.AUTH && typeof botEntry.AUTH === 'object' && botEntry.AUTH) || {};
 
-  // Файлы v2 приходят в структурном message; форму (message.files[].id/name) сверить на портале.
-  const rawFiles = Array.isArray(msg.files) ? msg.files
-    : (msg.files && typeof msg.files === 'object' ? Object.values(msg.files) : []);
-  const files = rawFiles
-    .map((f) => ({ id: s(f && f.id), name: s(f && (f.name ?? f.fileName)) }))
-    .filter((f) => f.id !== '');
+  // ⚠️ ПОРТАЛ-QA: форма файлов в legacy (data.PARAMS.FILES) зависит от версии портала — сверяем по
+  // логу сырого события (#bot debug). Берём id + имя + ссылку скачивания под разными возможными ключами.
+  const rawFiles = params.FILES;
+  const fileList = Array.isArray(rawFiles) ? rawFiles
+    : (rawFiles && typeof rawFiles === 'object' ? Object.values(rawFiles) : []);
+  const files = fileList
+    .map((f) => ({
+      id: s(f && (f.id ?? f.ID ?? f.fileId)),
+      name: s(f && (f.name ?? f.NAME ?? f.fileName)),
+      urlDownload: s(f && (f.urlDownload ?? f.URL_DOWNLOAD ?? f.link ?? f.DOWNLOAD_URL ?? f.url)),
+    }))
+    .filter((f) => f.id !== '' || f.urlDownload !== '');
+
+  const fromUserId = s(params.FROM_USER_ID || user.ID);
 
   return {
     event: s(body.event).toUpperCase(),
-    applicationToken: s(topAuth.application_token),
-    // restEndpoint — база REST портала для обратных вызовов бота (client_endpoint из OAuth-токена бота).
-    bot: { id: s(bot.id), code: s(bot.code), token: s(botAuth.access_token), restEndpoint: s(botAuth.client_endpoint || topAuth.client_endpoint) },
-    // dialogId в data (join/context-события) или в message (сообщение); чат — chatXXX/число.
-    dialogId: s(data.dialogId || msg.dialogId),
-    message: { id: s(msg.id), text: s(msg.text), files },
-    command: { name: s(cmd.command), params: s(cmd.params), context: s(cmd.context) },
-    user: { id: s(user.id), isBot: s(user.bot) === '1' || s(user.bot).toLowerCase() === 'true' },
+    applicationToken: s(topAuth.application_token || botEntry.application_token),
+    // restEndpoint — база REST портала для обратных вызовов бота (client_endpoint токена бота).
+    bot: {
+      id: botId,
+      code: s(botEntry.BOT_CODE || botEntry.code),
+      token: s(botEntry.access_token || botAuth.access_token),
+      restEndpoint: s(botEntry.client_endpoint || botAuth.client_endpoint || topAuth.client_endpoint),
+    },
+    dialogId: s(params.DIALOG_ID),
+    message: { id: s(params.MESSAGE_ID), text: s(params.MESSAGE), files },
+    // Команда (ONIMCOMMANDADD): legacy кладёт COMMAND/COMMAND_PARAMS в data или PARAMS — берём отовсюду.
+    command: {
+      name: s(data.COMMAND || params.COMMAND),
+      params: s(data.COMMAND_PARAMS || params.COMMAND_PARAMS),
+      context: s(data.COMMAND_CONTEXT || params.COMMAND_CONTEXT),
+    },
+    // isBot: сообщение от самого бота (автор == BOT_ID) — на него не реагируем.
+    user: { id: fromUserId, isBot: fromUserId !== '' && fromUserId === botId },
   };
 }
+
+// === v2 parseBotEvent (вернуть при тираже — #229; события ONIMBOTV2*, payload в нижнем регистре) =====
+// export function parseBotEvent(body = {}) {
+//   const data = (body && typeof body.data === 'object' && body.data) || {};
+//   const bot = (data.bot && typeof data.bot === 'object' && data.bot) || {};
+//   const botAuth = (bot.auth && typeof bot.auth === 'object' && bot.auth) || {};
+//   const msg = (data.message && typeof data.message === 'object' && data.message) || {};
+//   const cmd = (data.command && typeof data.command === 'object' && data.command) || {};
+//   const user = (data.user && typeof data.user === 'object' && data.user) || {};
+//   const topAuth = (body.auth && typeof body.auth === 'object' && body.auth) || {};
+//   const rawFiles = Array.isArray(msg.files) ? msg.files
+//     : (msg.files && typeof msg.files === 'object' ? Object.values(msg.files) : []);
+//   const files = rawFiles.map((f) => ({ id: s(f && f.id), name: s(f && (f.name ?? f.fileName)) })).filter((f) => f.id !== '');
+//   return {
+//     event: s(body.event).toUpperCase(),
+//     applicationToken: s(topAuth.application_token),
+//     bot: { id: s(bot.id), code: s(bot.code), token: s(botAuth.access_token), restEndpoint: s(botAuth.client_endpoint || topAuth.client_endpoint) },
+//     dialogId: s(data.dialogId || msg.dialogId),
+//     message: { id: s(msg.id), text: s(msg.text), files },
+//     command: { name: s(cmd.command), params: s(cmd.params), context: s(cmd.context) },
+//     user: { id: s(user.id), isBot: s(user.bot) === '1' || s(user.bot).toLowerCase() === 'true' },
+//   };
+// }
+// ===================================================================================================
 
 /**
  * Привести сырое тело APP-события (ONAPPINSTALL/ONAPPUPDATE/ONAPPUNINSTALL) к нормализованной форме (#217).
@@ -71,7 +125,7 @@ export function parseFeedbackParams(params = '') {
 }
 
 // Клавиатура 👍/👎 под результатом (формат B24: { BUTTONS:[...] }; команда feedback должна быть
-// зарегистрирована imbot.command.register, чтобы клик породил ONIMBOTV2COMMANDADD).
+// зарегистрирована imbot.command.register, чтобы клик породил ONIMCOMMANDADD).
 export function feedbackKeyboard(jobId) {
   return { BUTTONS: [
     { TEXT: '👍 Верно', COMMAND: 'feedback', COMMAND_PARAMS: `like ${jobId}`, BG_COLOR: '#1ec391', TEXT_COLOR: '#ffffff', DISPLAY: 'LINE' },
@@ -122,7 +176,7 @@ export async function handleBotEvent(evt, deps) {
   }).catch((e) => deps.log?.(`[b24bot] sendMessage failed: ${e?.message}`));
 
   switch (evt.event) {
-    case 'ONIMBOTV2MESSAGEADD': {
+    case 'ONIMBOTMESSAGEADD': { // v2: ONIMBOTV2MESSAGEADD (вернуть при тираже)
       if (evt.user.isBot) return 'ignored:from_bot'; // не реагируем на собственные/ботовые сообщения
       if (evt.message.files.length === 0) { await send(HINT_NO_FILE); return 'hint'; }
       // Тот же DoS-гард, что у /upload (лимит одновременных заданий): занято → просим повторить.
@@ -152,7 +206,7 @@ export async function handleBotEvent(evt, deps) {
       return 'started';
     }
 
-    case 'ONIMBOTV2COMMANDADD': {
+    case 'ONIMCOMMANDADD': { // v2: ONIMBOTV2COMMANDADD (вернуть при тираже)
       if (s(evt.command.name).replace(/^\//, '') !== 'feedback') return 'ignored:other_command';
       const fb = parseFeedbackParams(evt.command.params);
       if (!fb) return 'ignored:bad_feedback_params';
@@ -162,11 +216,11 @@ export async function handleBotEvent(evt, deps) {
       return 'feedback';
     }
 
-    case 'ONIMBOTV2JOINCHAT':
+    case 'ONIMBOTJOINCHAT': // v2: ONIMBOTV2JOINCHAT (вернуть при тираже)
       await send(WELCOME);
       return 'welcome';
 
-    case 'ONIMBOTV2DELETE':
+    case 'ONIMBOTDELETE': // v2: ONIMBOTV2DELETE (вернуть при тираже)
       return 'ignored:bot_deleted'; // очистка состояния — на стороне роутера (если будет стор)
 
     default:
