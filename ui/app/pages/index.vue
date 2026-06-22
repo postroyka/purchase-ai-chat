@@ -33,10 +33,18 @@
             layout="list"
             class="w-full min-h-[220px]"
             label="Перетащите файлы сюда"
-            description="или нажмите, чтобы выбрать · до 10 файлов, по 20 МБ"
+            description="или нажмите, чтобы выбрать · до 10 файлов, по 20 МБ · затем нажмите «Загрузить»"
             :file-delete="!uploading && !polling"
             :disabled="uploading || polling"
           />
+
+          <!-- Явная загрузка (#238): выбор файлов НЕ стартует загрузку сразу — сначала можно убрать
+               лишний файл (крестик у файла выше), потом нажать «Загрузить». -->
+          <div v-if="selectedFiles?.length && !uploading && !polling" class="mt-5 flex justify-end">
+            <B24Button color="air-primary" @click="doUpload">
+              Загрузить {{ selectedFiles.length }} {{ plural(selectedFiles.length, ['файл', 'файла', 'файлов']) }}
+            </B24Button>
+          </div>
 
           <div v-if="uploading || polling" class="mt-5">
             <B24Progress
@@ -254,7 +262,7 @@
 
 <script setup lang="ts">
 import { fileBadge, jobBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
-import { mmss, timingLine } from '~/utils/format-duration'
+import { mmss, timingLine, plural } from '~/utils/format-duration'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
 definePageMeta({ layout: 'default' })
@@ -380,12 +388,9 @@ async function openDeal(deal: CreatedDeal): Promise<void> {
 // In dev the nitro devProxy injects the Bearer server-side.
 const { apiFetch } = useApi()
 
-// Автозагрузка сразу после выбора файлов — одно действие, без лишней кнопки.
-watch(selectedFiles, (files) => {
-  if (files?.length && !uploading.value && !polling.value) {
-    doUpload()
-  }
-})
+// #238: выбор файлов НЕ запускает загрузку сразу — сначала пользователь может убрать лишний файл
+// (крестик у файла в B24FileUpload, :file-delete) и только потом нажать «Загрузить» (см. шаблон).
+// Раньше здесь был watch(selectedFiles → doUpload), из-за которого окно для удаления было нулевым.
 
 // ── Загрузка ──────────────────────────────────────────────────────────────────
 
@@ -403,6 +408,9 @@ async function doUpload() {
 
   const form = new FormData()
   for (const f of files) form.append('files[]', f)
+  // #238: отдали файлы в загрузку — очищаем выбор. Локальная `files` держит ссылку для POST, а
+  // кнопка «Загрузить» больше не «всплывёт» после завершения задания (её v-if смотрит на selectedFiles).
+  selectedFiles.value = null
 
   try {
     const res = await apiFetch<{ jobId: string, files: Array<{ name: string, status: string }> }>(
