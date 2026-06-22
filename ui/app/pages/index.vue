@@ -33,10 +33,18 @@
             layout="list"
             class="w-full min-h-[220px]"
             label="Перетащите файлы сюда"
-            description="или нажмите, чтобы выбрать · до 10 файлов, по 20 МБ"
+            description="или нажмите, чтобы выбрать · до 10 файлов, по 20 МБ · затем нажмите «Загрузить»"
             :file-delete="!uploading && !polling"
             :disabled="uploading || polling"
           />
+
+          <!-- Явная загрузка (#238): выбор файлов НЕ стартует загрузку сразу — сначала можно убрать
+               лишний файл (крестик у файла выше), потом нажать «Загрузить». -->
+          <div v-if="selectedFiles?.length && !uploading && !polling" class="mt-5 flex justify-end">
+            <B24Button color="air-primary" @click="doUpload">
+              Загрузить {{ selectedFiles.length }} {{ plural(selectedFiles.length, ['файл', 'файла', 'файлов']) }}
+            </B24Button>
+          </div>
 
           <div v-if="uploading || polling" class="mt-5">
             <B24Progress
@@ -104,9 +112,9 @@
                 color="air-primary"
                 size="xs"
               />
-              <!-- Живой таймер обработки (#замеры, только при SHOW_TIMINGS) -->
+              <!-- Живой таймер обработки (#203): всегда вкл, успокаивает на медленных файлах. -->
               <span
-                v-if="job?.showTimings && file.startedAt"
+                v-if="elapsedMs(file) > 0"
                 class="shrink-0 text-xs tabular-nums text-base-500"
                 title="Время обработки"
               >
@@ -129,6 +137,15 @@
               :title="file.problem"
             >
               {{ file.problem }}
+            </p>
+
+            <!-- Код исхода (#221): компактный машинный код для разбора (рядом с причиной/ошибкой). -->
+            <p
+              v-if="(file.status === 'done' || file.status === 'error') && outcomeCodeOf(file)"
+              class="mt-1 font-mono text-[11px] text-base-400"
+              title="Код исхода (для разбора)"
+            >
+              код: {{ outcomeCodeOf(file) }}
             </p>
 
             <!-- Созданная сделка: внутри B24 открываем слайдером, иначе ссылкой -->
@@ -187,26 +204,30 @@
                     {{ opt.label }}
                   </B24Button>
                 </div>
-                <B24Textarea
-                  v-model="fbFor(file.name).comment"
-                  class="mt-2 w-full"
-                  :rows="2"
-                  :maxrows="6"
-                  :maxlength="5000"
-                  autoresize
-                  :disabled="fbFor(file.name).submitting"
-                  placeholder="Комментарий (необязательно): что не так / что понравилось, можно позицию."
-                />
-                <div class="mt-2 flex justify-end">
-                  <B24Button
-                    color="air-primary"
-                    size="xs"
-                    :disabled="!fbFor(file.name).kind || fbFor(file.name).submitting"
-                    @click="submitFileFeedback(file)"
-                  >
-                    {{ fbFor(file.name).submitting ? 'Отправляем…' : 'Отправить отзыв' }}
-                  </B24Button>
-                </div>
+                <!-- Поле комментария и кнопка раскрываются ТОЛЬКО после выбора оценки (#221):
+                     карточка по умолчанию компактна (для пачки из 10 файлов — 10 свёрнутых форм). -->
+                <template v-if="fbFor(file.name).kind">
+                  <B24Textarea
+                    v-model="fbFor(file.name).comment"
+                    class="mt-2 w-full"
+                    :rows="2"
+                    :maxrows="6"
+                    :maxlength="5000"
+                    autoresize
+                    :disabled="fbFor(file.name).submitting"
+                    placeholder="Комментарий (необязательно): что не так / что понравилось, можно позицию."
+                  />
+                  <div class="mt-2 flex justify-end">
+                    <B24Button
+                      color="air-primary"
+                      size="xs"
+                      :disabled="fbFor(file.name).submitting"
+                      @click="submitFileFeedback(file)"
+                    >
+                      {{ fbFor(file.name).submitting ? 'Отправляем…' : 'Отправить отзыв' }}
+                    </B24Button>
+                  </div>
+                </template>
               </template>
               <p v-else class="text-xs text-base-600">
                 Спасибо! Отзыв по файлу отправлен.
@@ -240,8 +261,8 @@
 </template>
 
 <script setup lang="ts">
-import { fileBadge, jobBadge, fileSucceeded } from '~/utils/result-badges'
-import { mmss, timingLine } from '~/utils/format-duration'
+import { fileBadge, jobBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
+import { mmss, timingLine, plural } from '~/utils/format-duration'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
 definePageMeta({ layout: 'default' })
@@ -258,12 +279,15 @@ interface FileEntry {
   // issue #192: human-readable reason set by the backend when a 'done' file produced NO deal
   // (business error / unrecognised document) — surfaced so it isn't a bare green "Готово".
   problem?: string | null
-  // Тайминги (#замеры): приходят только при SHOW_TIMINGS на бэкенде. startedAt — для живого mm:ss,
-  // agentMs/durationMs — для замеров в логе по готовности.
+  // Тайминги (#замеры): приходят только при SHOW_TIMINGS на бэкенде. startedAt — предпочтительный
+  // (точный) источник для живого mm:ss; без флага таймер идёт от клиентского procSince (#203).
+  // agentMs/durationMs — для детальных замеров в логе по готовности (остаются за флагом).
   startedAt?: number | null
   agentMs?: number | null
+  agentTurns?: number | null
   durationMs?: number | null
   extractMethod?: string | null
+  extractMs?: number | null
   speed?: 'fast' | 'normal' | 'slow' | null
 }
 
@@ -284,14 +308,16 @@ const job = ref<JobStatus | null>(null)
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
-// Живой таймер обработки (#замеры, только при SHOW_TIMINGS): тикаем `nowTs` раз в секунду, пока есть
-// файлы в обработке, чтобы карточка показывала mm:ss. useIntervalFn сам останавливается при unmount.
+// Живой таймер обработки (#203): ВСЕГДА вкл (не за SHOW_TIMINGS). «Обрабатывается N сек» —
+// безобидная подсказка-успокоитель именно для медленных файлов, без ops-чувствительных деталей
+// (детальный timingLine агент/извлечение остаётся за флагом). Тикаем `nowTs` раз в секунду, пока
+// есть файлы в обработке. useIntervalFn сам останавливается при unmount.
 const nowTs = ref(Date.now())
 const clock = useIntervalFn(() => {
   nowTs.value = Date.now()
 }, 1000, { immediate: false })
 const liveTiming = computed(() =>
-  Boolean(job.value?.showTimings) && (job.value?.files.some(f => f.status === 'processing' || f.status === 'pending') ?? false))
+  job.value?.files.some(f => f.status === 'processing' || f.status === 'pending') ?? false)
 watch(liveTiming, (on) => {
   if (on) {
     nowTs.value = Date.now()
@@ -300,8 +326,13 @@ watch(liveTiming, (on) => {
     clock.pause()
   }
 }, { immediate: true })
+// Бэкенд шлёт `startedAt` только при SHOW_TIMINGS, поэтому ведём и КЛИЕНТСКИЙ «processing since»
+// (момент, когда впервые увидели файл не завершённым) — чтобы таймер шёл и без флага. Заполняется в
+// watch ниже; сбрасывается в resetState. Предпочитаем серверный startedAt (точнее), иначе — клиентский.
+const procSince = ref<Record<string, number>>({})
 function elapsedMs(file: FileEntry): number {
-  return file.startedAt ? Math.max(0, nowTs.value - file.startedAt) : 0
+  const start = file.startedAt ?? procSince.value[file.name]
+  return start ? Math.max(0, nowTs.value - start) : 0
 }
 let pollController: AbortController | null = null
 let pollErrors = 0
@@ -357,12 +388,9 @@ async function openDeal(deal: CreatedDeal): Promise<void> {
 // In dev the nitro devProxy injects the Bearer server-side.
 const { apiFetch } = useApi()
 
-// Автозагрузка сразу после выбора файлов — одно действие, без лишней кнопки.
-watch(selectedFiles, (files) => {
-  if (files?.length && !uploading.value && !polling.value) {
-    doUpload()
-  }
-})
+// #238: выбор файлов НЕ запускает загрузку сразу — сначала пользователь может убрать лишний файл
+// (крестик у файла в B24FileUpload, :file-delete) и только потом нажать «Загрузить» (см. шаблон).
+// Раньше здесь был watch(selectedFiles → doUpload), из-за которого окно для удаления было нулевым.
 
 // ── Загрузка ──────────────────────────────────────────────────────────────────
 
@@ -373,9 +401,16 @@ async function doUpload() {
   uploading.value = true
   uploadError.value = null
   job.value = null
+  // Сбросить транзитивное состояние прошлой партии: иначе при повторной загрузке БЕЗ «Загрузить ещё»
+  // у файла с тем же именем останется старый procSince (#203 — таймер показал бы чужое время) и отзыв.
+  procSince.value = {}
+  feedbackByFile.value = {}
 
   const form = new FormData()
   for (const f of files) form.append('files[]', f)
+  // #238: отдали файлы в загрузку — очищаем выбор. Локальная `files` держит ссылку для POST, а
+  // кнопка «Загрузить» больше не «всплывёт» после завершения задания (её v-if смотрит на selectedFiles).
+  selectedFiles.value = null
 
   try {
     const res = await apiFetch<{ jobId: string, files: Array<{ name: string, status: string }> }>(
@@ -497,6 +532,7 @@ function resetState() {
   selectedFiles.value = null
   // Сбросить отзывы по файлам, чтобы для нового задания форма была чистой.
   feedbackByFile.value = {}
+  procSince.value = {} // клиентские отметки времени обработки (#203)
 }
 
 // ── Обратная связь сотрудника (issue #182) ─────────────────────────────────────
@@ -520,8 +556,16 @@ const feedbackByFile = ref<Record<string, FbState>>({})
 function fbFor(name: string): FbState {
   return feedbackByFile.value[name] ?? (feedbackByFile.value[name] = { kind: null, comment: '', sent: false, submitting: false })
 }
-watch(() => (job.value?.files ?? []).map(f => f.name).join('\n'), () => {
-  for (const f of job.value?.files ?? []) fbFor(f.name)
+// Сигнатура включает status, чтобы реагировать и на смену статусов: пред-инициализируем отзыв по
+// файлу и фиксируем клиентский «processing since» при первом не-завершённом наблюдении (#203).
+watch(() => (job.value?.files ?? []).map(f => `${f.name}:${f.status}`).join('\n'), () => {
+  const now = Date.now()
+  for (const f of job.value?.files ?? []) {
+    fbFor(f.name)
+    if ((f.status === 'processing' || f.status === 'pending') && procSince.value[f.name] == null) {
+      procSince.value[f.name] = now
+    }
+  }
 }, { immediate: true })
 
 // Лог обработки агента по файлу (#218): что распознал / почему без сделки. Лежит в result.processingLog.
@@ -536,13 +580,17 @@ async function submitFileFeedback(file: FileEntry) {
   if (!s.kind || s.submitting || !job.value) return // комментарий НЕ обязателен (#218)
   s.submitting = true
   try {
-    await submitFeedbackApi(s.kind, s.comment.trim(), {
+    const res = await submitFeedbackApi(s.kind, s.comment.trim(), {
       jobId: job.value.jobId,
       fileName: file.name,
       dealId: dealOf(file)?.dealId
     })
     s.sent = true
-    toast.add({ title: 'Спасибо за отзыв!', color: 'air-primary-success', duration: 4000 })
+    // queued (#190): GitHub был недоступен, отзыв сохранён на сервере и будет отправлен позже —
+    // показываем это честно, но всё равно как успех (повторять не нужно).
+    toast.add(res?.queued
+      ? { title: 'Отзыв сохранён — отправим, как только GitHub станет доступен', color: 'air-primary-success', duration: 5000 }
+      : { title: 'Спасибо за отзыв!', color: 'air-primary-success', duration: 4000 })
   } catch (e: unknown) {
     toast.add({ title: 'Не удалось отправить отзыв', description: extractErrorMessage(e), color: 'air-primary-alert', duration: 6000 })
   } finally {

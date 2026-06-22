@@ -30,6 +30,12 @@ describe('b24_pst_crm_find_contract', () => {
     expect(payload).toMatchObject({ id: 77, number: '2025/12' })
   })
 
+  it('пробрасывает признак мультиматча из контроллера (#195)', async () => {
+    fake.v2Call.mockResolvedValue(fakeOk({ id: 77, number: '2025/12', date: '01.03.2025', multi: true }))
+    const result = await (tool as any).handler({ supplierId: '42' })
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ id: 77, multi: true })
+  })
+
   it('passes number and date when provided', async () => {
     fake.v2Call.mockResolvedValue(fakeOk({ id: 5 }))
 

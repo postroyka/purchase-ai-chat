@@ -25,6 +25,17 @@
         title="Готово"
         description="Приложение установлено. Открываем…"
       />
+      <!-- Не-фатальная подсказка: установка прошла, но бот не зарегистрировался (#217). -->
+      <p v-if="state === 'done' && botWarning" class="mt-3 text-xs text-amber-600">
+        {{ botWarning }}
+      </p>
+      <!-- Итог автодонастройки полей сделки (#176): подтверждение успеха или причина сбоя. -->
+      <p v-if="state === 'done' && schemaStatus === 'ok'" class="mt-3 text-xs text-emerald-600">
+        Поля сделки настроены ✓
+      </p>
+      <p v-if="state === 'done' && (schemaStatus === 'failed' || schemaStatus === 'partial')" class="mt-3 text-xs text-amber-600">
+        {{ schemaMsg }}
+      </p>
 
       <!-- Приложение открыли не в режиме установки (уже установлено) — installFinish не зовём. -->
       <B24Alert
@@ -67,5 +78,5 @@
  */
 definePageMeta({ layout: false })
 
-const { state, errorMsg } = useInstall()
+const { state, errorMsg, botWarning, schemaStatus, schemaMsg } = useInstall()
 </script>

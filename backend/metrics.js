@@ -20,6 +20,7 @@ import Redis from 'ioredis';
  *     durationMs?: number,
  *     positions?: number,
  *     positionsNoArticle?: number,
+ *     speed?: 'fast'|'normal'|'slow'|null,
  *     agent?: { extractMethod?: string|null, costUsd?: number|null, agentDurationMs?: number }|null,
  *   }): Promise<void>,
  *   recordWarnings(codes: string[]): Promise<void>,
@@ -46,9 +47,10 @@ import Redis from 'ioredis';
  *   outcomes: Array<{ name: string, count: number }>,
  *   formats: Array<{ name: string, count: number }>,
  *   extract: Array<{ name: string, count: number }>,
+ *   speed: Array<{ name: string, count: number }>,
  *   warnings: Array<{ name: string, count: number }>,
  *   feedback: { user: Array<{ name: string, count: number }>, agent: Array<{ name: string, count: number }> },
- *   matching: { suppliers: Array<{ name: string, count: number }> },
+ *   matching: { suppliers: Array<{ name: string, count: number }>, multi: Array<{ name: string, count: number }>, articles: Array<{ name: string, count: number }> },
  *   daily: Array<{ date: string, files: number }>,
  * }} MetricsSnapshot
  */
@@ -59,6 +61,11 @@ const K = {
   formats: 'metrics:formats',
   extract: 'metrics:extract',
   daily: 'metrics:daily',
+  // issue #207: распределение «быстро/норма/медленно» по total-времени файла (бакеты классифицирует
+  // backend/index.js classifySpeed по порогам TIMING_FAST_MS/TIMING_SLOW_MS). NO-TTL total — агрегат,
+  // не сырые тайминги (заказчик одобрил показ распределения в метриках). Считается только по УСПЕШНО
+  // разобранным файлам (status done); ошибки/таймауты сюда не входят (их длительность не про скорость).
+  speed: 'metrics:speed',
   // issue #182, channels «агент» + «сотрудник»: non-terminal agent quality signals (by code) and
   // feedback volume split by source (user 👍/👎/💡 vs agent developer-feedback), both NO-TTL totals.
   warnings: 'metrics:warnings',
@@ -67,6 +74,10 @@ const K = {
   // issue #182, channel «MCP»: where matching fails. Counts supplier_not_found by УНП so the
   // dashboard can rank the suppliers that most often aren't matched (the «which suppliers fail» ask).
   matchingSuppliers: 'metrics:matching:suppliers',
+  // issue #195 (телеметрия матчинга v2): мультиматч по шагам (инструмент молча взял min(id) при >1
+  // совпадении) + несопоставленные артикулы (vendorCode не найден в каталоге) — оба derived из result.
+  matchingMulti: 'metrics:matching:multi',
+  matchingArticles: 'metrics:matching:articles',
 };
 
 // Cap on distinct supplier keys tracked (cardinality DoS guard — `unp` is agent-derived from an
@@ -130,12 +141,33 @@ function feedbackKindLabel(s) {
   return KNOWN_FEEDBACK_KINDS.has(v) ? v : 'other';
 }
 
+// Бакеты скорости разбора файла (issue #207). Классификацию делает classifySpeed в backend/index.js;
+// сюда приходит готовый бакет — пишем только валидный, иначе не считаем (null/мусор → пропуск).
+const KNOWN_SPEED_BUCKETS = new Set(['fast', 'normal', 'slow']);
+
 // A supplier УНП used as a hash field (issue #182 MCP channel). Belarus УНП is numeric (~9 digits);
 // keep only digits and bound the length, so a prompt-injected `unp` (arbitrary document text) can't
 // create giant/odd fields or pollute the supplier ranking. Returns null for junk (→ not recorded).
 function supplierKeyLabel(s) {
   const v = String(s ?? '').replace(/\D/g, '');
   return v.length >= 4 && v.length <= 16 ? v : null;
+}
+
+// issue #195: шаги матчинга, где возможен мультиматч. Пин к известному набору (значение из result
+// агента — недоверенное), иначе → null (не считаем).
+const KNOWN_MATCH_STEPS = new Set(['supplier', 'contract', 'product']);
+function matchStepLabel(s) {
+  const v = String(s ?? '').trim().toLowerCase();
+  return KNOWN_MATCH_STEPS.has(v) ? v : null;
+}
+
+// issue #195: артикул (vendorCode) как hash-поле. Артикул — из недоверенного документа, поэтому
+// чистим (буквы/цифры/.-_/ , без пробелов), приводим к верхнему регистру и ограничиваем длину, чтобы
+// не плодить гигантские/мусорные поля. Возвращает null для пустого/мусорного. Cardinality-кап ниже.
+const MATCHING_ARTICLE_CAP = 300;
+function articleKeyLabel(s) {
+  const v = String(s ?? '').trim().toUpperCase().replace(/[^A-Z0-9._/-]/g, '');
+  return v.length >= 1 && v.length <= 40 ? v : null;
 }
 
 function warn(ctx, e) {
@@ -172,7 +204,7 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
     } catch (e) { warn('recordUpload', e); }
   }
 
-  async function recordFile({ format, status, outcome, durationMs = 0, agent = null, positions = 0, positionsNoArticle = 0 } = {}) {
+  async function recordFile({ format, status, outcome, durationMs = 0, agent = null, positions = 0, positionsNoArticle = 0, speed = null } = {}) {
     try {
       const out = outcomeLabel(outcome);
       const ops = [
@@ -182,6 +214,8 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
         ['hincrby', K.outcomes, out, 1],
         ['hincrby', K.daily, today(), 1],
       ];
+      // Распределение скорости разбора (issue #207): считаем только валидный бакет (fast/normal/slow).
+      if (KNOWN_SPEED_BUCKETS.has(speed)) ops.push(['hincrby', K.speed, speed, 1]);
       if (out === 'ok') ops.push(['hincrby', K.totals, 'ok', 1]);
       // Line-item counts drive the savings estimate (#75): positions recognised, and how
       // many lacked a supplier article (vendorCode) → not auto-matchable, manual fallback.
@@ -193,6 +227,10 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
       if (agent) {
         ops.push(['hincrby', K.totals, 'agent_runs', 1]);
         ops.push(['hincrby', K.totals, 'agent_ms', Math.max(0, Math.round(Number(agent.agentDurationMs) || 0))]);
+        // Число ходов агента (#222 «думает vs ищет»): сумма по прогонам → среднее в snapshot.
+        if (Number.isFinite(agent.numTurns)) {
+          ops.push(['hincrby', K.totals, 'agent_turns', Math.max(0, Math.round(Number(agent.numTurns)))]);
+        }
         if (typeof agent.extractMethod === 'string') {
           ops.push(['hincrby', K.extract, label(agent.extractMethod, 'unknown'), 1]);
         }
@@ -224,33 +262,61 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
     } catch (e) { warn('recordFeedback', e); }
   }
 
-  // MCP matching telemetry (issue #182, channel «MCP»). Derived from the agent result: when the
-  // supplier wasn't matched in Bitrix24, record WHICH supplier (by УНП) so /metrics can rank the
-  // suppliers that fail most. Other matching failures (contract, articles, РФ/РБ) are already
-  // covered by `outcomes`/`warnings`. Best-effort — never fails a job.
+  // MCP matching telemetry (issue #182 «MCP» + #195 v2). Derived from the agent result. Best-effort.
+  // v1: supplier no-match by УНП — rank the suppliers that fail to match most.
+  // v2 (#195): from `result.matching` — мультиматчи по шагам (инструмент молча взял min(id) при >1
+  //   совпадении) и несопоставленные артикулы (vendorCode не найден в каталоге), оба с cardinality-капом.
   async function recordMatching({ result } = {}) {
     try {
       const r = (result && typeof result === 'object') ? result : null;
-      if (!r || r.error !== 'supplier_not_found') return;
-      const unp = supplierKeyLabel(r.unp);
-      if (!unp) return;
-      // Bound distinct keys: a NEW УНП is only added while under the cap; known УНП always increments.
-      // The read-then-write isn't atomic (TOCTOU): concurrent supplier_not_found's can push a few keys
-      // past the cap — benign for a cardinality guard (bounded by job concurrency, never unbounded).
-      const cur = await b.hgetall(K.matchingSuppliers);
-      const field = (!(unp in (cur || {})) && Object.keys(cur || {}).length >= MATCHING_SUPPLIER_CAP)
-        ? '__other__'
-        : unp;
-      await b.batch([['hincrby', K.matchingSuppliers, field, 1]]);
+      if (!r) return;
+
+      // v1 — поставщик не найден по УНП. Cardinality-кап: НОВЫЙ УНП добавляем только под капом.
+      if (r.error === 'supplier_not_found') {
+        const unp = supplierKeyLabel(r.unp);
+        if (unp) {
+          const cur = await b.hgetall(K.matchingSuppliers);
+          const field = (!(unp in (cur || {})) && Object.keys(cur || {}).length >= MATCHING_SUPPLIER_CAP)
+            ? '__other__' : unp;
+          await b.batch([['hincrby', K.matchingSuppliers, field, 1]]);
+        }
+      }
+
+      // v2 (#195) — структурная телеметрия матчинга из result.matching.
+      const m = (r.matching && typeof r.matching === 'object') ? r.matching : null;
+      if (m) {
+        // Мультиматчи по шагам (supplier/contract/product). Пин к известному набору + ДЕДУП в рамках
+        // файла (find_product зовётся по позиции, шаг может прийти несколько раз): считаем «сколько
+        // ДОКУМЕНТОВ имели мультиматч на шаге», а не сырые срабатывания — иначе счётчик неинтерпретируем.
+        const steps = [...new Set((Array.isArray(m.multiMatches) ? m.multiMatches : [])
+          .map(matchStepLabel).filter(Boolean))];
+        if (steps.length) await b.batch(steps.map((s) => ['hincrby', K.matchingMulti, s, 1]));
+
+        // Несопоставленные артикулы (vendorCode не найден). Уникализируем в рамках файла, кап на новые.
+        const arts = [...new Set((Array.isArray(m.unmatchedArticles) ? m.unmatchedArticles : [])
+          .map(articleKeyLabel).filter(Boolean))].slice(0, 50);
+        if (arts.length) {
+          const known = (await b.hgetall(K.matchingArticles)) || {};
+          let n = Object.keys(known).length;
+          const ops = [];
+          for (const a of arts) {
+            const isKnown = a in known;
+            if (!isKnown && n >= MATCHING_ARTICLE_CAP) { ops.push(['hincrby', K.matchingArticles, '__other__', 1]); }
+            else { ops.push(['hincrby', K.matchingArticles, a, 1]); if (!isKnown) n++; }
+          }
+          await b.batch(ops);
+        }
+      }
     } catch (e) { warn('recordMatching', e); }
   }
 
   async function snapshot() {
-    const [totals, outcomes, formats, extract, daily, warnings, feedbackUser, feedbackAgent, matchingSuppliers] = await Promise.all([
+    const [totals, outcomes, formats, extract, daily, warnings, feedbackUser, feedbackAgent, matchingSuppliers, speed, matchingMulti, matchingArticles] = await Promise.all([
       b.hgetall(K.totals), b.hgetall(K.outcomes), b.hgetall(K.formats),
       b.hgetall(K.extract), b.hgetall(K.daily),
       b.hgetall(K.warnings), b.hgetall(K.feedbackUser), b.hgetall(K.feedbackAgent),
-      b.hgetall(K.matchingSuppliers),
+      b.hgetall(K.matchingSuppliers), b.hgetall(K.speed),
+      b.hgetall(K.matchingMulti), b.hgetall(K.matchingArticles),
     ]);
     const t = numify(totals);
     const files = t.files || 0;
@@ -311,14 +377,23 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
         avgCostUsd: costRuns ? round4((t.cost_usd || 0) / costRuns) : 0,
         agentRuns,
         avgAgentMs: agentRuns ? Math.round((t.agent_ms || 0) / agentRuns) : 0,
+        // Среднее число ходов агента (#222): много ходов = поиск/итерации, мало = «думает».
+        avgAgentTurns: agentRuns ? round1((t.agent_turns || 0) / agentRuns) : 0,
         avgFileMs: processed ? Math.round((t.file_ms || 0) / processed) : 0,
       },
       outcomes: toSortedArray(outcomes),
       formats: toSortedArray(formats),
       extract: toSortedArray(extract),
+      // issue #207: распределение скорости разбора (fast/normal/slow) — агрегат для дашборда.
+      speed: toSortedArray(speed),
       warnings: toSortedArray(warnings),
       feedback: { user: toSortedArray(feedbackUser), agent: toSortedArray(feedbackAgent) },
-      matching: { suppliers: toSortedArray(matchingSuppliers).slice(0, 15) },
+      matching: {
+        suppliers: toSortedArray(matchingSuppliers).slice(0, 15),
+        // issue #195: мультиматчи по шагам + топ несопоставленных артикулов.
+        multi: toSortedArray(matchingMulti),
+        articles: toSortedArray(matchingArticles).slice(0, 15),
+      },
       daily: Object.entries(numify(daily))
         .map(([date, n]) => ({ date, files: n }))
         .sort((a, b2) => (a.date < b2.date ? -1 : 1)),

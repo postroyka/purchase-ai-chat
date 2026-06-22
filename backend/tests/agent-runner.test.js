@@ -553,6 +553,29 @@ describe('runAgent — transient retry (#104)', () => {
     expect(onMeta.mock.calls[0][0]).toMatchObject({ extractMethod: null });
   });
 
+  it('onMeta получает extractMs: число при успешном извлечении, null при сбое (#203.2)', async () => {
+    const onMetaOk = vi.fn();
+    await runAgent('/f.pdf', '20', {
+      ...RETRY_CONFIG, onMeta: onMetaOk,
+      spawnFn: makeSequencedSpawn([{ stdout: wrapResult(VALID_DEAL_RESULT) }]),
+      extractFn: async () => ({ text: 'СЧЁТ', method: 'ocr' }),
+    });
+    const metaOk = onMetaOk.mock.calls[0][0];
+    expect(typeof metaOk.extractMs).toBe('number');
+    expect(metaOk.extractMs).toBeGreaterThanOrEqual(0);
+    expect(metaOk.extractMethod).toBe('ocr');
+
+    const onMetaFail = vi.fn();
+    await runAgent('/f.pdf', '20', {
+      ...RETRY_CONFIG, onMeta: onMetaFail,
+      spawnFn: makeSequencedSpawn([{ stdout: wrapResult(VALID_DEAL_RESULT) }]),
+      extractFn: async () => { throw new Error('boom'); },
+    });
+    const metaFail = onMetaFail.mock.calls[0][0];
+    expect(metaFail.extractMs).toBeNull(); // извлечение упало → время не зафиксировано
+    expect(metaFail.extractMethod).toBeNull();
+  });
+
   it('clamps backoff to retryMaxMs and applies 50–100% jitter', async () => {
     const sleepFn = vi.fn(async () => {});
     const spawnFn = makeSequencedSpawn([

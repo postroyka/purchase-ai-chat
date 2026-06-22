@@ -33,16 +33,20 @@ export interface MetricsSnapshot {
     avgCostUsd: number
     agentRuns: number
     avgAgentMs: number
+    avgAgentTurns: number
     avgFileMs: number
   }
   outcomes: MetricNamedCount[]
   formats: MetricNamedCount[]
   extract: MetricNamedCount[]
+  // issue #207: распределение скорости разбора файла (fast/normal/slow) — агрегат, не сырые тайминги.
+  speed: MetricNamedCount[]
   // issue #182: non-terminal agent quality signals (by code) + feedback volume by source/kind.
   warnings: MetricNamedCount[]
   feedback: { user: MetricNamedCount[], agent: MetricNamedCount[] }
   // issue #182 channel «MCP»: where matching fails — suppliers (by УНП) most often not matched.
-  matching: { suppliers: MetricNamedCount[] }
+  // issue #195 v2: мультиматчи по шагам (supplier/contract/product) + топ несопоставленных артикулов.
+  matching: { suppliers: MetricNamedCount[], multi: MetricNamedCount[], articles: MetricNamedCount[] }
   daily: { date: string, files: number }[]
 }
 

@@ -35,9 +35,9 @@ describe('metrics (in-memory)', () => {
   it('computes derived totals over a mixed batch', async () => {
     const m = mem();
     await m.recordUpload({ fileCount: 4 });
-    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 1000, agent: { extractMethod: 'pdftotext', costUsd: 1, agentDurationMs: 1000 } });
-    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'tool_unavailable', durationMs: 1000, agent: { extractMethod: 'pdftotext', costUsd: 1, agentDurationMs: 3000 } });
-    await m.recordFile({ format: 'jpg', status: 'done', outcome: 'ok', durationMs: 2000, agent: { extractMethod: 'ocr', costUsd: null, agentDurationMs: 2000 } });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 1000, agent: { extractMethod: 'pdftotext', costUsd: 1, agentDurationMs: 1000, numTurns: 6 } });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'tool_unavailable', durationMs: 1000, agent: { extractMethod: 'pdftotext', costUsd: 1, agentDurationMs: 3000, numTurns: 12 } });
+    await m.recordFile({ format: 'jpg', status: 'done', outcome: 'ok', durationMs: 2000, agent: { extractMethod: 'ocr', costUsd: null, agentDurationMs: 2000, numTurns: 3 } });
     await m.recordFile({ format: 'xls', status: 'error', outcome: 'timeout', durationMs: 5000, agent: null });
 
     const s = await m.snapshot();
@@ -53,6 +53,7 @@ describe('metrics (in-memory)', () => {
     // agent_runs counts every run with agent meta (the error file had agent=null)
     expect(s.totals.agentRuns).toBe(3);
     expect(s.totals.avgAgentMs).toBe(2000);            // (1000+3000+2000)/3
+    expect(s.totals.avgAgentTurns).toBe(7);            // (6+12+3)/3 — среднее ходов (#222)
     expect(s.totals.avgFileMs).toBe(2250);             // (1000+1000+2000+5000)/4
   });
 
@@ -95,6 +96,22 @@ describe('metrics (in-memory)', () => {
     expect(s.outcomes.find((o) => o.name === 'totally_made_up_code')).toBeFalsy();   // never stored verbatim
   });
 
+  it('issue #207: распределение скорости — считает валидные бакеты, мусор/null пропускает', async () => {
+    const m = mem();
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 10, speed: 'fast' });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 20, speed: 'fast' });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 60000, speed: 'normal' });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 99000, speed: 'slow' });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 0, speed: null });        // не считаем
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 0, speed: 'turbo' });      // мусор → не считаем
+    const s = await m.snapshot();
+    expect(s.speed).toContainEqual({ name: 'fast', count: 2 });
+    expect(s.speed).toContainEqual({ name: 'normal', count: 1 });
+    expect(s.speed).toContainEqual({ name: 'slow', count: 1 });
+    expect(s.speed.find((x) => x.name === 'turbo')).toBeFalsy();
+    expect(s.speed.reduce((n, x) => n + x.count, 0)).toBe(4); // null/мусор не попали
+  });
+
   it('is best-effort: never throws on missing/garbage input', async () => {
     const m = mem();
     await expect(m.recordUpload({})).resolves.toBeUndefined();
@@ -110,7 +127,7 @@ describe('metrics (in-memory)', () => {
 
   it('snapshot of an empty store is well-formed (no NaN)', async () => {
     const s = await mem().snapshot();
-    expect(s.totals).toMatchObject({ uploads: 0, files: 0, ok: 0, successRatePct: 0, costUsd: 0, avgAgentMs: 0, avgFileMs: 0 });
+    expect(s.totals).toMatchObject({ uploads: 0, files: 0, ok: 0, successRatePct: 0, costUsd: 0, avgAgentMs: 0, avgAgentTurns: 0, avgFileMs: 0 });
     expect(s.outcomes).toEqual([]);
     expect(s.formats).toEqual([]);
     expect(s.daily).toEqual([]);
@@ -197,11 +214,60 @@ describe('metrics — agent signals & feedback (#182)', () => {
     expect(s.matching.suppliers.find((x) => x.name === '100000')).toEqual({ name: '100000', count: 2 });
   });
 
+  it('issue #195: телеметрия v2 — мультиматчи по шагам + несопоставленные артикулы (санитизация/дедуп)', async () => {
+    const m = mem();
+    // мультиматч: product дважды, supplier один раз; bogus_step — не из набора → отброшен
+    await m.recordMatching({ result: { matching: { multiMatches: ['supplier', 'product'], unmatchedArticles: ['ART-1', 'art-1', ''] } } });
+    await m.recordMatching({ result: { matching: { multiMatches: ['product', 'bogus_step'], unmatchedArticles: ['ART-2'] } } });
+    const s = await m.snapshot();
+    expect(s.matching.multi).toContainEqual({ name: 'product', count: 2 });
+    expect(s.matching.multi).toContainEqual({ name: 'supplier', count: 1 });
+    expect(s.matching.multi.find((x) => x.name === 'bogus_step')).toBeFalsy(); // не из набора шагов
+    // 'ART-1' и 'art-1' → один 'ART-1' (верхний регистр + дедуп в рамках файла); '' отброшен
+    expect(s.matching.articles).toContainEqual({ name: 'ART-1', count: 1 });
+    expect(s.matching.articles).toContainEqual({ name: 'ART-2', count: 1 });
+  });
+
+  it('issue #195: матчинг-телеметрия v2 сосуществует с v1 (supplier_not_found)', async () => {
+    const m = mem();
+    // результат с supplier_not_found И структурой matching — учитываются обе ветки
+    await m.recordMatching({ result: { error: 'supplier_not_found', unp: '100345678', matching: { multiMatches: ['contract'], unmatchedArticles: ['Z-9'] } } });
+    const s = await m.snapshot();
+    expect(s.matching.suppliers).toContainEqual({ name: '100345678', count: 1 });
+    expect(s.matching.multi).toContainEqual({ name: 'contract', count: 1 });
+    expect(s.matching.articles).toContainEqual({ name: 'Z-9', count: 1 });
+  });
+
+  it('issue #195: кап различных артикулов (>300 → __other__), известный — инкремент', async () => {
+    const m = mem();
+    let k = 0;
+    for (let call = 0; call < 6; call++) { // 6×50 = 300 различных артикулов (лимит 50 на вызов)
+      const arts = [];
+      for (let i = 0; i < 50; i++) arts.push('ART-' + (k++));
+      await m.recordMatching({ result: { matching: { unmatchedArticles: arts } } });
+    }
+    // 5 НОВЫХ сверх капа → все в __other__; ART-0 известен → инкремент (счётчик до 2)
+    await m.recordMatching({ result: { matching: { unmatchedArticles: ['NEW-1', 'NEW-2', 'NEW-3', 'NEW-4', 'NEW-5', 'ART-0'] } } });
+    const s = await m.snapshot();
+    expect(s.matching.articles.find((x) => x.name === '__other__')).toEqual({ name: '__other__', count: 5 });
+    expect(s.matching.articles.find((x) => x.name === 'ART-0')).toEqual({ name: 'ART-0', count: 2 });
+    expect(s.matching.articles.find((x) => x.name === 'NEW-1')).toBeFalsy(); // новые сверх капа не заводятся
+  });
+
+  it('issue #195: мультиматчи дедупятся в рамках файла (product зовётся по позиции)', async () => {
+    const m = mem();
+    // product дважды в одном результате (две позиции мультиматчнулись) → шаг считается ОДИН раз
+    await m.recordMatching({ result: { matching: { multiMatches: ['product', 'product', 'supplier'] } } });
+    const s = await m.snapshot();
+    expect(s.matching.multi).toContainEqual({ name: 'product', count: 1 });   // не 2 — дедуп по файлу
+    expect(s.matching.multi).toContainEqual({ name: 'supplier', count: 1 });
+  });
+
   it('empty snapshot exposes well-formed warnings + feedback + matching', async () => {
     const s = await mem().snapshot();
     expect(s.warnings).toEqual([]);
     expect(s.feedback).toEqual({ user: [], agent: [] });
-    expect(s.matching).toEqual({ suppliers: [] });
+    expect(s.matching).toEqual({ suppliers: [], multi: [], articles: [] });
   });
 });
 

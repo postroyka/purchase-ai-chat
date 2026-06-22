@@ -85,6 +85,29 @@ final class ProcureSupplierTest extends TestCase
 		$this->assertSame(['id' => null], $c->findByUnpAction('123456789'));
 	}
 
+	public function testSingleMatchHasNoMultiFlag(): void
+	{
+		// Одна компания с УНП — берём её, без признака мультиматча (#195).
+		\CCrmCompany::$resultQueue[] = [['ID' => 42, 'TITLE' => 'ООО Ромашка']];
+		$c = new ProcureSupplier();
+		$res = $c->findByUnpAction('123456789');
+		$this->assertSame(42, $res['id']);
+		$this->assertArrayNotHasKey('multi', $res);
+	}
+
+	public function testMultiMatchSetsMultiFlagAndPicksMinId(): void
+	{
+		// Несколько компаний с одним УНП → берём min(id)=42 (первая по ID ASC) + multi:true (#195).
+		\CCrmCompany::$resultQueue[] = [
+			['ID' => 42, 'TITLE' => 'ООО Ромашка'],
+			['ID' => 77, 'TITLE' => 'ООО Ромашка-дубль'],
+		];
+		$c = new ProcureSupplier();
+		$res = $c->findByUnpAction('123456789');
+		$this->assertSame(42, $res['id']);
+		$this->assertTrue($res['multi']);
+	}
+
 	public function testModuleFailureReturnsNullAndForwardsErrors(): void
 	{
 		StubState::$modulesOk = false;

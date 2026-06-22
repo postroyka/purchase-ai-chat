@@ -7,6 +7,8 @@ interface ProductResult {
   id: number | null
   name?: string
   vendorCode?: string
+  // #195: true, если по артикулу совпало >1 товара (взят min id) — мультиматч.
+  multi?: boolean
 }
 
 /**

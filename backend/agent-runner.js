@@ -107,7 +107,7 @@ const AGENT_ENV_KEYS = [
  *   extractFn?: (filePath: string) => Promise<{ text: string, method: string }|null>,
  *   sleepFn?: (ms: number) => Promise<void>,
  *   randomFn?: () => number,
- *   onMeta?: (meta: { extractMethod: string|null, costUsd: number|null, agentDurationMs: number, numTurns: number|null }) => void,
+ *   onMeta?: (meta: { extractMethod: string|null, extractMs: number|null, costUsd: number|null, agentDurationMs: number, numTurns: number|null }) => void,
  * }} AgentConfig
  */
 export async function runAgent(filePath, responsibleUserId, config = {}) {
@@ -160,8 +160,11 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   // plain text regardless of the model's PDF/vision support. Non-fatal: on failure the
   // agent falls back to reading FILE_PATH itself.
   let extracted = null;
+  let extractMs = null; // точное время извлечения текста (#203.2) — мерим вокруг extractFn
   try {
+    const extractStart = Date.now();
     extracted = await extractFn(filePath);
+    extractMs = Date.now() - extractStart;
   } catch (e) {
     console.warn(`[agent-runner] document text extraction failed for ${filePath}: ${e.message}`);
   }
@@ -224,7 +227,7 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
         // Wrapped so a throwing/absent hook can never break the agent run.
         if (typeof config.onMeta === 'function') {
           try {
-            config.onMeta({ extractMethod: extracted?.method ?? null, ...meta });
+            config.onMeta({ extractMethod: extracted?.method ?? null, extractMs, ...meta });
           } catch { /* metrics must not affect the pipeline */ }
         }
         return result;

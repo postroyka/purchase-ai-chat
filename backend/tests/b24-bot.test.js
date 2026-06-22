@@ -7,6 +7,7 @@ import request from 'supertest';
 import { parseBotEvent, parseFeedbackParams, feedbackKeyboard, botResultText, handleBotEvent } from '../b24-bot.js';
 import { makeBotApi } from '../b24-bot-api.js';
 import { createApp } from '../index.js';
+import { createAppStore } from '../app-store.js';
 
 // Мок агент-спавна (как в metrics-routes.test): успешный прогон с заданным result.
 function makeAgentSpawn({ result = { status: 'stub' } } = {}) {
@@ -368,5 +369,106 @@ describe('makeBotApi.downloadAndSaveFiles', () => {
     const r = await api.downloadAndSaveFiles([{ id: '1', name: 'a.pdf' }], { botToken: 't', botId: '1' });
     expect(r.fileEntries).toEqual([]);
     expect(fs.existsSync(r.jobDir)).toBe(false);
+  });
+});
+
+// ── POST /b24/app/event — захват application_token (#217) ───────────────────────────────────────
+describe('POST /b24/app/event (захват токена + проверка через app.info)', () => {
+  const fakeMetrics = () => ({
+    recordUpload: vi.fn(async () => {}), recordFeedback: vi.fn(async () => {}), recordFile: vi.fn(async () => {}),
+    recordMatching: vi.fn(async () => {}), recordWarnings: vi.fn(async () => {}), snapshot: vi.fn(async () => ({})), ping: vi.fn(async () => {}),
+  });
+  // handleAppEvent выполняется АСИНХРОННО после 200 — ждём условие с таймаутом.
+  const until = async (fn, ms = 1000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 10)); }
+    return false;
+  };
+  function appWith(appInfo) {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-evt-'));
+    const appStore = createAppStore({ redisUrl: '' });
+    // portalDomains задаём напрямую; appInfo инжектируем (одна проба и для /session/b24, и для захвата).
+    const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics(), appStore, appInfo, portalDomains: ['p.bitrix24.by'] });
+    return { app, appStore };
+  }
+  const install = (over = {}) => ({
+    event: 'ONAPPINSTALL', 'auth[application_token]': 'APPTOK', 'auth[access_token]': 'ACC',
+    'auth[member_id]': 'm1', 'auth[domain]': 'p.bitrix24.by', ...over,
+  });
+
+  it('валидный install (app.info ок, домен в allowlist) → токен захвачен, событие бота с ним проходит', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app, appStore } = appWith(appInfo);
+    const res = await request(app).post('/b24/app/event').type('form').send(install());
+    expect(res.status).toBe(200);
+    expect(await until(() => appStore.isKnownToken('APPTOK'))).toBe(true);
+    expect(appInfo).toHaveBeenCalledWith('p.bitrix24.by', 'ACC');
+    // теперь /b24/bot/event с этим токеном валиден БЕЗ env-токена (B24_BOT_APPLICATION_TOKEN не задан)
+    const ev = await request(app).post('/b24/bot/event').type('form')
+      .send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': 'APPTOK', 'data[bot][id]': '1', 'data[bot][auth][access_token]': 'b' });
+    expect(ev.status).toBe(200);
+  });
+
+  it('app.info вернул false → токен НЕ захвачен (recordInstall не вызван); событие бота с ним → 403', async () => {
+    const appInfo = vi.fn(async () => false);
+    const { app, appStore } = appWith(appInfo);
+    const recordSpy = vi.spyOn(appStore, 'recordInstall');
+    await request(app).post('/b24/app/event').type('form').send(install());
+    // детерминированно: ждём вызова app.info (обработчик дошёл до проверки), затем флашим микротаски
+    expect(await until(() => appInfo.mock.calls.length > 0)).toBe(true);
+    await new Promise((r) => setImmediate(r));
+    expect(recordSpy).not.toHaveBeenCalled();
+    expect(await appStore.isKnownToken('APPTOK')).toBe(false);
+    const ev = await request(app).post('/b24/bot/event').type('form').send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': 'APPTOK' });
+    expect(ev.status).toBe(403);
+  });
+
+  it('домен НЕ в allowlist → app.info даже не вызывается, recordInstall не вызван (SSRF-гард)', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app, appStore } = appWith(appInfo);
+    const recordSpy = vi.spyOn(appStore, 'recordInstall');
+    await request(app).post('/b24/app/event').type('form').send(install({ 'auth[domain]': 'evil.example.com' }));
+    await new Promise((r) => setImmediate(r)); // отказ по allowlist синхронен — флаша достаточно
+    expect(appInfo).not.toHaveBeenCalled();
+    expect(recordSpy).not.toHaveBeenCalled();
+    expect(await appStore.isKnownToken('APPTOK')).toBe(false);
+  });
+
+  it('слишком длинный access_token → app.info не вызывается, не захвачен', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app, appStore } = appWith(appInfo);
+    await request(app).post('/b24/app/event').type('form').send(install({ 'auth[access_token]': 'x'.repeat(4097) }));
+    await new Promise((r) => setImmediate(r));
+    expect(appInfo).not.toHaveBeenCalled(); // length-guard до исходящего вызова
+    expect(await appStore.isKnownToken('APPTOK')).toBe(false);
+  });
+
+  it('ONAPPUPDATE так же захватывает/ротирует токен', async () => {
+    const { app, appStore } = appWith(vi.fn(async () => true));
+    await request(app).post('/b24/app/event').type('form').send(install({ event: 'ONAPPUPDATE', 'auth[application_token]': 'UPDTOK' }));
+    expect(await until(() => appStore.isKnownToken('UPDTOK'))).toBe(true);
+  });
+
+  it('ONAPPUNINSTALL чистит захваченный токен', async () => {
+    const { app, appStore } = appWith(vi.fn(async () => true));
+    await request(app).post('/b24/app/event').type('form').send(install());
+    expect(await until(() => appStore.isKnownToken('APPTOK'))).toBe(true);
+    await request(app).post('/b24/app/event').type('form')
+      .send({ event: 'ONAPPUNINSTALL', 'auth[application_token]': 'APPTOK', 'auth[member_id]': 'm1' });
+    expect(await until(async () => !(await appStore.isKnownToken('APPTOK')))).toBe(true);
+  });
+
+  it('env-токен и стор сосуществуют: проходит и env-токен, и захваченный; пустой → 403', async () => {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-evt-'));
+    const appStore = createAppStore({ redisUrl: '' });
+    await appStore.recordInstall({ memberId: 'm9', applicationToken: 'CAPTURED' });
+    const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics(), appStore, b24BotApplicationToken: 'ENVTOK', portalDomains: ['p.bitrix24.by'] });
+    const join = (tok) => request(app).post('/b24/bot/event').type('form')
+      .send({ event: 'ONIMBOTV2JOINCHAT', 'auth[application_token]': tok, 'data[bot][id]': '1', 'data[bot][auth][access_token]': 'b' });
+    expect((await join('ENVTOK')).status).toBe(200);    // env-фолбэк не сломан стором
+    expect((await join('CAPTURED')).status).toBe(200);  // захваченный токен валиден
+    expect((await join('NOPE')).status).toBe(403);
+    expect((await join('')).status).toBe(403);          // пустой токен — 403 даже при непустом сторе
+    expect((await join('   ')).status).toBe(403);        // пробельный — тоже не «известный»
   });
 });
