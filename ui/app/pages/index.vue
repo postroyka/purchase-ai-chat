@@ -33,7 +33,7 @@
             layout="list"
             class="w-full min-h-[220px]"
             label="Перетащите файлы сюда"
-            description="или нажмите, чтобы выбрать · до 10 файлов, по 20 МБ"
+            description="или нажмите, чтобы выбрать · до 10 файлов, по 20 МБ · затем нажмите «Загрузить»"
             :file-delete="!uploading && !polling"
             :disabled="uploading || polling"
           />
@@ -408,6 +408,9 @@ async function doUpload() {
 
   const form = new FormData()
   for (const f of files) form.append('files[]', f)
+  // #238: отдали файлы в загрузку — очищаем выбор. Локальная `files` держит ссылку для POST, а
+  // кнопка «Загрузить» больше не «всплывёт» после завершения задания (её v-if смотрит на selectedFiles).
+  selectedFiles.value = null
 
   try {
     const res = await apiFetch<{ jobId: string, files: Array<{ name: string, status: string }> }>(
