@@ -30,17 +30,18 @@ describe('format-duration (#замеры)', () => {
   it('timingLine: всего / +скорость / +агент / +извлечение; null длительность → ""', () => {
     expect(timingLine({ durationMs: null })).toBe('')
     expect(timingLine({ durationMs: 48500, agentMs: 44200 })).toBe('⏱ всего 48.5 с · агент 44.2 с') // без speed
-    expect(timingLine({ durationMs: 80200, speed: 'normal' })).toBe('⏱ всего 1 мин 20 с — норма')
+    // #timing: «норма»/«медленно» НЕ выводятся текстом (только цвет в шаблоне) — метка лишь для «быстро».
+    expect(timingLine({ durationMs: 80200, speed: 'normal' })).toBe('⏱ всего 1 мин 20 с')
     expect(timingLine({ durationMs: 120000, speed: 'slow', agentMs: 110000, extractMethod: 'ocr' }))
-      .toBe('⏱ всего 2 мин — медленно · агент 1 мин 50 с · извлечение: ocr')
-    // агент отсутствует (null, напр. ошибка) — секцию агента не показываем
+      .toBe('⏱ всего 2 мин · агент 1 мин 50 с · извлечение: ocr')
+    // агент отсутствует (null, напр. ошибка) — секцию агента не показываем; «быстро» остаётся
     expect(timingLine({ durationMs: 5000, speed: 'fast', extractMethod: 'pdftotext' }))
       .toBe('⏱ всего 5.0 с — быстро · извлечение: pdftotext')
   })
 
   it('timingLine: извлечение показывает метод + точное время extractMs (#203.2)', () => {
     expect(timingLine({ durationMs: 120000, speed: 'slow', agentMs: 110000, extractMethod: 'ocr', extractMs: 2300 }))
-      .toBe('⏱ всего 2 мин — медленно · агент 1 мин 50 с · извлечение: ocr 2.3 с')
+      .toBe('⏱ всего 2 мин · агент 1 мин 50 с · извлечение: ocr 2.3 с')
     // extractMs без метода (метод null) — секцию извлечения не показываем вовсе
     expect(timingLine({ durationMs: 5000, extractMethod: null, extractMs: 900 }))
       .toBe('⏱ всего 5.0 с')

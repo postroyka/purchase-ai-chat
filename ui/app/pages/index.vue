@@ -73,10 +73,18 @@
 
         <!-- Статус обработки -->
         <section v-if="job" class="mt-6 space-y-3">
-          <div class="px-1">
+          <div class="flex items-center justify-between gap-3 px-1">
             <h2 class="text-sm font-medium text-base-700">
               Статус обработки
             </h2>
+            <!-- Общее время импорта (#timing): тикает с начала обработки, фиксируется по готовности. -->
+            <span
+              v-if="jobElapsedMs > 0"
+              class="shrink-0 text-xs tabular-nums text-base-500"
+              title="Общее время импорта"
+            >
+              ⏱ всего {{ mmss(jobElapsedMs) }}
+            </span>
           </div>
 
           <B24Card
@@ -344,6 +352,16 @@ function elapsedMs(file: FileEntry): number {
   const start = file.startedAt ?? procSince.value[file.name]
   return start ? Math.max(0, nowTs.value - start) : 0
 }
+// Общее время импорта (#timing): от старта обработки ПЕРВОГО файла до завершения задания. Файлы
+// обрабатываются последовательно, поэтому это реальная длительность партии. Тикает, пока идёт
+// обработка, и фиксируется по готовности (jobEndTs). Клиентская оценка — без зависимости от
+// SHOW_TIMINGS; заполняется в watch ниже, сбрасывается в resetState.
+const jobStartTs = ref<number | null>(null)
+const jobEndTs = ref<number | null>(null)
+const jobElapsedMs = computed(() => {
+  if (jobStartTs.value == null) return 0
+  return Math.max(0, (jobEndTs.value ?? nowTs.value) - jobStartTs.value)
+})
 let pollController: AbortController | null = null
 let pollErrors = 0
 let pollDelay = 2000
@@ -443,6 +461,8 @@ async function doUpload() {
   // Сбросить транзитивное состояние прошлой партии: иначе при повторной загрузке БЕЗ «Загрузить ещё»
   // у файла с тем же именем останется старый procSince (#203 — таймер показал бы чужое время) и отзыв.
   procSince.value = {}
+  jobStartTs.value = null
+  jobEndTs.value = null
   feedbackByFile.value = {}
 
   const form = new FormData()
@@ -578,6 +598,8 @@ function resetState() {
   // Сбросить отзывы по файлам, чтобы для нового задания форма была чистой.
   feedbackByFile.value = {}
   procSince.value = {} // клиентские отметки времени обработки (#203)
+  jobStartTs.value = null
+  jobEndTs.value = null
 }
 
 // ── Обратная связь сотрудника (issue #182) ─────────────────────────────────────
@@ -601,15 +623,24 @@ const feedbackByFile = ref<Record<string, FbState>>({})
 function fbFor(name: string): FbState {
   return feedbackByFile.value[name] ?? (feedbackByFile.value[name] = { kind: null, comment: '', sent: false, submitting: false })
 }
-// Сигнатура включает status, чтобы реагировать и на смену статусов: пред-инициализируем отзыв по
-// файлу и фиксируем клиентский «processing since» при первом не-завершённом наблюдении (#203).
-watch(() => (job.value?.files ?? []).map(f => `${f.name}:${f.status}`).join('\n'), () => {
+// Сигнатура включает status задания и файлов, чтобы реагировать на смену статусов: пред-инициализируем
+// отзыв по файлу и фиксируем клиентский «processing since» при старте ОБРАБОТКИ файла (#203/#timing).
+watch(() => [job.value?.status, ...(job.value?.files ?? []).map(f => `${f.name}:${f.status}`)].join('\n'), () => {
   const now = Date.now()
   for (const f of job.value?.files ?? []) {
     fbFor(f.name)
-    if ((f.status === 'processing' || f.status === 'pending') && procSince.value[f.name] == null) {
+    // Таймер стартует по факту ОБРАБОТКИ, а не ожидания: пока файл в очереди (`pending`) счётчик не
+    // тикает (#timing — раньше тикал у всех сразу). Бэкенд обрабатывает файлы последовательно и
+    // переводит в `processing` по очереди, поэтому время идёт только у реально обрабатываемого файла.
+    if (f.status === 'processing' && procSince.value[f.name] == null) {
       procSince.value[f.name] = now
+      if (jobStartTs.value == null) jobStartTs.value = now // первый реально начатый файл = старт партии
     }
+  }
+  // Завершение задания фиксирует общее время один раз (если обработка вообще стартовала).
+  const st = job.value?.status
+  if ((st === 'done' || st === 'error') && jobStartTs.value != null && jobEndTs.value == null) {
+    jobEndTs.value = now
   }
 }, { immediate: true })
 
