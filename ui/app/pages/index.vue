@@ -23,8 +23,9 @@
           </p>
         </header>
 
-        <!-- Зона загрузки -->
-        <B24Card class="mt-10 rounded-xl" :b24ui="{ body: 'p-6 sm:p-8' }">
+        <!-- Зона загрузки. Скрываем, пока есть задание (идёт обработка или показан результат) — виден
+             только «Статус обработки»; назад её возвращает «Загрузить ещё» (resetState → job=null). -->
+        <B24Card v-if="!job" class="mt-10 rounded-xl" :b24ui="{ body: 'p-6 sm:p-8' }">
           <B24FileUpload
             v-model="selectedFiles"
             :multiple="true"
@@ -72,15 +73,10 @@
 
         <!-- Статус обработки -->
         <section v-if="job" class="mt-6 space-y-3">
-          <div class="flex items-center justify-between px-1">
+          <div class="px-1">
             <h2 class="text-sm font-medium text-base-700">
               Статус обработки
             </h2>
-            <B24Badge
-              :label="jobBadge(job.status, job.files).label"
-              :color="jobBadge(job.status, job.files).color"
-              size="sm"
-            />
           </div>
 
           <B24Card
@@ -177,13 +173,27 @@
               {{ timingLine(file) }}
             </p>
 
-            <!-- Лог обработки по файлу (#218): что распознал агент / почему без сделки. -->
-            <details v-if="processingLogOf(file)" class="mt-2 text-xs">
-              <summary class="cursor-pointer select-none text-base-500">
-                Лог обработки
-              </summary>
-              <pre class="mt-1 whitespace-pre-wrap break-words text-base-600">{{ processingLogOf(file) }}</pre>
-            </details>
+            <!-- Лог обработки по файлу (#218). Если есть замечания (нет сделки / ошибка) — лог сразу
+                 развёрнут и подсвечен в B24Alert (#251), чтобы было видно, почему так. Чистый успех
+                 (создана сделка) — лог свёрнут под «details», как было: при штатном результате он не нужен. -->
+            <template v-if="processingLogOf(file)">
+              <B24Alert
+                v-if="!fileSucceeded(file)"
+                class="mt-2"
+                :color="file.status === 'error' ? 'air-primary-alert' : 'air-primary-warning'"
+                title="Лог обработки"
+              >
+                <template #description>
+                  <pre class="whitespace-pre-wrap break-words text-xs">{{ processingLogOf(file) }}</pre>
+                </template>
+              </B24Alert>
+              <details v-else class="mt-2 text-xs">
+                <summary class="cursor-pointer select-none text-base-500">
+                  Лог обработки
+                </summary>
+                <pre class="mt-1 whitespace-pre-wrap break-words text-base-600">{{ processingLogOf(file) }}</pre>
+              </details>
+            </template>
 
             <!-- Обратная связь по ЭТОМУ файлу (#182, #218): 👍/👎 + опц. комментарий → GitHub issue.
                  Под каждым файлом свой отзыв; комментарий НЕ обязателен. -->
@@ -236,7 +246,7 @@
           </B24Card>
 
           <div v-if="job.status === 'done' || job.status === 'error'" class="flex justify-center pt-2">
-            <B24Button color="air-secondary" size="sm" @click="resetState">
+            <B24Button color="air-primary" size="xl" @click="resetState">
               Загрузить ещё
             </B24Button>
           </div>
@@ -261,7 +271,7 @@
 </template>
 
 <script setup lang="ts">
-import { fileBadge, jobBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
+import { fileBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
 import { mmss, timingLine, plural } from '~/utils/format-duration'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
@@ -380,6 +390,22 @@ async function openDeal(deal: CreatedDeal): Promise<void> {
   }
   if (deal.url) window.open(deal.url, '_blank', 'noopener')
 }
+
+// Подгонка высоты фрейма под контент внутри Битрикс24 (#ui: меньше скролла, b24jssdk fitWindow).
+// Вне портала (standalone) — no-op (нет родительского фрейма).
+async function fitFrame() {
+  if (!b24.isInit()) return
+  try {
+    await b24.get()?.parent.fitWindow()
+  } catch { /* фрейм не готов / гонка — не критично */ }
+}
+// Перефитить при смене контента: показ/скрытие зоны загрузки, появление/обновление статусов файлов,
+// выбор файлов. nextTick — чтобы DOM обновился до замера высоты. immediate — первичная подгонка.
+watch(
+  () => [!!job.value, job.value?.status, (job.value?.files ?? []).length, uploading.value, polling.value, selectedFiles.value?.length].join(':'),
+  () => { void nextTick(fitFrame) },
+  { immediate: true }
+)
 
 // ── API ───────────────────────────────────────────────────────────────────────
 // Backend calls go through useApi (#41/#105 P1): no token in the bundle. In prod the app-session

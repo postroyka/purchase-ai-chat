@@ -51,7 +51,7 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `BACKEND_API_TOKEN` | app | ✅ | Bearer для `/upload`, `/job/:id/status`, `/metrics/data`. **Серверный** — в браузер не попадает: UI авторизуется сессией приложения (форма `/login` вне портала или `/session/b24` внутри Bitrix24; см. `PUBLIC_PAGE_BASIC_AUTH_*`), #41/#105 P1 |
 | `REDIS_PASSWORD` | app/redis | ✅ | Пароль Redis (тот же подставляется в `REDIS_URL` в compose) |
 | `NUXT_MCP_AUTH_TOKEN` | mcp | ✅ | Bearer-токен для `/mcp` endpoint |
-| `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Вебхук Bitrix24: вызывает контроллеры `shef:purchase.api.procure*` + стандартные `crm.*` |
+| `NUXT_BITRIX24_WEBHOOK_URL` | mcp | ✅ | Вебхук Bitrix24: вызывает контроллеры `shef:purchase.api.procure*` + стандартные `crm.*`. **⚠️ Определяет ЦЕЛЕВОЙ портал, куда создаются сделки** — независимо от того, из какого портала открыт UI (iframe-origin/`B24_FRAME_ANCESTORS` влияют только на сессию/CSP, НЕ на маршрут сделки; верно для webhook-режима по умолчанию). Чтобы переключить портал — поменять ЭТОТ вебхук (scope `crm`) и `make prod-redeploy`. Целевой портал должен быть **подготовлен**: модуль `shef.purchase` + контроллеры (`make deploy-b24`), воронка «Закупки»/стадия, кастом-поля сделки, каталог — иначе REST-ошибки/«Без сделки». |
 | `PUBLIC_PAGE_BASIC_AUTH_PASS` | app | ✅ | Пароль формы входа приложения (`/login`); без него `/login` → 503 |
 | `VIRTUAL_HOST` / `LETSENCRYPT_HOST` | app | ✅¹ | Домен приложения для nginx-proxy + acme |
 | `LETSENCRYPT_EMAIL` | acme | ✅¹ | E-mail для Let's Encrypt (глобально в acme-companion) |
