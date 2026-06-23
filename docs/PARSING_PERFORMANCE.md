@@ -39,19 +39,22 @@
 Формат строки в логах MCP-контейнера (грепается по `[rest-timing]`):
 
 ```
-[rest-timing] method=procuresupplier.findbyunp ms=940 ok=true
-[rest-timing] method=procurecontract.find ms=2514 ok=true
-[rest-timing] method=procureproduct.findbyvendorcode ms=315 ok=true
-[rest-timing] method=procuredeal.create ms=1820 ok=true
+[rest-timing] method=procuresupplier.findbyunp ms=940 srv=51 ok=true
+[rest-timing] method=procurecontract.find ms=2514 srv=110 ok=true
+[rest-timing] method=procureproduct.findbyvendorcode ms=315 srv=52 ok=true
+[rest-timing] method=procuredeal.create ms=1820 srv=140 ok=true
 ```
 
-- `ms` — **wall-time** round-trip (включая TLS-прогрев на первом вызове; именно его «видит» агент).
+- `ms` — **wall-time** round-trip (включая сеть и TLS-прогрев на первом вызове; именно его «видит» агент).
+- `srv` — **серверная** длительность Bitrix (`time.duration`, мс): сколько портал сам считал. Разница
+  `ms − srv` ≈ сеть. Большой `srv` → тормозит **портал**; `srv` мал, а `ms` велик → тормозит **сеть**. При
+  ошибке/без блока `time` поле опускается.
 - `ok` — успех/ошибка REST-вызова (ошибка тоже логируется, затем пробрасывается).
 - Уровень — `notice`: виден при дефолтном уровне логов (INFO и выше), без `NUXT_LOG_LEVEL=debug`.
 
-Покрыт одиночный `callV2` (через него ходят все 4 инструмента). Пакетные `batchV2`/`batchV3`
-ещё не используются и пока не инструментированы — когда появятся (задел под батчинг поиска
-товаров), к ним добавится отдельная обёртка `timedBatchV2`.
+Покрыт одиночный v2-вызов (`timedCallV2`, через него ходят все 4 инструмента). Пакетные
+`batchV2`/`batchV3` ещё не используются и пока не инструментированы — когда появятся (задел под
+батчинг поиска товаров), к ним добавится отдельная обёртка `timedBatchV2`.
 
 **Смотреть:** `docker compose -f docker-compose.prod.yml logs mcp 2>&1 | grep rest-timing`.
 
@@ -66,19 +69,29 @@ round-trip'ы к Bitrix24**.
 
 ```bash
 docker compose -f docker-compose.prod.yml logs --since 1h mcp 2>&1 \
-  | grep -o '\[rest-timing\].*' \
-  | sed -E 's/.*method=([^ ]+) ms=([0-9]+) ok=([a-z]+).*/\1 \2 \3/' \
-  | awk '{n[$1]++; s[$1]+=$2; if($2>m[$1])m[$1]=$2; if($3=="false")e[$1]++; S+=$2; N++}
-         END{for(k in n) printf "%-32s n=%d sum=%dms avg=%dms max=%dms err=%d\n",k,n[k],s[k],s[k]/n[k],m[k],e[k];
-             printf "%-32s n=%d sum=%dms (=%.1fs)\n","ВСЕГО REST",N,S,S/1000}'
+  | grep '\[rest-timing\]' \
+  | awk '{ method=""; ms=0; srv=0; ok="";
+           for(i=1;i<=NF;i++){
+             if($i ~ /^method=/) method=substr($i,8);
+             else if($i ~ /^ms=/)  ms=substr($i,4)+0;
+             else if($i ~ /^srv=/) srv=substr($i,5)+0;
+             else if($i ~ /^ok=/)  ok=substr($i,4); }
+           if(method=="") next;
+           n[method]++; s[method]+=ms; v[method]+=srv;
+           if(ms>m[method]) m[method]=ms; if(ok=="false") e[method]++; S+=ms; V+=srv; N++ }
+         END{ for(k in n) printf "%-32s n=%d wall=%dms srv=%dms (сеть≈%dms) max=%dms err=%d\n",
+                  k,n[k],s[k],v[k],s[k]-v[k],m[k],e[k];
+              printf "%-32s n=%d wall=%dms (=%.1fs) srv=%dms (сеть≈%dms)\n","ВСЕГО REST",N,S,S/1000,V,S-V }'
 ```
 
-Даёт по каждому методу число вызовов / сумму / среднее / максимум / число ошибок и **«ВСЕГО REST»** за окно.
+По каждому методу: число вызовов, суммарный **wall**, суммарный **srv** (портал), оценка **сети**
+(`wall−srv`), максимум, число ошибок; и строка **«ВСЕГО REST»**. Сразу видно, где время — в портале (`srv`)
+или в сети. Разбор полей делает сам `awk` (устойчив к строкам без `srv` — у них `srv=0`, поля не «съезжают»).
 
 Реальная строка в `docker logs` богаче примера выше (формат логгера + имя контейнера) — `grep -o` и `sed`
 это срезают, парсинг не ломается:
 ```
-procure-mcp  | NOTICE [bx24-template-mcp] NOTICE: [rest-timing] method=procuredeal.create ms=1820 ok=true {} {} 2026-06-23 10:00:00
+procure-mcp  | NOTICE [bx24-template-mcp] NOTICE: [rest-timing] method=procuredeal.create ms=1820 srv=140 ok=true {} {} 2026-06-23 10:00:00
 ```
 
 **Оговорки:**
@@ -102,9 +115,40 @@ round-trip и холодный TLS-хендшейк** (первый вызов ~
 соединению). Вывод: «медленно» делает **не вычисление портала, а число и латентность сетевых
 round-trip'ов**; кандидат на оптимизацию — батчинг поиска товаров (тема для ROADMAP).
 
-> Серверную `duration` Bitrix (`time` в ответе) `callV2` отбрасывает на вендоренной границе
-> (`mcp/server/utils/sdk-helpers.ts`) — её видно при ручной диагностике сырым REST-вызовом
-> (`curl … -w '%{time_total}'`), не в `[rest-timing]`.
+> Серверную `duration` Bitrix (`time` в ответе) вендоренный `callV2` отбрасывает, поэтому `timedCallV2`
+> зовёт `actions.v2.call.make` напрямую и достаёт её в поле `srv` (`mcp-overlay/server/utils/rest-timing.ts`).
+> Ещё точнее (чистое `processing` без очереди/лимитов) — в сыром REST-ответе (`time.processing`), при ручной
+> диагностике `curl`.
+
+### Keep-alive и «холодный» первый вызов (проверено — фикса не требует)
+
+Первый REST-вызов дороже последующих из-за **TLS-хендшейка** (см. цифры в «Что показали замеры» выше).
+Возникает вопрос: не открываем ли мы новое соединение на каждый вызов? **Нет — keep-alive уже работает**:
+- рантайм MCP — **Node 22** (`Dockerfile.mcp`), а с Node ≥19 глобальный HTTP**S**-агент (`https.globalAgent`,
+  через него идут вызовы к порталу) по умолчанию `keepAlive: true`;
+- SDK ходит через **axios**, который в Node использует http-адаптер (не fetch) и **не задаёт свой
+  `httpsAgent`** → опирается на тот самый `https.globalAgent`;
+- клиент `B24Hook` — **процесс-синглтон** (`mcp/server/utils/bitrix24.ts`, webhook-режим, один Node-процесс).
+
+Поэтому в пределах **серии вызовов** (обработка одного файла) соединение к порталу переиспользуется из пула
+`globalAgent`, и хендшейк платится один раз на серию — это согласуется с замерами. Вывод: **отдельная
+«keep-alive» оптимизация не нужна.**
+
+Оговорки (когда вызов снова «холодный»):
+- **После долгого простоя** (минуты между файлами) idle keep-alive сокет закрывается по таймауту —
+  своим (агент) или серверным (`keepalive_timeout` фронта Bitrix, обычно десятки секунд). Следующий вызов
+  опять платит TLS. То есть «один раз» — это на серию, а не на всю жизнь контейнера.
+- **После каждого передеплоя/рестарта MCP** (Watchtower при выходе нового образа — при CD потенциально
+  несколько раз в день) пул сокетов обнуляется, первый вызов снова холодный.
+
+**Где реально лежит время (рычаги, по убыванию эффекта):**
+1. **Число round-trip'ов** — батчинг поиска товаров (свести N вызовов `find_product` в один). Главный рычаг.
+2. **Последовательность вместо параллелизма** — независимые вызовы (поиск разных артикулов) идут друг за
+   другом; их распараллеливание/настоящий REST-`batch` Bitrix даёт выигрыш того же порядка. У `B24Hook` уже
+   есть бюджет (`RestrictionManager`, burst до 50, ~2 req/s) — есть куда параллелить.
+3. **Сетевой RTT/география** — даже «тёплый» вызов это 0.3–0.9 с почти целиком латентность до портала;
+   на это проект влияет только размещением MCP ближе к порталу. HTTP/2-мультиплексирование помогло бы, но
+   лишь поверх параллелизма (для строго последовательных вызовов выигрыша нет).
 
 ### Keep-alive и «холодный» первый вызов (проверено — фикса не требует)
 
