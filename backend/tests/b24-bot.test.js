@@ -111,6 +111,14 @@ describe('parseBotEvent (legacy)', () => {
     expect(e.memberId).toBe('m1');
   });
 
+  it('access_token: запись бота имеет приоритет над top-level auth, если есть оба', () => {
+    const e = parseBotEvent({
+      event: 'ONIMBOTMESSAGEADD', auth: { access_token: 'TOP' },
+      data: { BOT: { 1: { access_token: 'BOT' } }, PARAMS: { BOT_ID: '1' } },
+    });
+    expect(e.bot.token).toBe('BOT'); // data.BOT[<id>] первичен; top-level — только фолбэк
+  });
+
   it('FILES как объект (qs-массив) — записи без id и без ссылки отфильтрованы', () => {
     const e = parseBotEvent({ event: 'x', data: { PARAMS: { FILES: { 0: { id: '1', name: 'a.pdf' }, 1: { id: '', name: 'b' } } } } });
     expect(e.message.files).toEqual([{ id: '1', name: 'a.pdf', urlDownload: '' }]);
@@ -644,5 +652,24 @@ describe('POST /b24/bot/event — захват application_token из событ
     expect(res.status).toBe(403);
     expect(appInfo).not.toHaveBeenCalled();
     expect(await appStore.isKnownToken('CAPME')).toBe(false);
+  });
+
+  it('пустой access_token события → app.info не вызывается, 403, не захвачен (гард evt.bot.token)', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app, appStore } = appWith(appInfo);
+    const res = await request(app).post('/b24/bot/event').type('form')
+      .send(botMsg({ 'auth[access_token]': '', 'data[BOT][1][access_token]': '' }));
+    expect(res.status).toBe(403);
+    expect(appInfo).not.toHaveBeenCalled(); // нет токена для app.info → не бьёмся в портал
+    expect(await appStore.isKnownToken('CAPME')).toBe(false);
+  });
+
+  it('слишком длинный access_token (>4096) → app.info не вызывается, 403', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app } = appWith(appInfo);
+    const res = await request(app).post('/b24/bot/event').type('form')
+      .send(botMsg({ 'auth[access_token]': 'x'.repeat(4097), 'data[BOT][1][access_token]': 'x'.repeat(4097) }));
+    expect(res.status).toBe(403);
+    expect(appInfo).not.toHaveBeenCalled();
   });
 });

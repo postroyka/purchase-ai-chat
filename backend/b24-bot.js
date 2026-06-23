@@ -29,8 +29,9 @@ const firstObject = (m) => {
  *   • команда (ONIMCOMMANDADD) → data.COMMAND[<COMMAND_ID>] (там же COMMAND/COMMAND_PARAMS/COMMAND_CONTEXT).
  * Контекст диалога/автора всегда в data.PARAMS.{DIALOG_ID, MESSAGE, MESSAGE_ID, FROM_USER_ID, FILES};
  * data.USER.{ID, IS_BOT('Y'/'N') — IS_BOT приходит только в событии сообщения, не в команде};
- * top-level auth.{application_token, client_endpoint}.
- * @returns {{ event:string, applicationToken:string, bot:{id,code,token,restEndpoint}, dialogId:string,
+ * top-level auth.{application_token, access_token, client_endpoint, domain, member_id}.
+ * @returns {{ event:string, applicationToken:string, domain:string, memberId:string,
+ *   bot:{id,code,token,restEndpoint}, dialogId:string,
  *   message:{id,text,files:Array<{id,name,urlDownload}>}, command:{name,params,context}, user:{id,isBot} }}
  */
 export function parseBotEvent(body = {}) {
