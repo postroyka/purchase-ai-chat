@@ -420,6 +420,19 @@ const { apiFetch } = useApi()
 
 // ── Загрузка ──────────────────────────────────────────────────────────────────
 
+// Текущий пользователь B24 для назначения ответственного за сделку (#251). Профиль уже загружен
+// при init (LoadDataType.Profile), поэтому при наличии хелпера id доступен синхронно. Вне фрейма
+// (standalone) хелпера нет → null, и поле responsibleUserId не отправляется (бэкенд ставит дефолт).
+// try/catch — на случай, если геттер профиля бросит до полной инициализации: загрузка важнее.
+function currentB24UserId(): number | null {
+  try {
+    const id = b24.getHelper()?.profileInfo?.data?.id
+    return typeof id === 'number' && Number.isInteger(id) && id > 0 ? id : null
+  } catch {
+    return null
+  }
+}
+
 async function doUpload() {
   const files = selectedFiles.value
   if (!files?.length) return
@@ -434,6 +447,12 @@ async function doUpload() {
 
   const form = new FormData()
   for (const f of files) form.append('files[]', f)
+  // #251: ответственным за сделку назначаем ТЕКУЩЕГО пользователя B24 (тот, кто загрузил файл).
+  // Без этого поля бэкенд берёт фолбэк PUBLIC_PAGE_RESPONSIBLE_USER_ID = владелец вебхука — и все
+  // сделки висят на нём, а не на загрузившем. Вне фрейма (standalone) id нет → поле не шлём, бэкенд
+  // ставит дефолт. Бэкенд дополнительно валидирует формат (целое > 0) и сам подставит дефолт при пустом.
+  const uid = currentB24UserId()
+  if (uid != null) form.append('responsibleUserId', String(uid))
   // #238: отдали файлы в загрузку — очищаем выбор. Локальная `files` держит ссылку для POST, а
   // кнопка «Загрузить» больше не «всплывёт» после завершения задания (её v-if смотрит на selectedFiles).
   selectedFiles.value = null

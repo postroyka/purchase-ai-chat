@@ -630,11 +630,17 @@ export function createApp(config = {}) {
         }
       }
 
-      // Validate optional responsibleUserId from the request body (the public page
-      // sends it). Must be a positive integer — it is later passed to the agent / Б24.
+      // Validate optional responsibleUserId from the request body. Inside Bitrix24 the
+      // frame sends the uploader's user id; the public page may send a configured id.
+      // CLIENT-ASSERTED: the session is portal-scoped (sub=b24:<host>), not user-scoped,
+      // so we validate only the FORMAT — not that the id is the caller. It becomes the
+      // deal's ASSIGNED_BY_ID; do NOT treat it as an authenticated principal (#253 tracks
+      // making it server-authoritative). Format /^[1-9]\d{0,8}$/: 1..9 digits, no leading
+      // zero — bounds length (rejects a ~1MB digit string → DoS) and rejects '0' here
+      // instead of failing later in PHP (>=1). It is later passed to the agent / Б24.
       const rawResponsible = req.body?.responsibleUserId;
       const hasResponsible = rawResponsible != null && String(rawResponsible) !== '';
-      if (hasResponsible && !/^\d+$/.test(String(rawResponsible))) {
+      if (hasResponsible && !/^[1-9]\d{0,8}$/.test(String(rawResponsible))) {
         cleanupTmpFiles(req.files);
         return res.status(400).json({ error: 'responsibleUserId must be a positive integer' });
       }
