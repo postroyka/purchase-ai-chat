@@ -9,8 +9,9 @@ import { useB24 } from './useB24'
 //
 // Поэтому меряем высоту сами: «хром» вне тела (навбар = `panel.offsetHeight − body.offsetHeight`) плюс
 // ПОЛНАЯ высота прокручиваемого тела (`body.scrollHeight` учитывает невидимую из-за скролла часть) — и
-// явно ресайзим фрейм через `resizeWindow`. Перефит — на любое изменение высоты контента (ResizeObserver
-// по контент-обёртке: загрузка картинок, раскрытие лога, смена статусов) и по готовности фрейма.
+// явно ресайзим фрейм через `resizeWindow`. ResizeObserver по контент-обёртке перефитит на любые
+// изменения высоты (картинки, раскрытие лога, смена статусов); плюс перефит на resize окна и по
+// готовности фрейма.
 //
 // Вне портала (standalone) — no-op: `b24.isInit()` ложно, ничего не шлём. Ограничение Битрикс24: фрейм
 // можно только УВЕЛИЧИТЬ, не уменьшить — поэтому убираем скролл (нехватку высоты); «лишняя» высота при
@@ -18,14 +19,37 @@ import { useB24 } from './useB24'
 export function useFitFrame(panelId: string) {
   const b24 = useB24()
   let ro: ResizeObserver | null = null
+  let observed: Element | null = null
+
+  // ВАЖНО: B24DashboardPanel рендерит DOM-id как `${storageKey}-panel-${id}` (storageKey по умолчанию
+  // "dashboard"), а НЕ переданный `id` дословно. Берём элемент по ОКОНЧАНИЮ id — устойчиво к storageKey.
+  function panelEl(): HTMLElement | null {
+    return document.querySelector(`[id$="-panel-${panelId}"]`)
+  }
+  function bodyEl(panel: HTMLElement | null): HTMLElement | null {
+    return panel?.querySelector('[data-slot="body"]') ?? null
+  }
+
+  // Наблюдаем КОНТЕНТ-обёртку (её высота меняется с контентом), а не само тело (его высота зафиксирована
+  // скролл-контейнером). Обёртка может пересоздаться (v-if/v-else на странице, напр. скелетон → данные
+  // на метриках) — поэтому перецепляемся на актуальную при каждом замере.
+  function ensureObserving(body: HTMLElement): void {
+    if (!ro) return
+    const content = body.firstElementChild
+    if (content && content !== observed) {
+      if (observed) ro.unobserve(observed)
+      ro.observe(content)
+      observed = content
+    }
+  }
 
   async function fit(): Promise<void> {
     if (!b24.isInit()) return
     const frame = b24.get()
-    if (!frame) return
-    const panel = document.getElementById(panelId)
-    const body = panel?.querySelector('[data-slot="body"]') as HTMLElement | null
-    if (!panel || !body) return
+    const panel = panelEl()
+    const body = bodyEl(panel)
+    if (!frame || !panel || !body) return
+    ensureObserving(body)
     const height = panel.offsetHeight - body.offsetHeight + body.scrollHeight
     const width = Math.max(1, document.body.scrollWidth)
     if (height <= 0) return
@@ -42,19 +66,19 @@ export function useFitFrame(panelId: string) {
   }
 
   onMounted(() => {
-    const content = document.getElementById(panelId)?.querySelector('[data-slot="body"]')?.firstElementChild
-    // Наблюдаем КОНТЕНТ-обёртку (её высота растёт/падает с контентом), а не само тело — у тела высота
-    // зафиксирована скролл-контейнером и не меняется при переполнении.
-    if (content && typeof ResizeObserver !== 'undefined') {
+    if (typeof ResizeObserver !== 'undefined') {
       ro = new ResizeObserver(() => scheduleFit())
-      ro.observe(content)
     }
+    // Ширина iframe могла поменяться (ресайз окна портала / сворачивание сайдбара) — перефитим.
+    window.addEventListener('resize', scheduleFit)
     scheduleFit()
   })
 
   onBeforeUnmount(() => {
+    window.removeEventListener('resize', scheduleFit)
     ro?.disconnect()
     ro = null
+    observed = null
   })
 
   // Если фрейм инициализировался ПОСЛЕ монтирования страницы — подогнать сразу по готовности.
