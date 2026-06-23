@@ -79,6 +79,32 @@ function makeSequencedAgentSpawn(outcomes) {
   });
 }
 
+// Gated agent: each spawn BLOCKS until releaseNext() is called — lets a test deterministically
+// cancel an import between files (#cancel).
+function makeGatedAgentSpawn() {
+  const gates = [];
+  const spawn = vi.fn(() => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
+    proc.kill = vi.fn();
+    gates.push(() => {
+      proc.stdout.emit('data', JSON.stringify({
+        is_error: false,
+        result: JSON.stringify({ status: 'stub' }),
+      }));
+      proc.emit('close', 0);
+    });
+    return proc;
+  });
+  return {
+    spawn,
+    calls: () => spawn.mock.calls.length,
+    releaseNext: () => { const r = gates.shift(); if (r) r(); },
+  };
+}
+
 // Poll a specific app instance's job until terminal state.
 async function pollJob(appInstance, jobId, maxMs = 5000) {
   const deadline = Date.now() + maxMs;
@@ -86,7 +112,7 @@ async function pollJob(appInstance, jobId, maxMs = 5000) {
     const r = await request(appInstance)
       .get(`/job/${jobId}/status`)
       .set('Authorization', auth());
-    if (r.body.status === 'done' || r.body.status === 'error') return r.body;
+    if (['done', 'error', 'cancelled'].includes(r.body.status)) return r.body;
     await new Promise((res) => setTimeout(res, 50));
   }
   throw new Error(`Job ${jobId} did not reach terminal state in ${maxMs}ms`);
@@ -137,7 +163,7 @@ async function waitForJob(jobId, maxMs = 5000) {
     const res = await request(app)
       .get(`/job/${jobId}/status`)
       .set('Authorization', auth());
-    if (res.body.status === 'done' || res.body.status === 'error') return res.body;
+    if (['done', 'error', 'cancelled'].includes(res.body.status)) return res.body;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`Job ${jobId} did not reach terminal state in ${maxMs}ms`);
@@ -738,6 +764,75 @@ describe('responsibleUserId validation', () => {
       .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
     expect(res.status).toBe(201);
     await waitForJob(res.body.jobId);
+  });
+});
+
+// ── Cancel import (#cancel) ───────────────────────────────────────────────────
+
+describe('cancel import', () => {
+  it('returns 404 when cancelling an unknown job', async () => {
+    const res = await request(app)
+      .post('/job/does-not-exist/cancel')
+      .set('Authorization', auth());
+    expect(res.status).toBe(404);
+  });
+
+  it('stops the queue: the running file finishes, pending files become cancelled', async () => {
+    const gated = makeGatedAgentSpawn();
+    const cancelApp = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: gated.spawn, extractFn: async () => null },
+      rateLimitMax: 0,
+    });
+
+    const up = await request(cancelApp)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' })
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    expect(up.status).toBe(201);
+    const jobId = up.body.jobId;
+
+    // Wait until file #1 is actually being processed (agent spawned but gated/blocked).
+    const d1 = Date.now() + 3000;
+    while (Date.now() < d1 && gated.calls() < 1) await new Promise((r) => setTimeout(r, 20));
+    expect(gated.calls()).toBe(1);
+
+    const cancel = await request(cancelApp)
+      .post(`/job/${jobId}/cancel`)
+      .set('Authorization', auth());
+    expect(cancel.status).toBe(200);
+    expect(cancel.body).toMatchObject({ ok: true, status: 'cancelling' });
+
+    // Release file #1 — it finishes; file #2 must never be spawned.
+    gated.releaseNext();
+
+    const final = await pollJob(cancelApp, jobId, 3000);
+    expect(final.status).toBe('cancelled');
+    expect(final.files[0].status).toBe('done');
+    expect(final.files[1].status).toBe('cancelled');
+    expect(gated.calls()).toBe(1); // 2nd file's agent never ran
+  });
+
+  it('is idempotent on an already-finished job', async () => {
+    const up = await request(app)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    const jobId = up.body.jobId;
+    await waitForJob(jobId);
+    const res = await request(app)
+      .post(`/job/${jobId}/cancel`)
+      .set('Authorization', auth());
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(['done', 'error']).toContain(res.body.status);
+  });
+
+  it('requires auth', async () => {
+    const res = await request(app).post('/job/whatever/cancel');
+    expect(res.status).toBe(401);
   });
 });
 

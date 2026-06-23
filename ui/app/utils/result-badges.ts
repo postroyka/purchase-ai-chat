@@ -10,7 +10,7 @@ export type BadgeColor
     | 'air-secondary'
     | 'air-tertiary'
 
-export type StatusKey = 'pending' | 'processing' | 'done' | 'error'
+export type StatusKey = 'pending' | 'processing' | 'done' | 'error' | 'cancelled'
 
 export interface ResultFile {
   status: StatusKey
@@ -23,13 +23,15 @@ const STATUS_LABELS: Record<StatusKey, string> = {
   pending: 'Ожидание',
   processing: 'Обработка…',
   done: 'Готово',
-  error: 'Ошибка'
+  error: 'Ошибка',
+  cancelled: 'Отменено'
 }
 const STATUS_COLORS: Record<StatusKey, BadgeColor> = {
   pending: 'air-secondary',
   processing: 'air-primary',
   done: 'air-primary-success',
-  error: 'air-primary-alert'
+  error: 'air-primary-alert',
+  cancelled: 'air-secondary'
 }
 
 // A created deal id is the ONLY success signal (prompts/main.md). Mirrors the backend's deal detection

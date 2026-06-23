@@ -27,6 +27,8 @@ describe('result-badges (#192)', () => {
     expect(fileBadge(noDeal())).toEqual({ label: 'Без сделки', color: 'air-primary-warning' })
     expect(fileBadge({ status: 'error' })).toEqual({ label: 'Ошибка', color: 'air-primary-alert' })
     expect(fileBadge({ status: 'processing' })).toEqual({ label: 'Обработка…', color: 'air-primary' })
+    // #cancel: остановленный импорт — отменённые файлы
+    expect(fileBadge({ status: 'cancelled' })).toEqual({ label: 'Отменено', color: 'air-secondary' })
   })
 
   it('jobBadge: all-deal → Готово; none → Без сделок; some → Частично; non-done → status default', () => {

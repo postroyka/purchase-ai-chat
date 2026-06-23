@@ -257,7 +257,18 @@
             </div>
           </B24Card>
 
-          <div v-if="job.status === 'done' || job.status === 'error'" class="flex justify-center pt-2">
+          <!-- Пока идёт импорт — можно остановить (текущий файл долетит, очередь отменится). -->
+          <div v-if="job.status === 'processing' || job.status === 'pending'" class="flex justify-center pt-2">
+            <B24Button
+              color="air-secondary"
+              size="sm"
+              :disabled="cancelling"
+              @click="cancelJob"
+            >
+              {{ cancelling ? 'Останавливаем…' : 'Остановить импорт' }}
+            </B24Button>
+          </div>
+          <div v-else-if="job.status === 'done' || job.status === 'error' || job.status === 'cancelled'" class="flex justify-center pt-2">
             <B24Button color="air-primary" size="xl" @click="resetState">
               Загрузить ещё
             </B24Button>
@@ -295,7 +306,7 @@ const toast = useToast()
 
 interface FileEntry {
   name: string
-  status: 'pending' | 'processing' | 'done' | 'error'
+  status: 'pending' | 'processing' | 'done' | 'error' | 'cancelled'
   result?: unknown
   error?: string | null
   // issue #192: human-readable reason set by the backend when a 'done' file produced NO deal
@@ -315,7 +326,7 @@ interface FileEntry {
 
 interface JobStatus {
   jobId: string
-  status: 'pending' | 'processing' | 'done' | 'error'
+  status: 'pending' | 'processing' | 'done' | 'error' | 'cancelled'
   files: FileEntry[]
   showTimings?: boolean
 }
@@ -325,6 +336,7 @@ interface JobStatus {
 const selectedFiles = ref<File[] | null>(null)
 const uploading = ref(false)
 const polling = ref(false)
+const cancelling = ref(false) // нажали «Остановить»: ждём, пока бэкенд доведёт задание до 'cancelled'
 const uploadError = ref<string | null>(null)
 const job = ref<JobStatus | null>(null)
 
@@ -450,6 +462,7 @@ async function doUpload() {
   uploading.value = true
   uploadError.value = null
   job.value = null
+  cancelling.value = false
   // Сбросить транзитивное состояние прошлой партии: иначе при повторной загрузке БЕЗ «Загрузить ещё»
   // у файла с тем же именем останется старый procSince (#203 — таймер показал бы чужое время) и отзыв.
   procSince.value = {}
@@ -520,10 +533,18 @@ async function pollOnce(jobId: string) {
     pollErrors = 0
     job.value = data
 
-    if (data.status === 'done' || data.status === 'error') {
+    if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
       stopPolling()
 
-      if (data.status === 'done') {
+      if (data.status === 'cancelled') {
+        const processed = data.files.filter(f => f.status === 'done' || f.status === 'error').length
+        toast.add({
+          title: 'Импорт остановлен',
+          description: `Обработано до остановки: ${processed}. Остальные файлы отменены.`,
+          color: 'air-primary-warning',
+          duration: 6000
+        })
+      } else if (data.status === 'done') {
         // issue #192: «успешно» = создана сделка, а не просто «done». Если часть файлов без сделки —
         // не выдаём чистый успех, а зовём проверить причину у файла.
         const ok = data.files.filter(f => fileSucceeded(f)).length
@@ -580,6 +601,25 @@ function stopPolling() {
   polling.value = false
 }
 
+// ── Остановка импорта (#cancel) ───────────────────────────────────────────────
+// Помечаем задание отменённым на бэкенде. Опрос НЕ останавливаем: бэкенд доведёт уже идущий файл
+// и выставит статус 'cancelled' — опрос подхватит финал, кнопка станет «Загрузить ещё».
+async function cancelJob() {
+  if (!job.value || cancelling.value) return
+  cancelling.value = true
+  try {
+    await apiFetch(`/job/${job.value.jobId}/cancel`, { method: 'POST' })
+  } catch (e: unknown) {
+    cancelling.value = false
+    toast.add({
+      title: 'Не удалось остановить',
+      description: extractErrorMessage(e),
+      color: 'air-primary-alert',
+      duration: 5000
+    })
+  }
+}
+
 // ── Сброс ────────────────────────────────────────────────────────────────────
 
 function resetState() {
@@ -587,6 +627,7 @@ function resetState() {
   job.value = null
   uploadError.value = null
   selectedFiles.value = null
+  cancelling.value = false
   // Сбросить отзывы по файлам, чтобы для нового задания форма была чистой.
   feedbackByFile.value = {}
   procSince.value = {} // клиентские отметки времени обработки (#203)
@@ -687,7 +728,7 @@ function extractErrorMessage(e: unknown): string {
 // Есть незавершённая работа: идёт загрузка/обработка или задание ещё не финализировано.
 const hasActiveWork = computed(() =>
   uploading.value || polling.value
-  || (!!job.value && job.value.status !== 'done' && job.value.status !== 'error')
+  || (!!job.value && job.value.status !== 'done' && job.value.status !== 'error' && job.value.status !== 'cancelled')
 )
 
 const leaveModalOpen = ref(false)
