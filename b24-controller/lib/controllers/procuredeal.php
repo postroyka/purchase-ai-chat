@@ -155,10 +155,10 @@ class ProcureDeal
 	 * @param string $fileContent       Содержимое файла в base64
 	 * @param string $processingLog     Лог обработки (пишется в COMMENTS и таймлайн)
 	 * @param array  $items             Позиции: [{ productId?, vendorCode?, name, priceExclVat, quantity }].
-	 *                                  Позиция с артикулом (vendorCode), но без сопоставленного
-	 *                                  товара (productId пуст) в сделку НЕ кладётся — «не найдено»
-	 *                                  (см. prompts/main.md, Шаг 4). Позиция без артикула остаётся
-	 *                                  свободной строкой (PRODUCT_ID=0).
+	 *                                  В сделку кладутся ТОЛЬКО позиции с сопоставленным товаром
+	 *                                  (productId непустой). Без productId — артикул не найден ИЛИ
+	 *                                  артикула нет вовсе — позиция НЕ кладётся (#258: свободные
+	 *                                  строки PRODUCT_ID=0 больше не создаём; см. prompts/main.md, Шаг 4).
 	 * @param int    $contractId        ID договора (0 = не найден) → UF_CRM_DEAL_DOGOVOR
 	 * @param string $documentDate      Дата документа (счёта) в формате d.m.Y →
 	 *                                   BEGINDATE на 09:00. Пусто → текущие дата-время.
@@ -299,14 +299,13 @@ class ProcureDeal
 		$productRows = [];
 		foreach($items as $item)
 		{
-			// Серверная страховка от «не найдено в каталоге»: если у позиции задан непустой
-			// артикул поставщика (vendorCode, в т.ч. строка «0»), но товар по нему не
-			// сопоставлен (productId пуст/0) — в сделку её НЕ кладём (см. prompts/main.md,
-			// Шаг 4). Это дублирует правило промпта на уровне контроллера, т.к. модель не
-			// всегда исключает такие позиции сама. Позиции БЕЗ артикула (свободная строка)
-			// остаются как есть. vendorCode сверяем через !== '' (а не empty), чтобы артикул
-			// «0» не спутать с отсутствием артикула — ловушка empty('0') === true.
-			if(($item['vendorCode'] ?? '') !== '' && empty($item['productId']))
+			// В сделку кладём ТОЛЬКО позиции, сопоставленные с каталогом (есть productId).
+			// Без productId — артикул не найден в каталоге ИЛИ артикула нет вовсе — позицию
+			// НЕ кладём (#258: свободные строки PRODUCT_ID=0 больше не создаём). Дублирует
+			// правило промпта на уровне контроллера, т.к. модель не всегда исключает такие
+			// позиции сама. empty() ловит пустую строку, '0', null и отсутствие — productId
+			// всегда положительный id товара, поэтому «0»/пусто = «не сопоставлено».
+			if(empty($item['productId']))
 			{
 				continue;
 			}
@@ -331,7 +330,7 @@ class ProcureDeal
 			}
 
 			$productRows[] = [
-				'PRODUCT_ID'   => isset($item['productId']) ? (int)$item['productId'] : 0,
+				'PRODUCT_ID'   => (int)$item['productId'], // всегда задан: позиции без productId отсеяны выше (#258)
 				'PRODUCT_NAME' => (string)($item['name'] ?? ''),
 				'PRICE'        => $price,
 				'QUANTITY'     => $quantity,

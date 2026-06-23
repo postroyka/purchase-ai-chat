@@ -192,6 +192,16 @@ describe('b24_pst_crm_create_deal', () => {
     expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 2.5 }]).success).toBe(false)
   })
 
+  it('#259: accepts null / omitted / string productId & vendorCode (schema tolerant)', () => {
+    const items = (tool as any).inputSchema.items
+    // null — раньше отклонялось (.optional()), теперь .nullish() принимает (схема промпта = string | null)
+    expect(items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 1, productId: null, vendorCode: null }]).success).toBe(true)
+    // отсутствие полей
+    expect(items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 1 }]).success).toBe(true)
+    // строки (happy-path после #258 — только сопоставленные позиции)
+    expect(items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 1, productId: '5', vendorCode: 'ART-1' }]).success).toBe(true)
+  })
+
   it('rejects empty supplierId via Zod schema', () => {
     expect((tool as any).inputSchema.supplierId.safeParse('').success).toBe(false)
   })
