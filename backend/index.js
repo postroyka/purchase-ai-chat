@@ -1133,10 +1133,15 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       const safeMsg = redactToken(String(err?.message ?? 'agent error'));
       console.error(`[processJob] error processing file ${fileEntry.name} (job ${jobId}): ${safeMsg}`);
       fileEntry.status = 'error';
-      fileEntry.error = safeMsg.slice(0, MAX_ERROR_CHARS);
+      const outcome = classifyAgentError(safeMsg);
+      // #260: по таймауту показываем оператору понятную причину вместо технического
+      // «Agent timed out after …ms». Лимит разбора одного файла — AGENT_TIMEOUT_MS (по умолч. 6 мин).
+      fileEntry.error = outcome === 'timeout'
+        ? 'Разбор файла превысил лимит времени и был остановлен.'
+        : safeMsg.slice(0, MAX_ERROR_CHARS);
       const durationMs = Date.now() - startedAt;
       fileEntry.durationMs = durationMs;
-      metrics?.recordFile({ format, status: 'error', outcome: classifyAgentError(safeMsg), durationMs, agent: agentMeta });
+      metrics?.recordFile({ format, status: 'error', outcome, durationMs, agent: agentMeta });
     }
     await jobs.set(jobId, job);
   }

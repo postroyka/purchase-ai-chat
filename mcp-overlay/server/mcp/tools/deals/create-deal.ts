@@ -70,8 +70,11 @@ export default defineMcpTool({
     documentDate: z.string().max(10).regex(/^\d{2}\.\d{2}\.\d{4}$/, 'documentDate must be d.m.Y').optional().describe('Дата документа (счёта) в формате d.m.Y (напр. "15.03.2025") — ставится как дата начала сделки (BEGINDATE). Если не указана/непарсибельна — текущая дата.'),
     processingLog: z.string().describe('Processing log text — written to deal COMMENTS field and posted as a timeline comment'),
     items: z.array(z.object({
-      productId: z.string().optional().describe('Bitrix24 product id if matched'),
-      vendorCode: z.string().optional().describe('Vendor article from document'),
+      // #259: принимаем string | null | отсутствие — толерантно к `null` от модели (схема промпта
+      // описывала поля как `string | null`). Позиции без productId в сделку не попадают (см. PHP-контроллер,
+      // #258), поэтому в happy-path оба поля — строки, но null не должен валить вызовом схемы.
+      productId: z.string().nullish().describe('Bitrix24 product id (сопоставленный товар каталога). null/опущено — позиция НЕ попадает в сделку (#258).'),
+      vendorCode: z.string().nullish().describe('Артикул поставщика из документа. Может быть null/опущен.'),
       name: z.string().describe('Product name from document'),
       // INTENTIONAL by docs/PROJECT_BRIEF.md (lines 42-43): the document price
       // is per-unit and EXCLUDING VAT, but in Bitrix24 we write it with

@@ -105,7 +105,8 @@ final class ProcureDealTest extends TestCase
 	public function testNegativePriceAndQuantityAreClamped(): void
 	{
 		\CCrmDeal::$addReturn = 1;
-		$items = [['name' => 'X', 'priceExclVat' => -5.0, 'quantity' => 0]];
+		// productId задан (#258: позиции без productId не кладутся) — проверяем зажим цены/кол-ва.
+		$items = [['name' => 'X', 'priceExclVat' => -5.0, 'quantity' => 0, 'productId' => '7']];
 		$c = new ProcureDeal();
 		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
 
@@ -341,23 +342,21 @@ final class ProcureDealTest extends TestCase
 	}
 
 	/**
-	 * Позиция БЕЗ артикула поставщика (свободная строка) остаётся в сделке как товарная
-	 * строка без привязки к каталогу (PRODUCT_ID=0) — фильтр «не найдено» её не трогает.
+	 * #258: позиция БЕЗ артикула поставщика (нет productId) в сделку НЕ кладётся (свободные строки
+	 * PRODUCT_ID=0 больше не создаём). Если других позиций нет — SaveProductRows не зовём, сделка
+	 * создаётся + warning no_items_matched.
 	 */
-	public function testItemWithoutArticleKeptAsFreeLine(): void
+	public function testItemWithoutArticleIsNotAdded(): void
 	{
 		\CCrmDeal::$addReturn = 701;
 		$items = [
-			['name' => 'Свободная строка', 'priceExclVat' => 50.0, 'quantity' => 3],
+			['name' => 'Без артикула', 'priceExclVat' => 50.0, 'quantity' => 3],
 		];
 		$c = new ProcureDeal();
 		$res = $c->createAction(1, 2, 'f.pdf', '', 'log', $items);
 
-		$rows = \CCrmDeal::$lastProductRows;
-		$this->assertCount(1, $rows);
-		$this->assertSame(0, $rows[0]['PRODUCT_ID']);
-		$this->assertSame('Свободная строка', $rows[0]['PRODUCT_NAME']);
-		$this->assertArrayNotHasKey('warnings', $res); // строка сохранена → не no_items_matched
+		$this->assertNull(\CCrmDeal::$lastProductRows); // позиция без productId отброшена
+		$this->assertContains('no_items_matched', $res['warnings']);
 	}
 
 	/**

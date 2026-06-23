@@ -31,17 +31,18 @@ function injectForcedFeedback(result, tag = '[agent]') {
   return result;
 }
 
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_TIMEOUT_MS = 6 * 60 * 1000; // 6 minutes (#260 — жёсткий лимит разбора одного файла)
 // Grace period between SIGTERM and SIGKILL on timeout — gives claude a chance
 // to flush output and exit cleanly before we force-kill.
 const SIGKILL_GRACE_MS = 5_000;
 
-// Bounded retry for TRANSIENT provider failures (HTTP 429 / 5xx / network blip / our
-// own timeout). The LLM provider is a single point of failure (issue #104): a short
-// backoff rides out throttling and momentary outages without an operator re-uploading
-// the invoice by hand. Permanent faults (missing CLI, bad input, unparseable output)
-// are never retried — see isTransientAgentError(). NB: each attempt has the full
-// AGENT_TIMEOUT_MS budget, so worst-case wall time ≈ AGENT_MAX_ATTEMPTS × timeout.
+// Bounded retry for TRANSIENT provider failures (HTTP 429 / 5xx / network blip). The LLM
+// provider is a single point of failure (issue #104): a short backoff rides out throttling
+// and momentary outages without an operator re-uploading the invoice by hand. Permanent
+// faults (missing CLI, bad input, unparseable output) are never retried — see
+// isTransientAgentError(). NB (#260): our OWN run timeout is also TERMINAL (not retried) —
+// the AGENT_TIMEOUT_MS budget (6 мин) is a hard cap on parsing one file; on timeout we stop
+// and surface an error rather than burning another full budget on a retry.
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_MS = 1_000;
 const DEFAULT_RETRY_MAX_MS = 15_000;
@@ -309,7 +310,10 @@ export function isTransientAgentError(err) {
   const msg = err && err.message ? String(err.message) : String(err);
   // Deterministic faults first — retrying cannot help (and "ENOENT" must win over the
   // network-error list below, which also contains E* codes).
-  if (/CLI not found|ENOENT|path traversal|Invalid filePath|Invalid responsibleUserId|not valid JSON|no JSON/i.test(msg)) {
+  // #260: НАШ собственный run-таймаут («Agent timed out after …ms») — ТЕРМИНАЛЬНЫЙ: 6 мин — жёсткий
+  // лимит разбора файла, повтор дал бы ещё 6 мин. Отличается от провайдерского «timed out»/«ETIMEDOUT»
+  // (без «after»), которые остаются транзиентными (ниже) и ретраятся.
+  if (/CLI not found|ENOENT|path traversal|Invalid filePath|Invalid responsibleUserId|not valid JSON|no JSON|timed out after/i.test(msg)) {
     return false;
   }
   // `5\d\d` matches a standalone 3-digit 5xx code; the \b anchors keep it from matching a

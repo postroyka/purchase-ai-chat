@@ -470,30 +470,22 @@ describe('runAgent — transient retry (#104)', () => {
     expect(spawnFn).toHaveBeenCalledTimes(3);
   });
 
-  it('retries our own run timeout, then succeeds on the next attempt', async () => {
-    let call = 0;
+  it('does NOT retry our own run timeout — terminal (#260)', async () => {
+    // 6-минутный лимит разбора — жёсткий: по таймауту останавливаемся с ошибкой, без повтора
+    // (повтор дал бы ещё целый бюджет). Даже при maxAttempts:3 spawn вызывается ОДИН раз.
     const spawnFn = vi.fn(() => {
-      call += 1;
       const proc = new EventEmitter();
       proc.stdout = new EventEmitter();
       proc.stderr = new EventEmitter();
       proc.stdin = mockStdin();
       proc.kill = vi.fn(() => setImmediate(() => proc.emit('close', null)));
-      if (call > 1) {
-        // 2nd attempt closes cleanly with a valid result.
-        setImmediate(() => {
-          proc.stdout.emit('data', wrapResult(VALID_DEAL_RESULT));
-          proc.emit('close', 0);
-        });
-      }
-      // 1st attempt: never emits close on its own → the run timer fires → SIGTERM → "timed out".
+      // Never emits close on its own → the run timer fires → SIGTERM → "timed out".
       return proc;
     });
-    const result = await runAgent('/f.pdf', '20', {
-      ...BASE_CONFIG, maxAttempts: 3, sleepFn: async () => {}, timeoutMs: 30, spawnFn,
-    });
-    expect(result.deal.dealId).toBe('d-7');
-    expect(spawnFn).toHaveBeenCalledTimes(2);
+    await expect(
+      runAgent('/f.pdf', '20', { ...BASE_CONFIG, maxAttempts: 3, sleepFn: async () => {}, timeoutMs: 30, spawnFn }),
+    ).rejects.toThrow('timed out');
+    expect(spawnFn).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT retry a permanent failure (missing CLI)', async () => {
@@ -630,7 +622,8 @@ describe('isTransientAgentError (#104)', () => {
       'Agent process exited with code 1: API Error: 429 Too Many Requests',
       'Agent returned an error: 503 Service Unavailable',
       'Agent process exited with code 1: Overloaded',
-      'Agent timed out after 300000ms',
+      // Провайдерский таймаут (БЕЗ «after») — остаётся транзиентным и ретраится (#260).
+      'upstream request timed out',
       'spawn error: ECONNRESET',
       'socket hang up',
     ]) {
@@ -645,6 +638,8 @@ describe('isTransientAgentError (#104)', () => {
       'Invalid filePath — contains control characters: "x"',
       'Agent output is not valid JSON. stdout: ...',
       'Agent produced no JSON in its response. result: ...',
+      // #260: НАШ run-таймаут («…timed out after …ms») — терминальный, не ретраится.
+      'Agent timed out after 360000ms',
     ]) {
       expect(isTransientAgentError(new Error(m))).toBe(false);
     }
