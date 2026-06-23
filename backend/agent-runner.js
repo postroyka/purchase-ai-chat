@@ -40,9 +40,10 @@ const SIGKILL_GRACE_MS = 5_000;
 // provider is a single point of failure (issue #104): a short backoff rides out throttling
 // and momentary outages without an operator re-uploading the invoice by hand. Permanent
 // faults (missing CLI, bad input, unparseable output) are never retried — see
-// isTransientAgentError(). NB (#260): our OWN run timeout is also TERMINAL (not retried) —
-// the AGENT_TIMEOUT_MS budget (6 мин) is a hard cap on parsing one file; on timeout we stop
-// and surface an error rather than burning another full budget on a retry.
+// isTransientAgentError(). NB (#260): our OWN run timeout is also TERMINAL (not retried) — the
+// AGENT_TIMEOUT_MS budget (6 мин) caps a SINGLE parse attempt; on our timeout we stop and surface
+// an error rather than burning another full budget on a retry. (The budget is PER ATTEMPT, so a
+// file hitting rare transient provider blips can still span a few attempts before failing.)
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_MS = 1_000;
 const DEFAULT_RETRY_MAX_MS = 15_000;

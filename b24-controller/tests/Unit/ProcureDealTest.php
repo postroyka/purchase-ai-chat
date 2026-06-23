@@ -418,8 +418,9 @@ final class ProcureDealTest extends TestCase
 	}
 
 	/**
-	 * Артикул-строка «0» — это валидный непустой артикул: несопоставленная позиция с ним
-	 * исключается (guard через !== '' не путает «0» с «нет артикула» — ловушка empty('0')).
+	 * Несопоставленная позиция (productId пуст) исключается независимо от vendorCode — здесь
+	 * артикул-строка «0» (валидный непустой артикул), товар не найден → productId null → отброшена
+	 * фильтром empty($item['productId']) (#258).
 	 */
 	public function testZeroStringVendorCodeUnmatchedIsExcluded(): void
 	{
