@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
 import { useBitrix24Tenant } from '~/server/utils/bitrix24-tenant'
-import { callV2 } from '~/server/utils/sdk-helpers'
+import { timedCallV2 } from '~/server/utils/rest-timing'
 
 interface ProductResult {
   id: number | null
@@ -31,7 +31,7 @@ export default defineMcpTool({
   },
   handler: async ({ vendorCode }) => {
     const b24 = useBitrix24Tenant()
-    const result = await callV2<ProductResult>(
+    const result = await timedCallV2<ProductResult>(
       b24,
       'shef:purchase.api.procureproduct.findbyvendorcode',
       { vendorCode },

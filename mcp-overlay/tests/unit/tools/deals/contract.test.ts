@@ -29,17 +29,18 @@ function findUp(rel: string): string {
 const dealsDir = findUp('server/mcp/tools/deals')
 const phpDir = findUp('b24-controller/lib/controllers')
 
-/** Имя метода, которое каждый deal-инструмент реально вызывает (последний литерал
- *  shef:purchase.api.* в файле — это аргумент callV2, не докблок). */
+/** Имя метода, которое каждый deal-инструмент реально вызывает (первый литерал
+ *  shef:purchase.api.* после вызова обёртки — это аргумент timedCallV2, не докблок). */
 function toolMethods(): Record<string, string> {
   const out: Record<string, string> = {}
   for (const f of readdirSync(dealsDir)) {
     if (!f.endsWith('.ts') || f.endsWith('.test.ts') || f.startsWith('_')) continue
     const src = readFileSync(join(dealsDir, f), 'utf8')
-    // Имя метода = первый литерал shef:purchase.api.* ПОСЛЕ вызова callV2(...) —
-    // не «последний литерал в файле» (мог бы поймать докблок/второй вызов).
-    // Нижний регистр: REST-имена регистронезависимы, PHP-сторона тоже в lower.
-    const m = src.match(/callV2\b[\s\S]*?'(shef:purchase\.api\.[^']+)'/)
+    // Имя метода = первый литерал shef:purchase.api.* ПОСЛЕ вызова timedCallV2(...) —
+    // обёртки с REST-таймингом (#262), которая делегирует в callV2. `(?:timed)?` —
+    // чтобы тест пережил и прямой callV2, и обёртку. Нижний регистр: REST-имена
+    // регистронезависимы, PHP-сторона тоже в lower.
+    const m = src.match(/(?:timed)?[Cc]allV2\b[\s\S]*?'(shef:purchase\.api\.[^']+)'/)
     if (m) out[f] = m[1].toLowerCase()
   }
   return out

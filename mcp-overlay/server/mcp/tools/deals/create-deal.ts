@@ -3,7 +3,7 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
 import { useBitrix24Tenant } from '~/server/utils/bitrix24-tenant'
-import { callV2 } from '~/server/utils/sdk-helpers'
+import { timedCallV2 } from '~/server/utils/rest-timing'
 
 interface DealResult {
   dealId: number
@@ -130,7 +130,7 @@ export default defineMcpTool({
     if (contractId) params.contractId = contractId
     if (documentDate) params.documentDate = documentDate
 
-    const result = await callV2<DealResult>(
+    const result = await timedCallV2<DealResult>(
       b24,
       'shef:purchase.api.procuredeal.create',
       params,

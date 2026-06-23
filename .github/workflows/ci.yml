@@ -117,6 +117,20 @@ jobs:
 
       - run: cp -r ../mcp-overlay/server/mcp/tools/deals server/mcp/tools/deals
 
+      # Overlay shared utils (rest-timing.ts, #262) into the vendored utils dir.
+      # Mirrors Dockerfile.mcp's `COPY mcp-overlay/server/ ./server/`: the deals
+      # tools import `~/server/utils/rest-timing`, so it must be present for both
+      # typecheck and the vitest run below.
+      # Guard (mirrors the deals guard above): the overlay util names must NOT
+      # already exist upstream — otherwise `cp -r …/. server/utils/` would
+      # SILENTLY overwrite a vendored file on a future re-vendor. Fail loudly
+      # instead so the collision is caught in review, not in prod.
+      - name: Guard — overlay utils must not exist in upstream
+        run: '[ ! -e server/utils/rest-timing.ts ] || (echo "ERROR: rest-timing.ts already exists in upstream utils — overlay conflict" && exit 1)'
+      # `cp -r src/. dst/` copies the overlay util FILES into the existing
+      # upstream utils dir (new names only — guard above proves no overwrite).
+      - run: cp -r ../mcp-overlay/server/utils/. server/utils/
+
       # Typecheck the overlay TOOLS against the vendored framework (#154 review): catches
       # signature drift between our b24_pst_crm_* tools and mcp/server/utils on a re-vendor.
       # BEFORE the test copy — the vitest-style overlay test files aren't nuxt-typechecked.
