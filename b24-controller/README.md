@@ -38,7 +38,7 @@ REST-контроллеры для procure-ai, размещаемые внутр
 |---|---|---|---|
 | `shef:purchase.api.procuresupplier.findbyunp` | `findByUnpAction` | `procuresupplier.php` | ✅ реализован (B1) |
 | `shef:purchase.api.procureproduct.findbyvendorcode` | `findByVendorCodeAction` | `procureproduct.php` | ✅ реализован (B4–B5) |
-| `shef:purchase.api.procureproduct.findbyvendorcodes` | `findByVendorCodesAction` | `procureproduct.php` | ✅ реализован (#262, батч; MCP-инструмент — следующий шаг) |
+| `shef:purchase.api.procureproduct.findbyvendorcodes` | `findByVendorCodesAction` | `procureproduct.php` | ✅ реализован (#262, батч; MCP-инструмент `find_products` готов, ждёт деплой+QA #272) |
 | `shef:purchase.api.procurecontract.find` | `findAction` | `procurecontract.php` | ✅ реализован (B3a–B3e) |
 | `shef:purchase.api.procuredeal.create` | `createAction` | `procuredeal.php` | ✅ реализован (B6–B8) |
 | `shef:purchase.api.procureinstall.ensureschema` | `ensureSchemaAction` | `procureinstall.php` | ✅ самонастройка схемы |
