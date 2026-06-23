@@ -709,6 +709,30 @@ export function createApp(config = {}) {
     });
   });
 
+  // POST /job/:id/cancel — остановить импорт. Помечает задание отменённым (отдельный флаг в сторе,
+  // чтобы не конфликтовать с перезаписью job в processJob). Уже идущий файл долетает (агента не
+  // прервать), очередь (pending) пропускается. Идемпотентно; на терминальном задании — no-op.
+  app.post('/job/:id/cancel', requireAuth, async (req, res) => {
+    let job;
+    try {
+      job = await jobs.get(req.params.id);
+    } catch (e) {
+      console.error(`[job cancel] store error for ${req.params.id}:`, e.message);
+      return res.status(503).json({ error: 'Job store unavailable — please retry' });
+    }
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (job.status === 'done' || job.status === 'error' || job.status === 'cancelled') {
+      return res.json({ ok: true, status: job.status });
+    }
+    try {
+      await jobs.markCancelled(req.params.id);
+    } catch (e) {
+      console.error(`[job cancel] mark error for ${req.params.id}:`, e.message);
+      return res.status(503).json({ error: 'Job store unavailable — please retry' });
+    }
+    return res.json({ ok: true, status: 'cancelling' });
+  });
+
   // GET /health — no auth, used by Docker healthcheck.
   // Checks Redis connectivity so nginx-proxy and Docker know when the instance is ready. Readiness is
   // driven ONLY by jobs.ping(); feedbackOutboxPending is informational (size() never throws → safe to
@@ -1014,7 +1038,14 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
   job.status = 'processing';
   await jobs.set(jobId, job);
 
+  let cancelled = false;
   for (const fileEntry of job.files) {
+    // Остановка импорта (#cancel): проверяем флаг ПЕРЕД каждым файлом. Уже начатый файл прервать
+    // нельзя (агент в процессе) — он долетает; все ещё не начатые (pending) — отменяем ниже.
+    try {
+      if (await jobs.isCancelled(jobId)) { cancelled = true; break; }
+    } catch { /* флаг недоступен — не валим обработку, продолжаем */ }
+
     fileEntry.status = 'processing';
     const startedAt = Date.now();
     fileEntry.startedAt = startedAt; // тайминги (#замеры): для живого mm:ss, пока файл обрабатывается
@@ -1110,7 +1141,16 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
     await jobs.set(jobId, job);
   }
 
-  job.status = job.files.every((f) => f.status === 'error') ? 'error' : 'done';
+  if (cancelled) {
+    // Импорт остановлен: все ещё не начатые файлы (pending) помечаем 'cancelled'. Уже завершённые
+    // (done/error) остаются как есть — их работа сделана. Задание — терминальное 'cancelled'.
+    for (const f of job.files) {
+      if (f.status === 'pending') f.status = 'cancelled';
+    }
+    job.status = 'cancelled';
+  } else {
+    job.status = job.files.every((f) => f.status === 'error') ? 'error' : 'done';
+  }
   await jobs.set(jobId, job);
 
   // Clean up uploaded files after processing — agent has already read them.
