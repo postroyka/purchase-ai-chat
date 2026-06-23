@@ -29,9 +29,16 @@ import { useLogger } from '~/server/utils/logger'
  * (`mcp/server/utils/sdk-helpers.ts`): `callV2` разворачивает ответ в `.result`
  * и **отбрасывает** конверт с `time`, поэтому серверную длительность из него не
  * достать. Обработка ошибок здесь — точная копия `callV2` (isSuccess →
- * `Bitrix24ToolError`, throw → `toToolError`); если на ре-вендоре семантика
+ * `Bitrix24ToolError`, throw → `toToolError`); если на ре-вендоре `mcp/` семантика
  * `callV2` изменится, синхронизировать и тут. Сигнатуру `actions.v2.call.make`
  * сторожит overlay-typecheck (CI-джоб test-mcp-overlay, #154).
+ *
+ * Источник `srv` — `getData().time.duration` — это контракт **SDK/REST**
+ * (`PayloadTime`), а НЕ `callV2`. `getData()` типизирован (`SuccessPayload<T>` с
+ * `time: PayloadTime`), поэтому переименование/исчезновение поля поймает typecheck.
+ * НЕ типизированы только **единицы**: `duration` — в СЕКУНДАХ (→ `*1000`); если
+ * SDK/REST когда-нибудь сменит единицы, тесты/типы этого не заметят — свериться
+ * при ре-вендоре SDK (не только `mcp/`).
  *
  * Пакетные `batchV2`/`batchV3` ещё не используются и сознательно НЕ покрыты —
  * когда появятся (задел под батчинг поиска товаров), к ним добавится отдельная

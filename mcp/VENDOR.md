@@ -40,6 +40,9 @@
    **и shared-utils** (`cp -r ../mcp-overlay/server/utils/. mcp/server/utils/` — там
    `rest-timing.ts`, #262, который импортируют deals), `pnpm typecheck`, затем убрать.
    Полную сборку образа валидирует CI-джоб «Validate Docker builds».
+   ⚠️ `rest-timing.ts` **зеркалит обработку ошибок `callV2`** (`sdk-helpers.ts`) и достаёт
+   `getData().time.duration` напрямую — при изменении `callV2` или формы REST-конверта `time`
+   сверить вручную (typecheck ловит сигнатуру/переименование поля, но НЕ смену единиц/семантики).
 6. Обновить **этот файл** (версия/SHA/дата) и при необходимости `Dockerfile.mcp`
    (напр. v0.3.0 добавил нативный `better-sqlite3` → `apk add python3 make g++`).
 
