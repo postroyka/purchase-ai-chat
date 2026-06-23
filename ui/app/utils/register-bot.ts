@@ -22,6 +22,21 @@ export const FEEDBACK_COMMAND = 'feedback'
 
 export interface BotRegistration { botId: number, commandId: number }
 
+// Аватар бота — наш статический ассет `/botavatar.png` → base64 (для PERSONAL_PHOTO). Любая ошибка
+// глушится: аватар НЕОБЯЗАТЕЛЕН и не должен влиять на регистрацию.
+async function botAvatarBase64(): Promise<string> {
+  try {
+    const resp = await fetch('/botavatar.png')
+    if (!resp.ok) return ''
+    const bytes = new Uint8Array(await resp.arrayBuffer())
+    let bin = ''
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!)
+    return btoa(bin)
+  } catch {
+    return ''
+  }
+}
+
 /**
  * Зарегистрировать бота + команду feedback (legacy). Бросает при ошибке REST (caller — best-effort).
  * @param frame активный B24Frame (внутри портала)
@@ -70,6 +85,16 @@ export async function registerInvoiceBot(frame: B24Frame, webhookUrl: string): P
   if (typeof commandId !== 'number') {
     throw new Error('imbot.command.register: ответ без id команды')
   }
+
+  // Аватар (best-effort, в ФОНЕ — НЕ блокирует установку): отдельным imbot.update. Не await-им, чтобы
+  // проблема с фото/сетью не задержала и не сорвала регистрацию и installFinish. PERSONAL_PHOTO —
+  // base64 PNG (≤5000×5000), наш ассет /botavatar.png. Применяется при (пере)установке приложения.
+  void botAvatarBase64()
+    .then(photo => photo
+      ? frame.actions.v2.call.make({ method: 'imbot.update', params: { BOT_ID: botId, FIELDS: { PROPERTIES: { PERSONAL_PHOTO: photo } } } })
+      : undefined)
+    .catch(() => { /* аватар необязателен — игнорируем */ })
+
   return { botId, commandId }
 }
 

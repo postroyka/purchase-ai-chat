@@ -13,6 +13,19 @@ import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { validateSniffedMime, MIME_SNIFF_BYTES } from './file-validation.js';
 
+// Сериализация параметров REST в form-urlencoded в PHP-нотации (как http_build_query): вложенные
+// объекты/массивы → key[sub][0]=…. Старый портал Битрикс24 читает параметры и auth из $_REQUEST
+// (query/form), а НЕ из JSON-тела — JSON давал NO_AUTH_FOUND и терял параметры (#241, портал-QA).
+function toFormBody(params, sp = new URLSearchParams(), prefix = '') {
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v == null) continue;
+    const key = prefix ? `${prefix}[${k}]` : k;
+    if (typeof v === 'object') toFormBody(v, sp, key);
+    else sp.append(key, String(v));
+  }
+  return sp;
+}
+
 /**
  * Фабрика боевого botApi. restEndpoint/accessToken берутся из самого события (per-request).
  * @param {{ restEndpoint:string, fetchImpl?:Function, uploadDir:string, allowedExtensions:string[],
@@ -32,18 +45,21 @@ export function makeBotApi(cfg) {
     }
   }
 
-  // OAuth-вызов REST портала токеном бота из события (auth в теле — сверить форму на портале).
+  // OAuth-вызов REST портала токеном бота из события. Старый портал читает auth/параметры из $_REQUEST
+  // (query/form), а НЕ из JSON-тела → JSON давал NO_AUTH_FOUND (портал-QA #241). Поэтому: auth — в query
+  // (как рабочий app.info в auth.js), параметры — form-urlencoded (PHP-нотация через toFormBody).
   // redirect:'error' — не идём за редиректом (анти-SSRF-через-редирект, как в auth.js).
   async function rest(method, accessToken, params) {
-    const url = `${cfg.restEndpoint.replace(/\/$/, '')}/${method}`;
-    assertAllowed(url);
+    const base = `${cfg.restEndpoint.replace(/\/$/, '')}/${method}`;
+    const url = `${base}?auth=${encodeURIComponent(accessToken)}`;
+    assertAllowed(url); // host из query не зависит — SSRF-гард по домену сохраняется
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
       const resp = await fetchImpl(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...params, auth: accessToken }),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: toFormBody(params).toString(),
         redirect: 'error',
         signal: ac.signal,
       });

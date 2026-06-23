@@ -68,11 +68,17 @@ export function parseBotEvent(body = {}) {
   return {
     event: s(body.event).toUpperCase(),
     applicationToken: s(topAuth.application_token || authEntry.application_token || innerAuth.application_token),
+    // domain/memberId из top-level auth — для фолбэк-захвата токена из самого события (старый портал не
+    // шлёт ONAPPINSTALL на наш callback): проверяем подлинность через app.info по домену, как при установке.
+    domain: s(topAuth.domain),
+    memberId: s(topAuth.member_id),
     // restEndpoint — база REST портала для обратных вызовов бота (client_endpoint токена бота).
     bot: {
       id: s(authEntry.BOT_ID || botId),
       code: s(authEntry.BOT_CODE || authEntry.code),
-      token: s(authEntry.access_token || innerAuth.access_token),
+      // access_token для ответа: старый портал кладёт его в top-level auth (как payload.auth.access_token),
+      // не всегда в data.BOT[<id>] — поэтому фолбэк на topAuth.access_token (иначе imbot.message.add → NO_AUTH_FOUND).
+      token: s(authEntry.access_token || innerAuth.access_token || topAuth.access_token),
       restEndpoint: s(authEntry.client_endpoint || innerAuth.client_endpoint || topAuth.client_endpoint),
     },
     dialogId: s(params.DIALOG_ID || cmdEntry.DIALOG_ID),
