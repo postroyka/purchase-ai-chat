@@ -93,6 +93,8 @@ docker logs --tail 200 procure-mcp              # MCP (вызовы B24/1С)
 ```
 На что смотреть: `[processJob] error …` (сбой обработки файла), `[agent …] …` (ретраи провайдера),
 ошибки Redis. Токены в логах **редактируются** — если увидели «живой» секрет, это баг, заводите issue.
+Диагностика «почему медленно»: строки `[rest-timing]` в `procure-mcp` — длительность каждого REST-вызова
+к Bitrix24; как суммировать «сколько внутри `agentMs` ушло на портал» — [PARSING_PERFORMANCE.md](PARSING_PERFORMANCE.md).
 
 **Ротация:** `app`/`mcp` пишут json-file с лимитом `max-size 10m × max-file 3` (задано в
 `docker-compose.prod.yml`) — логи не растут без границ. Меняли драйвер/настройку логов — проверьте, что

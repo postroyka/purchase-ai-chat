@@ -36,9 +36,10 @@
    ```
 4. Локальных правок **внутри** `mcp/` быть не должно — всё в `mcp-overlay/`
    (единственный исторический патч #127 уже влит в upstream и растворился).
-5. Проверить совместимость overlay: скопировать deals в `mcp/server/mcp/tools/deals`,
-   `pnpm typecheck`, затем убрать. Полную сборку образа валидирует CI-джоб
-   «Validate Docker builds».
+5. Проверить совместимость overlay: скопировать deals в `mcp/server/mcp/tools/deals`
+   **и shared-utils** (`cp -r ../mcp-overlay/server/utils/. mcp/server/utils/` — там
+   `rest-timing.ts`, #262, который импортируют deals), `pnpm typecheck`, затем убрать.
+   Полную сборку образа валидирует CI-джоб «Validate Docker builds».
 6. Обновить **этот файл** (версия/SHA/дата) и при необходимости `Dockerfile.mcp`
    (напр. v0.3.0 добавил нативный `better-sqlite3` → `apk add python3 make g++`).
 

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { defineMcpTool } from '@nuxtjs/mcp-toolkit/server'
 import { useBitrix24Tenant } from '~/server/utils/bitrix24-tenant'
-import { callV2 } from '~/server/utils/sdk-helpers'
+import { timedCallV2 } from '~/server/utils/rest-timing'
 
 interface ContractResult {
   id: number | null
@@ -37,7 +37,7 @@ export default defineMcpTool({
     if (number) params.number = number
     if (date) params.date = date
 
-    const result = await callV2<ContractResult>(
+    const result = await timedCallV2<ContractResult>(
       b24,
       'shef:purchase.api.procurecontract.find',
       params,
