@@ -137,17 +137,18 @@ final class ProcureProductTest extends TestCase
 		$this->assertSame(['A', 'B'], \CIBlockElement::$calls[0]['filter']['=PROPERTY_PURCHASE_ARTICLE']);
 	}
 
-	public function testBatchMapsFoundAndNotFound(): void
+	public function testBatchReturnsListFoundAndNotFound(): void
 	{
 		\CIBlockElement::$resultQueue[] = [
 			['ID' => 7, 'NAME' => 'Болт', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'A'],
-			// для 'B' строки нет → должен попасть как id:null
+			// для 'B' строки нет → должен попасть как {vendorCode, id:null}
 		];
 		$c = new ProcureProduct();
+		// Список в порядке запроса: [0] = A (найден), [1] = B (не найден).
 		$res = $c->findByVendorCodesAction(['A', 'B']);
 
-		$this->assertSame(['id' => 7, 'name' => 'Болт', 'vendorCode' => 'A'], $res['A']);
-		$this->assertSame(['id' => null], $res['B']);
+		$this->assertSame(['id' => 7, 'name' => 'Болт', 'vendorCode' => 'A'], $res[0]);
+		$this->assertSame(['vendorCode' => 'B', 'id' => null], $res[1]);
 	}
 
 	public function testBatchMultiFlagPerArticlePicksMinId(): void
@@ -160,9 +161,25 @@ final class ProcureProductTest extends TestCase
 		$c = new ProcureProduct();
 		$res = $c->findByVendorCodesAction(['A', 'B']);
 
-		$this->assertSame(7, $res['A']['id']);   // min id среди дублей A
-		$this->assertTrue($res['A']['multi']);
-		$this->assertSame(3, $res['B']['id']);
-		$this->assertArrayNotHasKey('multi', $res['B']);
+		$this->assertSame(7, $res[0]['id']);   // min id среди дублей A
+		$this->assertTrue($res[0]['multi']);
+		$this->assertSame(3, $res[1]['id']);
+		$this->assertArrayNotHasKey('multi', $res[1]);
+	}
+
+	public function testBatchNumericVendorCodesStayStringsInList(): void
+	{
+		// Числовые артикулы (как 654441/76062224 из реальных тестов): результат —
+		// список объектов, vendorCode остаётся строкой; не найденный — тоже строкой.
+		\CIBlockElement::$resultQueue[] = [
+			['ID' => 7, 'NAME' => 'Шпатлёвка', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => '654441'],
+		];
+		$c = new ProcureProduct();
+		$res = $c->findByVendorCodesAction(['654441', '76062224']);
+
+		$this->assertCount(2, $res);
+		$this->assertSame(['id' => 7, 'name' => 'Шпатлёвка', 'vendorCode' => '654441'], $res[0]);
+		$this->assertSame(['vendorCode' => '76062224', 'id' => null], $res[1]);
+		$this->assertIsString($res[1]['vendorCode']);
 	}
 }
