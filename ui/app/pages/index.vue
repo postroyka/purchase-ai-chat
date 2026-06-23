@@ -672,7 +672,7 @@ watch(() => [job.value?.status, ...(job.value?.files ?? []).map(f => `${f.name}:
   }
   // Завершение задания фиксирует общее время один раз (если обработка вообще стартовала).
   const st = job.value?.status
-  if ((st === 'done' || st === 'error') && jobStartTs.value != null && jobEndTs.value == null) {
+  if ((st === 'done' || st === 'error' || st === 'cancelled') && jobStartTs.value != null && jobEndTs.value == null) {
     jobEndTs.value = now
   }
 }, { immediate: true })
