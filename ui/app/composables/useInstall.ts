@@ -1,6 +1,10 @@
 // Относительный путь (не '~/utils/...'): vitest резолвит этот модуль как импортируемый из
 // композабла, а алиас '~' в его конфиге не настроен — '~/utils/...' уронит тест на резолве.
-import { registerInvoiceBot } from '../utils/register-bot'
+// ❄️ ЧАТ-БОТ ЗАМОРОЖЕН (#241): регистрацию бота при установке отключили (на старых порталах imbot.v2
+// недоступен, ценность чат-сценария не подтвердилась). Бэкенд-обработчики (/b24/bot/event, /b24/app/event)
+// и `register-bot.ts` ОСТАВЛЕНЫ для будущих версий Битрикс24. Вернуть — раскомментировать импорт + блок
+// регистрации в finishInstall (scope `imbot` уже в getRequiredRights). Подробнее — docs/ROADMAP.md §4.1.
+// import { registerInvoiceBot } from '../utils/register-bot'
 import { ensureDealSchema } from '../utils/ensure-schema'
 
 /** Состояния экрана установки приложения. */
@@ -50,22 +54,20 @@ export function useInstall() {
     try {
       // installFinish() работает только в install-режиме; при обычном открытии SDK реджектит.
       if (frame.isInstallMode) {
-        // Регистрируем чат-бота (issue #217) ДО installFinish, best-effort: сбой (например, не выдан
-        // scope imbot) НЕ должен срывать установку приложения. webhookUrl — наш backend на этом же
-        // домене (страница установки открыта во фрейме из нашего origin).
-        try {
-          const webhookUrl = `${window.location.origin}/b24/bot/event`
-          await registerInvoiceBot(frame, webhookUrl)
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e)
-          console.warn('[install] регистрация бота не удалась (best-effort):', msg)
-          botWarning.value = 'Приложение установлено, но чат-бот не зарегистрирован. Проверьте право «imbot» и переустановите.'
-        }
+        // ❄️ ЧАТ-БОТ ЗАМОРОЖЕН (#241): регистрацию бота при установке убрали (см. импорт выше + ROADMAP §4.1).
+        // Обработчики и register-bot.ts оставлены; вернуть — раскомментировать импорт и блок ниже.
+        // try {
+        //   const webhookUrl = `${window.location.origin}/b24/bot/event`
+        //   await registerInvoiceBot(frame, webhookUrl)
+        // } catch (e) {
+        //   const msg = e instanceof Error ? e.message : String(e)
+        //   console.warn('[install] регистрация бота не удалась (best-effort):', msg)
+        //   botWarning.value = 'Приложение установлено, но чат-бот не зарегистрирован. Проверьте право «imbot» и переустановите.'
+        // }
 
-        // Донастройка кастом-полей сделки (issue #176) — ДО installFinish и best-effort, по той же
-        // причине, что и регистрация бота: Битрикс24 сразу после installFinish перезагружает фрейм,
-        // и REST-вызов, отправленный ПОСЛЕ, был бы оборван. Метод идемпотентен. Сбой (обычно — не
-        // выдан scope crm) НЕ срывает установку — показываем итог на экране «готово».
+        // Донастройка кастом-полей сделки (issue #176) — ДО installFinish и best-effort: Битрикс24 сразу
+        // после installFinish перезагружает фрейм, и REST-вызов, отправленный ПОСЛЕ, был бы оборван.
+        // Метод идемпотентен. Сбой (обычно — не выдан scope crm) НЕ срывает установку — показываем итог.
         try {
           const report = await ensureDealSchema(frame)
           if (report.ok) {
