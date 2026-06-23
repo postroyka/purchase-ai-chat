@@ -38,6 +38,7 @@ REST-контроллеры для procure-ai, размещаемые внутр
 |---|---|---|---|
 | `shef:purchase.api.procuresupplier.findbyunp` | `findByUnpAction` | `procuresupplier.php` | ✅ реализован (B1) |
 | `shef:purchase.api.procureproduct.findbyvendorcode` | `findByVendorCodeAction` | `procureproduct.php` | ✅ реализован (B4–B5) |
+| `shef:purchase.api.procureproduct.findbyvendorcodes` | `findByVendorCodesAction` | `procureproduct.php` | ✅ реализован (#262, батч; MCP-инструмент — следующий шаг) |
 | `shef:purchase.api.procurecontract.find` | `findAction` | `procurecontract.php` | ✅ реализован (B3a–B3e) |
 | `shef:purchase.api.procuredeal.create` | `createAction` | `procuredeal.php` | ✅ реализован (B6–B8) |
 | `shef:purchase.api.procureinstall.ensureschema` | `ensureSchemaAction` | `procureinstall.php` | ✅ самонастройка схемы |
@@ -56,7 +57,10 @@ REST-контроллеры для procure-ai, размещаемые внутр
 | `con:010` | contract.find | `supplierId` < 1 |
 | `con:011` | contract.find | номер договора длиннее 64 символов |
 | `prd:010` | findByVendorCode | пустой артикул |
-| `prd:011` | findByVendorCode | артикул длиннее 64 символов |
+| `prd:011` | findByVendorCode**(s)** | артикул длиннее 64 символов |
+| `prd:012` | findByVendorCodes | элемент списка артикулов — не строка |
+| `prd:013` | findByVendorCodes | список артикулов пуст (после отсева пустых) |
+| `prd:014` | findByVendorCodes | больше 50 артикулов за один запрос |
 | `deal:010` | deal.create | `supplierId`/`responsibleUserId` < 1 |
 | `deal:021` | deal.create | позиций больше `MAX_ITEMS` |
 | `deal:022` | deal.create | `fileContent` больше лимита (~34 МБ base64) |

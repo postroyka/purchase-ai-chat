@@ -90,4 +90,96 @@ final class ProcureProductTest extends TestCase
 		$this->assertSame(7, $res['id']);
 		$this->assertTrue($res['multi']);
 	}
+
+	// ── Батч-поиск findByVendorCodes (#262, рычаг №1) ──────────────────────────
+
+	public function testBatchEmptyListReturnsPrd013(): void
+	{
+		$c = new ProcureProduct();
+		// Список из одних «пустых» элементов → после отсева пусто → prd:013.
+		$this->assertNull($c->findByVendorCodesAction(['', "  \t "]));
+		$this->assertSame(['prd:013'], $c->errorCodes());
+	}
+
+	public function testBatchNonStringElementReturnsPrd012(): void
+	{
+		$c = new ProcureProduct();
+		$this->assertNull($c->findByVendorCodesAction(['OK', 123]));
+		$this->assertContains('prd:012', $c->errorCodes());
+	}
+
+	public function testBatchOverlongElementReturnsPrd011(): void
+	{
+		$c = new ProcureProduct();
+		$this->assertNull($c->findByVendorCodesAction(['OK', str_repeat('A', 65)]));
+		$this->assertContains('prd:011', $c->errorCodes());
+	}
+
+	public function testBatchTooManyReturnsPrd014(): void
+	{
+		$c = new ProcureProduct();
+		$codes = array_map(static fn(int $i): string => 'SKU-' . $i, range(1, 51));
+		$this->assertNull($c->findByVendorCodesAction($codes));
+		$this->assertContains('prd:014', $c->errorCodes());
+	}
+
+	public function testBatchSingleInQueryWithTrimmedDedupedCodes(): void
+	{
+		\CIBlockElement::$resultQueue[] = [
+			['ID' => 7, 'NAME' => 'Болт', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'A'],
+		];
+		$c = new ProcureProduct();
+		// «\tA », «A» — дубликаты после trim; «B» — отдельный.
+		$c->findByVendorCodesAction(["\tA ", 'A', 'B']);
+
+		// Ровно ОДИН запрос (батч), фильтр — IN по уникальным очищенным артикулам.
+		$this->assertCount(1, \CIBlockElement::$calls);
+		$this->assertSame(['A', 'B'], \CIBlockElement::$calls[0]['filter']['=PROPERTY_PURCHASE_ARTICLE']);
+	}
+
+	public function testBatchReturnsListFoundAndNotFound(): void
+	{
+		\CIBlockElement::$resultQueue[] = [
+			['ID' => 7, 'NAME' => 'Болт', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'A'],
+			// для 'B' строки нет → должен попасть как {vendorCode, id:null}
+		];
+		$c = new ProcureProduct();
+		// Список в порядке запроса: [0] = A (найден), [1] = B (не найден).
+		$res = $c->findByVendorCodesAction(['A', 'B']);
+
+		$this->assertSame(['id' => 7, 'name' => 'Болт', 'vendorCode' => 'A'], $res[0]);
+		$this->assertSame(['vendorCode' => 'B', 'id' => null], $res[1]);
+	}
+
+	public function testBatchMultiFlagPerArticlePicksMinId(): void
+	{
+		\CIBlockElement::$resultQueue[] = [
+			['ID' => 7, 'NAME' => 'Болт', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'A'],
+			['ID' => 9, 'NAME' => 'Болт-дубль', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'A'],
+			['ID' => 3, 'NAME' => 'Гайка', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => 'B'],
+		];
+		$c = new ProcureProduct();
+		$res = $c->findByVendorCodesAction(['A', 'B']);
+
+		$this->assertSame(7, $res[0]['id']);   // min id среди дублей A
+		$this->assertTrue($res[0]['multi']);
+		$this->assertSame(3, $res[1]['id']);
+		$this->assertArrayNotHasKey('multi', $res[1]);
+	}
+
+	public function testBatchNumericVendorCodesStayStringsInList(): void
+	{
+		// Числовые артикулы (как 654441/76062224 из реальных тестов): результат —
+		// список объектов, vendorCode остаётся строкой; не найденный — тоже строкой.
+		\CIBlockElement::$resultQueue[] = [
+			['ID' => 7, 'NAME' => 'Шпатлёвка', 'PROPERTY_PURCHASE_ARTICLE_VALUE' => '654441'],
+		];
+		$c = new ProcureProduct();
+		$res = $c->findByVendorCodesAction(['654441', '76062224']);
+
+		$this->assertCount(2, $res);
+		$this->assertSame(['id' => 7, 'name' => 'Шпатлёвка', 'vendorCode' => '654441'], $res[0]);
+		$this->assertSame(['vendorCode' => '76062224', 'id' => null], $res[1]);
+		$this->assertIsString($res[1]['vendorCode']);
+	}
 }
