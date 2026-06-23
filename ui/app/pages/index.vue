@@ -173,13 +173,27 @@
               {{ timingLine(file) }}
             </p>
 
-            <!-- Лог обработки по файлу (#218): что распознал агент / почему без сделки. -->
-            <details v-if="processingLogOf(file)" class="mt-2 text-xs">
-              <summary class="cursor-pointer select-none text-base-500">
-                Лог обработки
-              </summary>
-              <pre class="mt-1 whitespace-pre-wrap break-words text-base-600">{{ processingLogOf(file) }}</pre>
-            </details>
+            <!-- Лог обработки по файлу (#218). Если есть замечания (нет сделки / ошибка) — лог сразу
+                 развёрнут и подсвечен в B24Alert (#251), чтобы было видно, почему так. Чистый успех
+                 (создана сделка) — лог свёрнут под «details», как было: при штатном результате он не нужен. -->
+            <template v-if="processingLogOf(file)">
+              <B24Alert
+                v-if="!fileSucceeded(file)"
+                class="mt-2"
+                :color="file.status === 'error' ? 'air-primary-alert' : 'air-primary-warning'"
+                title="Лог обработки"
+              >
+                <template #description>
+                  <pre class="whitespace-pre-wrap break-words text-xs">{{ processingLogOf(file) }}</pre>
+                </template>
+              </B24Alert>
+              <details v-else class="mt-2 text-xs">
+                <summary class="cursor-pointer select-none text-base-500">
+                  Лог обработки
+                </summary>
+                <pre class="mt-1 whitespace-pre-wrap break-words text-base-600">{{ processingLogOf(file) }}</pre>
+              </details>
+            </template>
 
             <!-- Обратная связь по ЭТОМУ файлу (#182, #218): 👍/👎 + опц. комментарий → GitHub issue.
                  Под каждым файлом свой отзыв; комментарий НЕ обязателен. -->
