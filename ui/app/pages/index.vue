@@ -13,13 +13,14 @@
 
     <template #body>
       <div class="w-full max-w-2xl mx-auto py-6 sm:py-10">
-        <!-- Шапка-герой -->
-        <header class="text-center">
+        <!-- Шапка-герой. Скрываем, пока есть задание (идёт обработка/показан результат) — как и зону
+             загрузки: на экране статуса второй заголовок не нужен, меньше «лишних» заголовков (#ux). -->
+        <header v-if="!job" class="text-center">
           <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight text-base-master">
-            Загрузите прайс-листы
+            Прайс-листы → готовые сделки 🚀
           </h1>
           <p class="mt-3 text-base text-base-600 max-w-md mx-auto">
-            PDF, фото (JPG/PNG), Excel (XLSX/XLS) или Word. Создадим сделки в Bitrix24 автоматически.
+            Загрузите PDF, фото (JPG/PNG), Excel (XLSX/XLS) или Word — сделки в Bitrix24 соберём сами.
           </p>
         </header>
 
@@ -105,8 +106,11 @@
               />
             </div>
 
+            <!-- Прогресс-бар + таймер — только у реально обрабатываемого файла. Файл в очереди
+                 (`pending`) показывает лишь бейдж «Ожидание», без анимации (#ux: «зачем прогресс, если
+                 загрузки ещё нет»). Бэкенд обрабатывает файлы последовательно. -->
             <div
-              v-if="file.status === 'processing' || file.status === 'pending'"
+              v-if="file.status === 'processing'"
               class="mt-3 flex items-center gap-2"
             >
               <B24Progress
@@ -409,21 +413,9 @@ async function openDeal(deal: CreatedDeal): Promise<void> {
   if (deal.url) window.open(deal.url, '_blank', 'noopener')
 }
 
-// Подгонка высоты фрейма под контент внутри Битрикс24 (#ui: меньше скролла, b24jssdk fitWindow).
-// Вне портала (standalone) — no-op (нет родительского фрейма).
-async function fitFrame() {
-  if (!b24.isInit()) return
-  try {
-    await b24.get()?.parent.fitWindow()
-  } catch { /* фрейм не готов / гонка — не критично */ }
-}
-// Перефитить при смене контента: показ/скрытие зоны загрузки, появление/обновление статусов файлов,
-// выбор файлов. nextTick — чтобы DOM обновился до замера высоты. immediate — первичная подгонка.
-watch(
-  () => [!!job.value, job.value?.status, (job.value?.files ?? []).length, uploading.value, polling.value, selectedFiles.value?.length].join(':'),
-  () => { void nextTick(fitFrame) },
-  { immediate: true }
-)
+// Подгонка высоты iframe под контент внутри Битрикс24 (#fitwindow): убирает внутренний скролл/проблему
+// высоты. ResizeObserver внутри сам перефитит на изменения контента; вне портала — no-op. Панель — id="home".
+useFitFrame('home')
 
 // ── API ───────────────────────────────────────────────────────────────────────
 // Backend calls go through useApi (#41/#105 P1): no token in the bundle. In prod the app-session

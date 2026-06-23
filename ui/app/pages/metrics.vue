@@ -16,6 +16,15 @@ definePageMeta({ layout: 'default' })
 
 const { data, error, pending, refresh } = useMetrics()
 
+// Подгонка высоты iframe под контент внутри Битрикс24 (#fitwindow): убирает скролл/проблему высоты.
+// Раньше метрики fitWindow не вызывали вовсе. Панель — id="metrics" (см. <B24DashboardPanel> ниже).
+const { fit } = useFitFrame('metrics')
+// Данные грузятся на клиенте: при их появлении/смене обёртка тела меняется (скелетон → данные) —
+// перефитим, чтобы перецепить ResizeObserver на актуальный контент и подогнать высоту фрейма.
+watch([data, pending, error], () => {
+  void fit()
+})
+
 // ── Russian labels for the breakdown charts ──────────────────────────────────
 const OUTCOME_LABELS: Record<string, string> = {
   ok: 'Успешно',
