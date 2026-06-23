@@ -1,5 +1,5 @@
 .PHONY: dev logs shell-app shell-mcp \
-	prod-up prod-down prod-redeploy prod-pull \
+	prod-up prod-down prod-redeploy prod-pull metrics-reset \
 	init-network init-nginxproxy \
 	deploy-b24 deploy-images ui-smoke check-agent-stdin eval eval-baseline eval-test
 
@@ -75,6 +75,13 @@ prod-redeploy:
 
 prod-pull:
 	$(COMPOSE) pull
+
+# Очистить метрики дашборда (/metrics): удаляет ТОЛЬКО ключи metrics:* в Redis. Журнал заданий,
+# durable-outbox отзывов и захваченные токены приложения (другие префиксы) НЕ трогает. Полезно сбросить
+# накопленное за тестовый прогон. Работает на живом Redis — контейнеры не пересоздаёт.
+metrics-reset:
+	$(COMPOSE) exec -T redis sh -c 'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning --scan --pattern "metrics:*" | xargs -r redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning DEL'
+	@echo "metrics:* очищены"
 
 logs:
 	$(COMPOSE) logs -f
