@@ -29,8 +29,9 @@ const firstObject = (m) => {
  *   • команда (ONIMCOMMANDADD) → data.COMMAND[<COMMAND_ID>] (там же COMMAND/COMMAND_PARAMS/COMMAND_CONTEXT).
  * Контекст диалога/автора всегда в data.PARAMS.{DIALOG_ID, MESSAGE, MESSAGE_ID, FROM_USER_ID, FILES};
  * data.USER.{ID, IS_BOT('Y'/'N') — IS_BOT приходит только в событии сообщения, не в команде};
- * top-level auth.{application_token, client_endpoint}.
- * @returns {{ event:string, applicationToken:string, bot:{id,code,token,restEndpoint}, dialogId:string,
+ * top-level auth.{application_token, access_token, client_endpoint, domain, member_id}.
+ * @returns {{ event:string, applicationToken:string, domain:string, memberId:string,
+ *   bot:{id,code,token,restEndpoint}, dialogId:string,
  *   message:{id,text,files:Array<{id,name,urlDownload}>}, command:{name,params,context}, user:{id,isBot} }}
  */
 export function parseBotEvent(body = {}) {
@@ -68,11 +69,17 @@ export function parseBotEvent(body = {}) {
   return {
     event: s(body.event).toUpperCase(),
     applicationToken: s(topAuth.application_token || authEntry.application_token || innerAuth.application_token),
+    // domain/memberId из top-level auth — для фолбэк-захвата токена из самого события (старый портал не
+    // шлёт ONAPPINSTALL на наш callback): проверяем подлинность через app.info по домену, как при установке.
+    domain: s(topAuth.domain),
+    memberId: s(topAuth.member_id),
     // restEndpoint — база REST портала для обратных вызовов бота (client_endpoint токена бота).
     bot: {
       id: s(authEntry.BOT_ID || botId),
       code: s(authEntry.BOT_CODE || authEntry.code),
-      token: s(authEntry.access_token || innerAuth.access_token),
+      // access_token для ответа: старый портал кладёт его в top-level auth (как payload.auth.access_token),
+      // не всегда в data.BOT[<id>] — поэтому фолбэк на topAuth.access_token (иначе imbot.message.add → NO_AUTH_FOUND).
+      token: s(authEntry.access_token || innerAuth.access_token || topAuth.access_token),
       restEndpoint: s(authEntry.client_endpoint || innerAuth.client_endpoint || topAuth.client_endpoint),
     },
     dialogId: s(params.DIALOG_ID || cmdEntry.DIALOG_ID),

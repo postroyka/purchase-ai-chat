@@ -97,6 +97,28 @@ describe('parseBotEvent (legacy)', () => {
     expect(e.applicationToken).toBe('frombot');
   });
 
+  it('access_token для ответа: фолбэк на top-level auth, если в data.BOT его нет (#241 портал-QA)', () => {
+    // Старый портал кладёт access_token/endpoint в top-level auth, а не в data.BOT[<id>] → иначе ответ
+    // бота уходил без auth (NO_AUTH_FOUND). Берём из topAuth, когда в записи бота токена нет.
+    const e = parseBotEvent({
+      event: 'ONIMBOTMESSAGEADD',
+      auth: { access_token: 'APPTOK', client_endpoint: 'https://p.bitrix24.ru/rest/', application_token: 'a', domain: 'p.bitrix24.ru', member_id: 'm1' },
+      data: { BOT: { 1: { BOT_CODE: 'c' } }, PARAMS: { BOT_ID: '1', DIALOG_ID: 'd', FROM_USER_ID: '5' } },
+    });
+    expect(e.bot.token).toBe('APPTOK');
+    expect(e.bot.restEndpoint).toBe('https://p.bitrix24.ru/rest/');
+    expect(e.domain).toBe('p.bitrix24.ru');   // для фолбэк-захвата токена через app.info
+    expect(e.memberId).toBe('m1');
+  });
+
+  it('access_token: запись бота имеет приоритет над top-level auth, если есть оба', () => {
+    const e = parseBotEvent({
+      event: 'ONIMBOTMESSAGEADD', auth: { access_token: 'TOP' },
+      data: { BOT: { 1: { access_token: 'BOT' } }, PARAMS: { BOT_ID: '1' } },
+    });
+    expect(e.bot.token).toBe('BOT'); // data.BOT[<id>] первичен; top-level — только фолбэк
+  });
+
   it('FILES как объект (qs-массив) — записи без id и без ссылки отфильтрованы', () => {
     const e = parseBotEvent({ event: 'x', data: { PARAMS: { FILES: { 0: { id: '1', name: 'a.pdf' }, 1: { id: '', name: 'b' } } } } });
     expect(e.message.files).toEqual([{ id: '1', name: 'a.pdf', urlDownload: '' }]);
@@ -440,6 +462,44 @@ describe('makeBotApi.downloadAndSaveFiles (legacy)', () => {
   });
 });
 
+// ── makeBotApi.sendMessage: формат запроса к порталу (legacy: auth в query, form-urlencoded) ──────
+describe('makeBotApi.sendMessage (legacy wire format, #241 портал-QA)', () => {
+  const mkSend = () => {
+    let seen;
+    const fetchImpl = vi.fn(async (url, opts) => { seen = { url: String(url), opts }; return { ok: true, json: async () => ({ result: 7 }) }; });
+    const api = makeBotApi({
+      restEndpoint: 'https://p.bitrix24.ru/rest/', uploadDir: fs.mkdtempSync(path.join(os.tmpdir(), 'bot-send-')),
+      allowedExtensions: ['pdf'], maxBytes: 1024, isAllowedHost: () => true, fetchImpl,
+    });
+    return { api, get: () => seen };
+  };
+
+  it('auth в query, тело form-urlencoded, KEYBOARD в PHP-нотации', async () => {
+    const { api, get } = mkSend();
+    const r = await api.sendMessage({ dialogId: 'chat5', text: 'привет', keyboard: { BUTTONS: [{ TEXT: '👍', COMMAND: 'feedback' }] }, botToken: 'TOK', botId: '7' });
+    expect(r).toBe(7);
+    const seen = get();
+    expect(seen.url).toBe('https://p.bitrix24.ru/rest/imbot.message.add?auth=TOK'); // auth в query, как app.info
+    expect(seen.opts.headers['Content-Type']).toBe('application/x-www-form-urlencoded');
+    const body = new URLSearchParams(seen.opts.body);
+    expect(body.get('BOT_ID')).toBe('7');
+    expect(body.get('DIALOG_ID')).toBe('chat5');
+    expect(body.get('MESSAGE')).toBe('привет');
+    expect(body.get('KEYBOARD[BUTTONS][0][TEXT]')).toBe('👍'); // вложенный объект развёрнут
+    expect(body.get('KEYBOARD[BUTTONS][0][COMMAND]')).toBe('feedback');
+  });
+
+  it('текст без клавиатуры — в теле только скаляры, без KEYBOARD', async () => {
+    const { api, get } = mkSend();
+    await api.sendMessage({ dialogId: 'd', text: 'hi', botToken: 'T', botId: '2' });
+    const seen = get();
+    expect(seen.url).toContain('?auth=T');
+    const body = new URLSearchParams(seen.opts.body);
+    expect(body.get('MESSAGE')).toBe('hi');
+    expect([...body.keys()].some((k) => k.startsWith('KEYBOARD'))).toBe(false);
+  });
+});
+
 // ── POST /b24/app/event — захват application_token (#217), не затронут legacy-переключением ───────
 describe('POST /b24/app/event (захват токена + проверка через app.info)', () => {
   const fakeMetrics = () => ({
@@ -532,5 +592,84 @@ describe('POST /b24/app/event (захват токена + проверка че
     expect((await botJoin(app, 'NOPE')).status).toBe(403);
     expect((await botJoin(app, '')).status).toBe(403);          // пустой токен — 403 даже при непустом сторе
     expect((await botJoin(app, '   ')).status).toBe(403);        // пробельный — тоже не «известный»
+  });
+});
+
+// ── POST /b24/bot/event — фолбэк-захват токена из события бота (app.info), когда ONAPPINSTALL не дошёл ──
+describe('POST /b24/bot/event — захват application_token из события (#241 портал-QA)', () => {
+  const fakeMetrics = () => ({
+    recordUpload: vi.fn(async () => {}), recordFeedback: vi.fn(async () => {}),
+    recordFile: vi.fn(() => {}), recordMatching: vi.fn(() => {}), recordWarnings: vi.fn(() => {}),
+  });
+  const until = async (fn, ms = 1000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 10)); }
+    return false;
+  };
+  function appWith(appInfo) {
+    const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-cap-'));
+    const appStore = createAppStore({ redisUrl: '' });
+    const botApi = { sendMessage: vi.fn(async () => {}), downloadAndSaveFiles: vi.fn(async () => ({ jobId: 'j', jobDir: uploadDir, fileEntries: [] })) };
+    // БЕЗ b24BotApplicationToken — проверяем именно захват из события, а не env-фолбэк.
+    const app = createApp({ token: 'T', uploadDir, rateLimitMax: 0, metrics: fakeMetrics(), appStore, appInfo, portalDomains: ['p.bitrix24.by'], botApi });
+    return { app, appStore, botApi };
+  }
+  // legacy-событие бота с top-level auth (domain + access_token + application_token) + бот-блок.
+  const botMsg = (over = {}) => ({
+    event: 'ONIMBOTJOINCHAT',
+    'auth[application_token]': 'CAPME', 'auth[access_token]': 'ACC', 'auth[domain]': 'p.bitrix24.by',
+    'auth[client_endpoint]': 'https://p.bitrix24.by/rest/',
+    'data[BOT][1][access_token]': 'ACC', 'data[PARAMS][DIALOG_ID]': 'chat5', ...over,
+  });
+
+  it('app.info ок + домен в allowlist → токен захвачен, событие проходит (200), обработчик вызван', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app, appStore, botApi } = appWith(appInfo);
+    const res = await request(app).post('/b24/bot/event').type('form').send(botMsg());
+    expect(res.status).toBe(200);
+    expect(await until(() => appStore.isKnownToken('CAPME'))).toBe(true);
+    expect(appInfo).toHaveBeenCalledWith('p.bitrix24.by', 'ACC'); // app.info по access_token события
+    await vi.waitFor(() => expect(botApi.sendMessage).toHaveBeenCalled()); // join → приветствие
+    // повторное событие идёт быстрым путём по стору — без нового app.info
+    appInfo.mockClear();
+    await request(app).post('/b24/bot/event').type('form').send(botMsg());
+    expect(appInfo).not.toHaveBeenCalled();
+  });
+
+  it('app.info вернул false → 403, токен НЕ захвачен', async () => {
+    const appInfo = vi.fn(async () => false);
+    const { app, appStore } = appWith(appInfo);
+    const res = await request(app).post('/b24/bot/event').type('form').send(botMsg());
+    expect(res.status).toBe(403);
+    expect(await appStore.isKnownToken('CAPME')).toBe(false);
+  });
+
+  it('домен НЕ в allowlist → 403, app.info не вызывается (SSRF-гард)', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app, appStore } = appWith(appInfo);
+    const res = await request(app).post('/b24/bot/event').type('form')
+      .send(botMsg({ 'auth[domain]': 'evil.example.com', 'auth[client_endpoint]': 'https://evil.example.com/rest/' }));
+    expect(res.status).toBe(403);
+    expect(appInfo).not.toHaveBeenCalled();
+    expect(await appStore.isKnownToken('CAPME')).toBe(false);
+  });
+
+  it('пустой access_token события → app.info не вызывается, 403, не захвачен (гард evt.bot.token)', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app, appStore } = appWith(appInfo);
+    const res = await request(app).post('/b24/bot/event').type('form')
+      .send(botMsg({ 'auth[access_token]': '', 'data[BOT][1][access_token]': '' }));
+    expect(res.status).toBe(403);
+    expect(appInfo).not.toHaveBeenCalled(); // нет токена для app.info → не бьёмся в портал
+    expect(await appStore.isKnownToken('CAPME')).toBe(false);
+  });
+
+  it('слишком длинный access_token (>4096) → app.info не вызывается, 403', async () => {
+    const appInfo = vi.fn(async () => true);
+    const { app } = appWith(appInfo);
+    const res = await request(app).post('/b24/bot/event').type('form')
+      .send(botMsg({ 'auth[access_token]': 'x'.repeat(4097), 'data[BOT][1][access_token]': 'x'.repeat(4097) }));
+    expect(res.status).toBe(403);
+    expect(appInfo).not.toHaveBeenCalled();
   });
 });

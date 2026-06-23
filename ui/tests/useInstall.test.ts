@@ -29,6 +29,9 @@ beforeEach(() => {
   })
   vi.stubGlobal('onUnmounted', () => {})
   vi.stubGlobal('useB24', () => b24)
+  // Аватар бота в registerInvoiceBot — fire-and-forget fetch('/botavatar.png'); глушим (ok:false →
+  // без imbot.update), чтобы тесты установки не били в сеть и не считали лишний вызов make.
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })))
 })
 
 /** Прогнать микрозадачи, чтобы доехали await'ы внутри finishInstall (бот → команда → ensureSchema

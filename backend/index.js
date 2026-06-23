@@ -812,7 +812,25 @@ export function createApp(config = {}) {
   app.post('/b24/bot/event', b24BotRateLimit, express.urlencoded({ extended: true, limit: '64kb' }), async (req, res) => {
     const evt = parseBotEvent(req.body ?? {});
     const envOk = Boolean(b24BotAppToken) && safeCompare(evt.applicationToken, b24BotAppToken);
-    const valid = Boolean(evt.applicationToken) && (envOk || await appStore.isKnownToken(evt.applicationToken));
+    let valid = Boolean(evt.applicationToken) && (envOk || await appStore.isKnownToken(evt.applicationToken));
+    // Фолбэк-захват токена (#241, портал-QA): старый портал НЕ шлёт ONAPPINSTALL на /b24/app/event (и его
+    // нельзя «подписать» — он срабатывает в момент установки), поэтому application_token нечем засеять.
+    // Берём его из ПЕРВОГО подлинного события бота: подлинность проверяем тем же механизмом, что
+    // /session/b24 и установка — домен в allowlist + app.info по access_token события. Только после
+    // подтверждения портала СОХРАНЯЕМ токен (дальше события идут быстрым путём по стору, без app.info).
+    if (!valid && evt.applicationToken && evt.bot.token && evt.bot.token.length <= 4096) {
+      const host = normalizeDomain(evt.domain) || normalizeDomain(evt.bot.restEndpoint);
+      if (host && domainAllowed(host, portalDomains)) {
+        let ok = false;
+        try { ok = await appInfoImpl(host, evt.bot.token); }
+        catch (e) { console.warn(`[b24bot] app.info failed for ${host}: ${redactAuthId(e?.message ?? e)}`); }
+        if (ok) {
+          await appStore.recordInstall({ memberId: evt.memberId || host, applicationToken: evt.applicationToken, domain: host });
+          console.log(`[b24bot] application_token захвачен из события бота (${host})`);
+          valid = true;
+        }
+      }
+    }
     if (!valid) {
       return res.status(403).json({ error: 'invalid application_token' });
     }
@@ -827,7 +845,10 @@ export function createApp(config = {}) {
     if (process.env.B24_BOT_DEBUG !== 'false') {
       try {
         const p = (req.body && req.body.data && req.body.data.PARAMS) || {};
-        console.log(`[b24bot] ${evt.event} files: ${JSON.stringify({ MESSAGE: p.MESSAGE, FILES: p.FILES }).slice(0, 2000)}`);
+        // bot: id/endpoint (не секрет) + hasToken (булево) — чтобы на портал-QA видеть, что access_token
+        // для ответа распарсился (пустой → imbot.message.add даст NO_AUTH_FOUND).
+        const bot = { id: evt.bot.id, endpoint: evt.bot.restEndpoint, hasToken: Boolean(evt.bot.token) };
+        console.log(`[b24bot] ${evt.event} files: ${JSON.stringify({ MESSAGE: p.MESSAGE, FILES: p.FILES }).slice(0, 1500)} bot:${JSON.stringify(bot)}`);
       } catch { /* ignore */ }
     }
     const api = config.botApi ?? makeBotApi({
