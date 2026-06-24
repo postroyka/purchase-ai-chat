@@ -45,6 +45,21 @@ const DEFAULT_FILE_BUDGET_MS = 2 * DEFAULT_TIMEOUT_MS;
 // to flush output and exit cleanly before we force-kill.
 const SIGKILL_GRACE_MS = 5_000;
 
+// #105 (P2): строгий allowlist инструментов агента — принцип наименьших привилегий. Агенту нужны
+// ТОЛЬКО Read + наши MCP-инструменты (b24_pst_crm_*). Allowlist (а не только denylist ниже) гарантирует,
+// что НОВЫЕ встроенные инструменты будущих версий CLI не окажутся доступны по умолчанию для агента,
+// работающего с НЕДОВЕРЕННЫМ содержимым файла. Имя MCP-сервера фиксировано (см. buildMcpConfig) →
+// в allowlist инструменты адресуются как `mcp__<server>__<tool>`. denylist оставлен как defence-in-depth.
+export const MCP_SERVER_NAME = 'procure-ai';
+export const AGENT_MCP_TOOLS = [
+  'b24_pst_crm_find_supplier',
+  'b24_pst_crm_find_contract',
+  'b24_pst_crm_find_product',
+  'b24_pst_crm_find_products',
+  'b24_pst_crm_create_deal',
+];
+const DEFAULT_ALLOWED_TOOLS = ['Read', ...AGENT_MCP_TOOLS.map((t) => `mcp__${MCP_SERVER_NAME}__${t}`)].join(',');
+
 // Bounded retry for TRANSIENT provider failures (HTTP 429 / 5xx / network blip). The LLM
 // provider is a single point of failure (issue #104): a short backoff rides out throttling
 // and momentary outages without an operator re-uploading the invoice by hand. Permanent
@@ -111,6 +126,7 @@ const AGENT_ENV_KEYS = [
  *   mcpToken?: string,
  *   model?: string,
  *   timeoutMs?: number,
+ *   allowedTools?: string,
  *   fileBudgetMs?: number,
  *   maxAttempts?: number,
  *   retryBaseMs?: number,
@@ -149,6 +165,9 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const retryBaseMs = Math.max(0, toNum(config.retryBaseMs, process.env.AGENT_RETRY_BASE_MS, DEFAULT_RETRY_BASE_MS));
   const retryMaxMs = Math.max(retryBaseMs, toNum(config.retryMaxMs, process.env.AGENT_RETRY_MAX_MS, DEFAULT_RETRY_MAX_MS));
   const jobId = config.jobId ?? null;
+  // #105 (P2): allowlist инструментов (см. DEFAULT_ALLOWED_TOOLS). Настраиваемо через
+  // AGENT_ALLOWED_TOOLS на случай, если в окружении другое имя MCP-сервера/набор инструментов.
+  const allowedTools = config.allowedTools ?? process.env.AGENT_ALLOWED_TOOLS ?? DEFAULT_ALLOWED_TOOLS;
   const spawnFn = config.spawnFn ?? spawn;
   const extractFn = config.extractFn ?? extractDocumentText;
   const sleepFn = config.sleepFn ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -248,6 +267,7 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
           mcpConfigPath,
           cwd,
           timeoutMs: attemptTimeoutMs,
+          allowedTools,
           jobId,
         });
         if (attempt > 1) console.log(`${tag} succeeded on attempt ${attempt}/${maxAttempts}`);
@@ -311,7 +331,7 @@ export function buildMcpConfig(mcpUrl, mcpToken) {
   if (mcpToken) {
     server.headers = { Authorization: `Bearer ${mcpToken}` };
   }
-  return { mcpServers: { 'procure-ai': server } };
+  return { mcpServers: { [MCP_SERVER_NAME]: server } };
 }
 
 /**
@@ -445,7 +465,7 @@ function extractCmdShimTarget(cmdPath) {
 
 function spawnClaude({
   spawnFn, claudeBin, model, systemPrompt, userMessage,
-  mcpConfigPath, cwd, timeoutMs, jobId,
+  mcpConfigPath, cwd, timeoutMs, allowedTools, jobId,
 }) {
   const tag = jobId ? `[agent job=${jobId}]` : '[agent]';
 
@@ -461,6 +481,11 @@ function spawnClaude({
       // so an injected instruction can't shell out, tamper with files, or exfiltrate.
       // Deny rules are honoured even under --dangerously-skip-permissions. Placed before a
       // boolean flag so the variadic list never swallows the trailing user message.
+      // #105 (P2): строгий allowlist — агенту доступны ТОЛЬКО Read + наши b24_pst_crm_* MCP-инструменты.
+      // Новые встроенные инструменты будущих версий CLI НЕ попадут к агенту по умолчанию.
+      '--allowedTools', allowedTools,
+      // defence-in-depth поверх allowlist: явный деби опасных инструментов (deny приоритетнее allow,
+      // honoured даже под --dangerously-skip-permissions).
       '--disallowedTools', 'Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch',
       // Required so the agent can read uploaded files without interactive prompts.
       // Mitigated by: container runs as non-root, uploads are in a dedicated directory,
