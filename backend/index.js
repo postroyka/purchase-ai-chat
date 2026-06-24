@@ -1033,7 +1033,7 @@ export async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
     // работой (≳20 позиций / трения) частые, а note уникальна per-file → дедуп не ловит → issue почти на
     // КАЖДЫЙ файл + выжигание общего hourly-cap (глушит реальные problem/suggestion). Поэтому perf НЕ
     // заводит GitHub-issue: идёт в метрику (счётчик «Скорость») + строку лога (греп `[perf-diag]`); оператору
-    // показывается в UI под таймингами (читается из result.feedback напрямую, при SHOW_TIMINGS, #294).
+    // показывается в UI всегда (читается из result.feedback напрямую, свёрнутый блок, не зависит от SHOW_TIMINGS, #294).
     // redactToken — на всякий случай (note по промпту и так без документа/секретов).
     if (kind === 'perf') {
       // note — недоверенный вывод модели (она читает недоверенный документ). Санитизируем лог-строку
