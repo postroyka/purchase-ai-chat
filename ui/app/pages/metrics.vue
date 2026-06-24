@@ -66,6 +66,7 @@ const FEEDBACK_KIND_LABELS: Record<string, string> = {
   positive: '👍 Хорошо',
   problem: '👎 Проблема',
   suggestion: '💡 Предложение',
+  perf: '⏱ Скорость',
   other: 'Прочее'
 }
 // Non-terminal agent quality signals (issue #182, channel «агент»).

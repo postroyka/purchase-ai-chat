@@ -4,7 +4,7 @@ import request from 'supertest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createApp, classifyAgentError, classifySpeed } from '../index.js';
+import { createApp, classifyAgentError, classifySpeed, reportAgentFeedback } from '../index.js';
 import { createMetrics } from '../metrics.js';
 
 vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -337,6 +337,31 @@ describe('classifySpeed (#замеры — пороги быстро/медле�
     expect(classifySpeed(-1, 45000, 90000)).toBeNull();
     expect(classifySpeed(null, 45000, 90000)).toBeNull();
     expect(classifySpeed(Number.NaN, 45000, 90000)).toBeNull();
+  });
+});
+
+describe('reportAgentFeedback — perf без GitHub-issue (#279)', () => {
+  const mkMetrics = () => ({ recordFeedback: vi.fn(() => Promise.resolve()) });
+  const mkReporter = () => ({ report: vi.fn(() => Promise.resolve({ created: true })) });
+
+  it('perf: метрика записана, но report() (GitHub-issue) НЕ вызван', async () => {
+    const metrics = mkMetrics(); const reporter = mkReporter();
+    await reportAgentFeedback(
+      { feedback: [{ kind: 'perf', note: 'Долго на таблице 25 позиций' }] },
+      reporter, metrics, { jobId: 'j1' },
+    );
+    expect(metrics.recordFeedback).toHaveBeenCalledWith({ source: 'agent', kind: 'perf' });
+    expect(reporter.report).not.toHaveBeenCalled();
+  });
+
+  it('problem/suggestion: report() вызывается как обычно', async () => {
+    const metrics = mkMetrics(); const reporter = mkReporter();
+    await reportAgentFeedback(
+      { feedback: [{ kind: 'problem', tool: 't', note: 'инструмент неоднозначен' }] },
+      reporter, metrics, { jobId: 'j2' },
+    );
+    expect(metrics.recordFeedback).toHaveBeenCalledWith({ source: 'agent', kind: 'problem' });
+    expect(reporter.report).toHaveBeenCalledTimes(1);
   });
 });
 

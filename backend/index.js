@@ -13,7 +13,7 @@ import { createNbrbRate } from './nbrb-rate.js';
 import { startUploadsCleanup } from './uploads-cleanup.js';
 import { runAgent, redactToken } from './agent-runner.js';
 import { createSessionAuth, parseCookies, domainAllowed, normalizeDomain, defaultAppInfo, redactAuthId } from './auth.js';
-import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy } from './feedback.js';
+import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy, sanitizeComment } from './feedback.js';
 import { createAgentFeedbackReporter } from './agent-feedback.js';
 import { createFeedbackOutbox } from './feedback-outbox.js';
 import { parseBotEvent, parseAppEvent, handleBotEvent } from './b24-bot.js';
@@ -789,8 +789,11 @@ export function createApp(config = {}) {
   // (small body) → handler. Mounted BEFORE the static catch-all so the SPA route doesn't shadow it.
   app.post('/feedback', requireAuth, requireFeedbackConfigured, feedbackRateLimit, express.json({ limit: '32kb' }), async (req, res) => {
     const body = req.body ?? {};
+    // perf — agent-only (#279): диагностика скорости идёт через result.feedback[] агента, а не виджет
+    // сотрудника. `normalizeKind` принимает perf глобально (нужно для канала агента), поэтому здесь
+    // user-канал явно его отсекает — инвариант «виджет = подмножество (positive/problem/suggestion)».
     const kind = normalizeKind(body.kind);
-    if (!kind) {
+    if (!kind || kind === 'perf') {
       return res.status(400).json({ error: 'kind must be one of: positive, problem, suggestion' });
     }
     // Комментарий НЕ обязателен (#218): достаточно оценки 👍/👎. Пустой текст → issue с «(без текста)».
@@ -1004,7 +1007,7 @@ export function problemMessage(result) {
 // issue #182 channel «агент»): count each by kind in metrics and hand it to the deduping reporter,
 // which decides whether to open a GitHub issue. Bounded (≤10/file) against a prompt-injected document
 // trying to spam, and fully best-effort — a feedback hiccup must never fail or noticeably delay a job.
-async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
+export async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
   const list = Array.isArray(result?.feedback) ? result.feedback.slice(0, 10) : [];
   for (const fb of list) {
     if (!fb || typeof fb !== 'object') continue;
@@ -1015,6 +1018,20 @@ async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
     const kind = normalizeKind(typeof fb.kind === 'string' ? fb.kind : '') ?? 'problem';
     const tool = typeof fb.tool === 'string' ? fb.tool : '';
     metrics?.recordFeedback({ source: 'agent', kind })?.catch(() => {});
+    // perf (#279): диагностика скорости — агрегатный сигнал, НЕ задача-трекер. На проде почти каждый
+    // файл «медленный» (≳15 позиций, ~100с), а note уникальна per-file → дедуп не ловит → issue почти на
+    // КАЖДЫЙ файл + выжигание общего hourly-cap (глушит реальные problem/suggestion). Поэтому perf идёт
+    // ТОЛЬКО в метрику (счётчик «Скорость») + строку лога (содержимое для разбора, греп `[perf-diag]`),
+    // БЕЗ GitHub-issue. redactToken — на всякий случай (note по промпту и так без документа/секретов).
+    if (kind === 'perf') {
+      // note — недоверенный вывод модели (она читает недоверенный документ). Санитизируем лог-строку
+      // НЕ слабее issue-пути: sanitizeComment → stripHostileChars (убирает ANSI/bidi/zero-width — защита
+      // от лог-инъекции), затем redactToken (Bearer), схлопывание пробелов и усечение. ПДн из документа в
+      // note промптом запрещены, но это доп. страховка для plaintext docker logs.
+      const safe = redactToken(sanitizeComment(note)).replace(/\s+/g, ' ').slice(0, 600);
+      console.log(`[perf-diag] job=${ctx?.jobId ?? '?'} ${safe}`);
+      continue;
+    }
     try {
       await agentFeedback?.report({ kind, tool, note, context: ctx });
     } catch { /* reporter is best-effort and already swallows; guard anyway */ }

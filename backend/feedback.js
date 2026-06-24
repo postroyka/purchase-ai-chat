@@ -18,16 +18,18 @@
 
 const GITHUB_API = 'https://api.github.com';
 
-// Канонические типы отзыва → метка/эмодзи. Все три валидны end-to-end (канал агента шлёт и suggestion);
+// Канонические типы отзыва → метка/эмодзи. Все валидны end-to-end (канал агента шлёт и suggestion, и perf);
 // при этом ВИДЖЕТ сотрудника намеренно предлагает только 👍/👎 (#218) — это подмножество, не рассинхрон.
+// `perf` (#279) — agent-only: диагностика скорости на медленных файлах (агент сам сообщает, что замедлило).
 export const FEEDBACK_KINDS = {
   positive: '👍 Хорошо',
   problem: '👎 Проблема',
   suggestion: '💡 Предложение',
+  perf: '⏱ Скорость',
 };
 
 // Слова типов БЕЗ эмодзи — для заголовков GitHub-issue (#219). Эмодзи остаётся только в FEEDBACK_KINDS.
-const FEEDBACK_KIND_WORDS = { positive: 'Хорошо', problem: 'Проблема', suggestion: 'Предложение' };
+const FEEDBACK_KIND_WORDS = { positive: 'Хорошо', problem: 'Проблема', suggestion: 'Предложение', perf: 'Скорость' };
 
 // Caps. The comment is the only large free-text field; 5000 chars is generous for a feedback note
 // and well under any GitHub body limit. Title/context values are short by construction.

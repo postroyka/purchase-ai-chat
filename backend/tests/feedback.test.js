@@ -82,10 +82,11 @@ describe('feedback sanitisation', () => {
     expect(out).toContain('[truncated to 5000 characters]');
   });
 
-  it('normalizeKind accepts only the three canonical kinds', () => {
+  it('normalizeKind accepts only the canonical kinds (incl. perf, #279)', () => {
     expect(normalizeKind('positive')).toBe('positive');
     expect(normalizeKind('problem')).toBe('problem');
     expect(normalizeKind('suggestion')).toBe('suggestion');
+    expect(normalizeKind('perf')).toBe('perf'); // #279 — диагностика скорости (канал агента)
     expect(normalizeKind('bug')).toBeNull();
     expect(normalizeKind('__proto__')).toBeNull();
     expect(normalizeKind(undefined)).toBeNull();
@@ -357,6 +358,18 @@ describe('buildAgentFeedbackIssue', () => {
     expect(labels).toEqual(['agent-feedback', 'feedback:suggestion']);
   });
 
+  it('builds a perf-feedback issue (#279 — диагностика скорости)', () => {
+    const { title, labels, kind } = buildAgentFeedbackIssue({
+      kind: 'perf',
+      note: 'Долго разбирал таблицу 25 позиций',
+      context: { jobId: 'job-9' },
+    });
+    expect(kind).toBe('perf');
+    expect(labels).toEqual(['agent-feedback', 'feedback:perf']);
+    expect(title).toContain('Скорость');                      // слово типа без эмодзи (#219)
+    expect(title).not.toMatch(/[👍👎💡⏱]/u);
+  });
+
   it('defaults an unknown kind to problem and drops a malformed tool name', () => {
     const { title, labels } = buildAgentFeedbackIssue({ kind: 'nonsense', tool: 'bad tool!', note: 'x' });
     expect(labels).toEqual(['agent-feedback', 'feedback:problem']);
@@ -423,6 +436,14 @@ describe('POST /feedback', () => {
     expect(payload.body).toContain('job-abc');
     expect(payload.body).toContain('#99');
     expect(payload.body).toContain('api-token'); // reporter for a Bearer caller
+  });
+
+  it('rejects agent-only kind perf from the user channel with 400 (#279)', async () => {
+    const res = await request(appWith())
+      .post('/feedback')
+      .set('Authorization', `Bearer ${TOKEN}`)
+      .send({ kind: 'perf', comment: 'x' });
+    expect(res.status).toBe(400); // виджет = подмножество positive/problem/suggestion; perf — agent-only
   });
 
   it('accepts an app session cookie + X-PAI-Auth (in-browser UI)', async () => {
@@ -651,7 +672,7 @@ describe('POST /feedback', () => {
 
 // Keep FEEDBACK_KINDS in lockstep with the UI widget's options.
 describe('FEEDBACK_KINDS contract', () => {
-  it('exposes exactly positive/problem/suggestion', () => {
-    expect(Object.keys(FEEDBACK_KINDS).sort()).toEqual(['positive', 'problem', 'suggestion']);
+  it('exposes exactly positive/problem/suggestion/perf', () => {
+    expect(Object.keys(FEEDBACK_KINDS).sort()).toEqual(['perf', 'positive', 'problem', 'suggestion']);
   });
 });
