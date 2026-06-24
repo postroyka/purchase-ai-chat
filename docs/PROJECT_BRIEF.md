@@ -72,7 +72,7 @@ procure-ai/
 │   ├── agent-runner.js             #   spawn Claude Code CLI, MCP-конфиг, таймаут, парсинг ответа
 │   ├── extract-text.js             #   файл→текст: pdftotext/OCR (poppler+tesseract); office→doc_to_text.py
 │   └── doc_to_text.py              #   xlsx/xls/docx → текст (openpyxl/xlrd/python-docx)
-├── mcp/                            # MCP-сервер: find_supplier / find_contract / find_product / create_deal
+├── mcp/                            # MCP-сервер: find_supplier / find_contract / find_product(s) / create_deal
 ├── mcp-overlay/                    # PST-инструменты (b24_pst_crm_*), накладываются поверх mcp/ при сборке
 ├── b24-controller/                 # PHP REST-контроллеры shef:purchase.api.procure* (деплой make deploy-b24)
 ├── ui/                             # templates-dashboard + UI Kit: загрузка + пофайловый отчёт

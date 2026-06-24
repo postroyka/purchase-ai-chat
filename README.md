@@ -18,6 +18,7 @@ UI (Nuxt SPA) ──upload/poll──▶ backend (Express, :3000) ──Claude C
                                                                           b24_pst_crm_find_supplier
                                                                           b24_pst_crm_find_contract
                                                                           b24_pst_crm_find_product
+                                                                          b24_pst_crm_find_products
                                                                           b24_pst_crm_create_deal
                                       ▲
                                       │
@@ -27,7 +28,7 @@ UI (Nuxt SPA) ──upload/poll──▶ backend (Express, :3000) ──Claude C
 - **Dev**: Nuxt dev-server на `:3001`, backend на `:3000`. devProxy в nuxt.config.ts перенаправляет `/upload`, `/job`, `/health`, `/metrics/data` на backend.
 - **Prod**: Nuxt собирается в статику (`ui/.output/public/`); в образе она копируется в `ui/public/`, откуда Express раздаёт её через `express.static` — один процесс, один порт `:3000`.
 - MCP не публикует порт наружу — доступен только внутри Docker-сети (`http://mcp:3000/mcp`).
-- **MCP — слой интеграций с учётной системой.** Ядро разбора обращается к ней **только** через 4 MCP-инструмента (`b24_pst_crm_*`); сменить учётную систему = поменять только MCP-слой (1С УТ — [docs/1C_UT_INTEGRATION.md](docs/1C_UT_INTEGRATION.md)).
+- **MCP — слой интеграций с учётной системой.** Ядро разбора обращается к ней **только** через MCP-инструменты `b24_pst_crm_*` (поиск поставщика по УНП, договора, товара по артикулу — поштучно `find_product` и батчем `find_products`, создание сделки); сменить учётную систему = поменять только MCP-слой (1С УТ — [docs/1C_UT_INTEGRATION.md](docs/1C_UT_INTEGRATION.md)).
 - **Bitrix24 (текущий бэкенд интеграции)**: через входящий вебхук + PHP-модуль `shef.purchase` (REST-контроллеры `procure*.php`). Подключается как **локальное приложение** (пункт в левом меню портала). При первом открытии Битрикс24 показывает страницу установки (`ui/app/pages/install.vue`), которая подтверждает установку вызовом `installFinish()` — **без донастройки портала**. Кастом-поля сделки страница установки заводит **автоматически** (#176): идемпотентный REST-метод `procureinstall.ensureSchema` (`UF_CRM_DEAL_SH_PRCHS_AI_FILE` — файл документа, `UF_CRM_DEAL_DOGOVOR` — договор) вызывается из `/install` (scope `crm`) до `installFinish`, итог показывается на экране «Готово»; каталог, воронку «Закупки» и реквизит `RQ_INN` метод не создаёт молча, а отдаёт чек-листом. Регистрация — [`docs/BITRIX24_APP_SETUP.md`](./docs/BITRIX24_APP_SETUP.md); поля и детали — [`b24-controller/README.md`](./b24-controller/README.md).
 
 ## Быстрый старт
