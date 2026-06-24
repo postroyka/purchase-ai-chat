@@ -46,7 +46,7 @@ export function plural(n: number, forms: [string, string, string]): string {
 // Извлечение: МЕТОД (ocr/pdftotext/office) + точное ВРЕМЯ (`extractMs`, мерится вокруг extractFn —
 //   #203.2). Время показываем ТОЛЬКО при наличии метода (время без метки бессмысленно; backend шлёт оба).
 export function timingLine(
-  file: { durationMs?: number | null, agentMs?: number | null, agentTurns?: number | null, extractMethod?: string | null, extractMs?: number | null, speed?: string | null }
+  file: { durationMs?: number | null, agentMs?: number | null, agentTurns?: number | null, toolMs?: number | null, extractMethod?: string | null, extractMs?: number | null, speed?: string | null }
 ): string {
   if (file.durationMs == null) return ''
   let s = `⏱ всего ${humanMs(file.durationMs)}`
@@ -57,6 +57,9 @@ export function timingLine(
   if (file.agentMs != null) {
     s += ` · агент ${humanMs(file.agentMs)}`
     if (file.agentTurns != null) s += ` (${file.agentTurns} ${plural(file.agentTurns, ['ход', 'хода', 'ходов'])})`
+    // toolMs (#262 Шаг 2): сколько из времени агента ушло на инструменты (≈ ожидание REST к Bitrix24),
+    // остальное — «думание» модели. Показываем только когда заметно (≥100 мс), чтобы не шуметь.
+    if (file.toolMs != null && file.toolMs >= 100) s += ` (из них инструменты ${humanMs(file.toolMs)})`
   }
   if (file.extractMethod) s += ` · извлечение: ${file.extractMethod}${file.extractMs != null ? ` ${humanMs(file.extractMs)}` : ''}`
   return s

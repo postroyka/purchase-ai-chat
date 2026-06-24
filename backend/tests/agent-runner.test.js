@@ -568,6 +568,43 @@ describe('runAgent — transient retry (#104)', () => {
     expect(metaFail.extractMethod).toBeNull();
   });
 
+  // toolMs (#262 Шаг 2): время агента в инструментах = duration_ms − duration_api_ms.
+  const wrapWithDurations = (durMs, apiMs) => JSON.stringify({
+    type: 'result', subtype: 'success', is_error: false,
+    result: JSON.stringify(VALID_DEAL_RESULT), session_id: 's', num_turns: 5,
+    ...(durMs != null ? { duration_ms: durMs } : {}),
+    ...(apiMs != null ? { duration_api_ms: apiMs } : {}),
+  });
+
+  it('onMeta.toolMs = duration_ms − duration_api_ms когда обёртка отдала оба поля', async () => {
+    const onMeta = vi.fn();
+    await runAgent('/f.pdf', '20', {
+      ...RETRY_CONFIG, onMeta,
+      spawnFn: makeSequencedSpawn([{ stdout: wrapWithDurations(48000, 31000) }]),
+    });
+    const meta = onMeta.mock.calls[0][0];
+    expect(meta.agentDurationMs).toBe(48000);
+    expect(meta.toolMs).toBe(17000); // 48000 − 31000
+  });
+
+  it('onMeta.toolMs = null если обёртка не отдала duration_api_ms', async () => {
+    const onMeta = vi.fn();
+    await runAgent('/f.pdf', '20', {
+      ...RETRY_CONFIG, onMeta,
+      spawnFn: makeSequencedSpawn([{ stdout: wrapWithDurations(48000, null) }]),
+    });
+    expect(onMeta.mock.calls[0][0].toolMs).toBeNull();
+  });
+
+  it('onMeta.toolMs клампится в ≥0 при api > total (рассинхрон полей)', async () => {
+    const onMeta = vi.fn();
+    await runAgent('/f.pdf', '20', {
+      ...RETRY_CONFIG, onMeta,
+      spawnFn: makeSequencedSpawn([{ stdout: wrapWithDurations(1000, 5000) }]),
+    });
+    expect(onMeta.mock.calls[0][0].toolMs).toBe(0);
+  });
+
   it('clamps backoff to retryMaxMs and applies 50–100% jitter', async () => {
     const sleepFn = vi.fn(async () => {});
     const spawnFn = makeSequencedSpawn([

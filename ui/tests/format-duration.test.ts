@@ -59,6 +59,20 @@ describe('format-duration (#замеры)', () => {
       .toBe('⏱ всего 5.0 с')
   })
 
+  it('timingLine: toolMs — «(из них инструменты …)» внутри секции агента (#262 Шаг 2)', () => {
+    expect(timingLine({ durationMs: 48500, agentMs: 44200, agentTurns: 12, toolMs: 17000 }))
+      .toBe('⏱ всего 48.5 с · агент 44.2 с (12 ходов) (из них инструменты 17.0 с)')
+    // без agentMs (null) — секции агента нет → и toolMs не показываем
+    expect(timingLine({ durationMs: 5000, agentMs: null, toolMs: 4000 }))
+      .toBe('⏱ всего 5.0 с')
+    // toolMs мал (<100 мс) — не шумим
+    expect(timingLine({ durationMs: 48500, agentMs: 44200, toolMs: 40 }))
+      .toBe('⏱ всего 48.5 с · агент 44.2 с')
+    // toolMs null — секции нет
+    expect(timingLine({ durationMs: 48500, agentMs: 44200, toolMs: null }))
+      .toBe('⏱ всего 48.5 с · агент 44.2 с')
+  })
+
   it('plural: русское склонение ход/хода/ходов', () => {
     expect([1, 21, 101].map(n => plural(n, ['ход', 'хода', 'ходов']))).toEqual(['ход', 'ход', 'ход'])
     expect([2, 3, 4, 22, 34].map(n => plural(n, ['ход', 'хода', 'ходов']))).toEqual(['хода', 'хода', 'хода', 'хода', 'хода'])
