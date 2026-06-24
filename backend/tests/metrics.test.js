@@ -156,6 +156,14 @@ describe('metrics — agent signals & feedback (#182)', () => {
     expect(s.warnings.find((w) => w.name === 'totally_made_up')).toBeFalsy();      // never stored verbatim
   });
 
+  it('#269: contract_substituted — известный код, не схлопывается в "other"', async () => {
+    const m = mem();
+    await m.recordWarnings(['contract_substituted', 'contract_substituted']);
+    const s = await m.snapshot();
+    expect(s.warnings).toContainEqual({ name: 'contract_substituted', count: 2 });
+    expect(s.warnings.find((w) => w.name === 'other')).toBeFalsy();
+  });
+
   it('is best-effort on warnings: ignores non-array / non-string entries', async () => {
     const m = mem();
     await expect(m.recordWarnings('nope')).resolves.toBeUndefined();
