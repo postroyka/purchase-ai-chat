@@ -1137,14 +1137,19 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       // issue #192: surface a human-readable reason when no deal was created, so the result page shows
       // WHY instead of a bare green "Готово". Status stays 'done' — it was processed.
       fileEntry.problem = hasDeal ? null : problemMessage(result).slice(0, MAX_ERROR_CHARS);
-      // Count recognised line items + those missing a supplier article (vendorCode) for the
-      // savings estimate (#75). Items are present even when the deal couldn't be created
-      // (e.g. tool_unavailable) — the recognition/matching work was still done.
+      // Recognised line items + positions WITHOUT a supplier article — for the savings/loss estimate
+      // (#75). После #258 позиции без артикула в items[] НЕ попадают, поэтому считать их по items[]
+      // (как было) даёт всегда 0 и ИНВЕРТИРУЕТ метрику потери (#264). Берём СТРУКТУРНЫЙ счётчик от
+      // агента: matching.itemsWithoutArticle (он же эмитит warning items_without_article и перечисляет
+      // их в processingLog). Фолбэк — старый подсчёт по items[] (на случай старого ответа без поля).
       const items = Array.isArray(result?.items) ? result.items : [];
-      const positionsNoArticle = items.filter((it) => {
-        const vc = it && typeof it === 'object' ? it.vendorCode : null;
-        return vc == null || String(vc).trim() === '';
-      }).length;
+      const reportedNoArticle = Number(result?.matching?.itemsWithoutArticle);
+      const positionsNoArticle = Number.isFinite(reportedNoArticle) && reportedNoArticle >= 0
+        ? Math.trunc(reportedNoArticle)
+        : items.filter((it) => {
+            const vc = it && typeof it === 'object' ? it.vendorCode : null;
+            return vc == null || String(vc).trim() === '';
+          }).length;
       // Тайминги (#замеры): полное время файла и время агента — для лога на странице (НЕ в метрики).
       const durationMs = Date.now() - startedAt;
       fileEntry.durationMs = durationMs;
