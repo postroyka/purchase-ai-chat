@@ -98,14 +98,15 @@ describe('b24_pst_crm_create_deal', () => {
       ...baseInput,
       filePath: pdfPath,
       items: [
-        { name: 'Кабель', priceExclVat: 12.991, quantity: 3 },  // вниз
-        { name: 'Болт', priceExclVat: 5.999, quantity: 2 },     // вверх (→6.00)
-        { name: 'Гайка', priceExclVat: 12.995, quantity: 1 },   // граница x.005 → 13 (как и PHP round)
+        { name: 'Кабель', priceExclVat: 12.991, quantity: 3.005 },  // вниз; кол-во → 3.01 (#286)
+        { name: 'Болт', priceExclVat: 5.999, quantity: 2 },          // вверх (→6.00)
+        { name: 'Гайка', priceExclVat: 12.995, quantity: 224.8 },    // граница x.005 → 13; дробное кол-во как есть
       ],
     })
 
     const sent = (fake.v2Call.mock.calls[0]![0] as any).params.items
     expect(sent.map((i: any) => i.priceExclVat)).toEqual([12.99, 6, 13]) // map применён ко ВСЕМ
+    expect(sent.map((i: any) => i.quantity)).toEqual([3.01, 2, 224.8]) // кол-во округлено до 2 знаков (#286)
   })
 
   it('passes through controller warnings, e.g. document_date_unparsed (#102)', async () => {
@@ -188,8 +189,13 @@ describe('b24_pst_crm_create_deal', () => {
     expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 0 }]).success).toBe(false)
   })
 
-  it('rejects fractional quantity via Zod schema (unit is always шт → integer)', () => {
-    expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 2.5 }]).success).toBe(false)
+  it('#286: accepts fractional quantity via Zod schema (m/kg/m³ — not just шт)', () => {
+    expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 2.5 }]).success).toBe(true)
+    expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 224.8 }]).success).toBe(true)
+  })
+
+  it('#286: rejects zero / astronomically large quantity via Zod schema', () => {
+    expect((tool as any).inputSchema.items.safeParse([{ name: 'x', priceExclVat: 1, quantity: 1e12 }]).success).toBe(false)
   })
 
   it('#259: accepts null / omitted / string productId & vendorCode (schema tolerant)', () => {
