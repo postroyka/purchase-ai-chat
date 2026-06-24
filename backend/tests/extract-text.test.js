@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { writeFileSync } from 'node:fs';
 
 // Mock spawn so we exercise the dispatch/branches without real poppler/tesseract/python.
 // Tests set h.outputs[cmd] / h.codes[cmd] per external tool ('pdftotext'|'tesseract'|'python3'|'pdftoppm').
@@ -12,6 +13,13 @@ vi.mock('node:child_process', () => ({
     if (typeof cmd === 'string' && cmd.endsWith('prlimit') && Array.isArray(args)) {
       const sep = args.indexOf('--');
       if (sep >= 0 && args[sep + 1]) cmd = args[sep + 1];
+    }
+    // ocrPdf разворачивает PNG-страницы во временную папку и читает их readdirSync. Реальный pdftoppm
+    // тут замокан, поэтому, чтобы пройти OCR-ветку, создаём фиктивный page-1.png по тому же префиксу,
+    // что передаёт ocrPdf (последний аргумент pdftoppm = join(dir,'page')). Иначе папка пуста → null.
+    if (cmd === 'pdftoppm' && Array.isArray(args) && (h.codes.pdftoppm ?? 0) === 0) {
+      const prefix = args[args.length - 1];
+      try { writeFileSync(`${prefix}-1.png`, 'PNG'); } catch { /* best-effort */ }
     }
     const proc = new EventEmitter();
     proc.stdout = new EventEmitter();
@@ -26,7 +34,7 @@ vi.mock('node:child_process', () => ({
   },
 }));
 
-const { extractDocumentText, rlimitWrap } = await import('../extract-text.js');
+const { extractDocumentText, rlimitWrap, hasTaxId } = await import('../extract-text.js');
 
 beforeEach(() => { h.outputs = {}; h.codes = {}; });
 
@@ -75,6 +83,55 @@ describe('extractDocumentText', () => {
   it('returns null for unsupported extensions', async () => {
     expect(await extractDocumentText('/x/note.txt')).toBeNull();
     expect(await extractDocumentText('/x/archive.zip')).toBeNull();
+  });
+
+  describe('#267 — гибридный PDF: УНП из шапки-картинки через OCR-фолбэк', () => {
+    it('текстовый слой БЕЗ УНП + OCR С УНП → method=pdftotext_ocr, текст содержит и таблицу, и УНП', async () => {
+      // таблица — текстовый слой (позиции/цены), но налогового номера в ней НЕТ
+      h.outputs.pdftotext = 'Наименование Цена Кол-во\nЦемент М500 12.50 10\nИтого: 125.00 BYN';
+      // шапка/печать распознана OCR — здесь УНП
+      h.outputs.tesseract = 'ООО «Вершина-строй» УНП 191098607\nСчёт № 873';
+      const r = await extractDocumentText('/x/hybrid.pdf');
+      expect(r.method).toBe('pdftotext_ocr');
+      expect(r.text).toContain('Цемент М500');         // табличная часть сохранена
+      expect(r.text).toContain('191098607');            // УНП добыт из OCR-секции
+      expect(r.text).toContain('OCR со скана');         // секция помечена
+    });
+
+    it('текстовый слой С УНП → OCR не запускается (method=pdftotext)', async () => {
+      h.outputs.pdftotext = 'Поставщик ООО Тест, УНП 123456789\nЦемент 10 шт';
+      h.outputs.tesseract = 'этот OCR не должен попасть в результат 999999999';
+      const r = await extractDocumentText('/x/textlayer.pdf');
+      expect(r.method).toBe('pdftotext');
+      expect(r.text).not.toContain('не должен попасть');
+    });
+
+    it('текстовый слой без УНП и OCR тоже без УНП → отдаём текстовый слой (method=pdftotext)', async () => {
+      h.outputs.pdftotext = 'Накладная без реквизитов\nТовар А 5 шт\nТовар Б 3 шт';
+      h.outputs.tesseract = 'смазанный скан без распознанного номера';
+      const r = await extractDocumentText('/x/noid.pdf');
+      expect(r.method).toBe('pdftotext');
+    });
+  });
+
+  describe('hasTaxId', () => {
+    it('находит УНП/ИНН по ключевому слову (в т.ч. с пробелами/дефисами)', () => {
+      expect(hasTaxId('УНП 191098607')).toBe(true);
+      expect(hasTaxId('ИНН: 1234567890')).toBe(true);
+      expect(hasTaxId('ИНН 123456789012')).toBe(true);
+      expect(hasTaxId('УНП 191-098-607')).toBe(true);
+      expect(hasTaxId('УНП 191 098 607')).toBe(true);
+    });
+    it('НЕ считает голое 9-значное число налоговым номером (иначе глушился бы OCR-фолбэк)', () => {
+      expect(hasTaxId('реквизит 191098607 в тексте')).toBe(false); // нет ключевого слова
+      expect(hasTaxId('Счёт № 191098607 от 22.06.2026')).toBe(false);
+    });
+    it('не срабатывает на тексте без номеров и на пустом вводе', () => {
+      expect(hasTaxId('просто текст без номеров')).toBe(false);
+      expect(hasTaxId('счёт № 873 от 22.06.2026, сумма 125.00')).toBe(false);
+      expect(hasTaxId('')).toBe(false);
+      expect(hasTaxId(null)).toBe(false);
+    });
   });
 });
 
