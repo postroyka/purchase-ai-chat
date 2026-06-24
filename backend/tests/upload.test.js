@@ -197,6 +197,13 @@ describe('GET /health', () => {
     expect(res.body.redis).toBe('ok');
   });
 
+  it('#44: health включает activeJobs и maxConcurrentJobs', async () => {
+    const res = await request(app).get('/health');
+    expect(res.status).toBe(200);
+    expect(res.body.activeJobs).toBe(0);            // в покое заданий нет
+    expect(typeof res.body.maxConcurrentJobs).toBe('number');
+  });
+
   it('returns 503 when jobs store ping fails', async () => {
     const brokenJobs = {
       get: async () => null,
