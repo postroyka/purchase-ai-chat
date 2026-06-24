@@ -28,6 +28,10 @@ interface FakeEvent {
   _responseHeaders?: Record<string, string>
 }
 
+// Realistic server token: ≥32 chars (intended is `openssl rand -hex 32` = 64 chars).
+// The middleware rejects shorter configured tokens as "not configured" (#105 P3).
+const VALID_TOKEN = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' // 32 chars
+
 const runtimeConfig: { mcpAuthToken: string; bitrix24OauthEnabled: boolean } = {
   mcpAuthToken: '',
   bitrix24OauthEnabled: false,
@@ -47,7 +51,7 @@ function callMiddleware(url: string, headers: Record<string, string> = {}) {
 
 describe('mcp-auth middleware', () => {
   beforeEach(() => {
-    runtimeConfig.mcpAuthToken = 'secret-token'
+    runtimeConfig.mcpAuthToken = VALID_TOKEN
     runtimeConfig.bitrix24OauthEnabled = false
   })
 
@@ -126,6 +130,15 @@ describe('mcp-auth middleware', () => {
     expect(callMiddleware('/mcp')).toThrow(expect.objectContaining({ statusCode: 503 }))
   })
 
+  it('returns 503 when the configured token is shorter than 32 chars (#105 P3)', () => {
+    // A too-short token would pass timingSafeEqual and guard /mcp with a
+    // guessable/brute-forceable secret — treat it as "not configured".
+    runtimeConfig.mcpAuthToken = 'short-token'
+    expect(callMiddleware('/mcp', { authorization: 'Bearer short-token' })).toThrow(
+      expect.objectContaining({ statusCode: 503 }),
+    )
+  })
+
   it('rejects a missing Authorization header with 401', () => {
     expect(callMiddleware('/mcp')).toThrow(
       expect.objectContaining({ statusCode: 401, message: 'Missing Authorization header' }),
@@ -141,7 +154,7 @@ describe('mcp-auth middleware', () => {
   })
 
   it('rejects a malformed Authorization header with 401', () => {
-    expect(callMiddleware('/mcp', { authorization: 'secret-token' })).toThrow(
+    expect(callMiddleware('/mcp', { authorization: VALID_TOKEN })).toThrow(
       expect.objectContaining({ statusCode: 401, message: 'Invalid bearer token' }),
     )
   })
@@ -163,20 +176,20 @@ describe('mcp-auth middleware', () => {
   })
 
   it('rejects a token of wrong length', () => {
-    expect(callMiddleware('/mcp', { authorization: 'Bearer secret-token-extra' })).toThrow(
+    expect(callMiddleware('/mcp', { authorization: `Bearer ${VALID_TOKEN}extra` })).toThrow(
       expect.objectContaining({ statusCode: 401 }),
     )
   })
 
   it('accepts the correct bearer token', () => {
-    expect(callMiddleware('/mcp', { authorization: 'Bearer secret-token' })()).toBeUndefined()
+    expect(callMiddleware('/mcp', { authorization: `Bearer ${VALID_TOKEN}` })()).toBeUndefined()
   })
 
   it('accepts case-insensitive Bearer scheme', () => {
-    expect(callMiddleware('/mcp', { authorization: 'bearer secret-token' })()).toBeUndefined()
+    expect(callMiddleware('/mcp', { authorization: `bearer ${VALID_TOKEN}` })()).toBeUndefined()
   })
 
   it('trims surrounding whitespace from the token', () => {
-    expect(callMiddleware('/mcp', { authorization: 'Bearer   secret-token  ' })()).toBeUndefined()
+    expect(callMiddleware('/mcp', { authorization: `Bearer   ${VALID_TOKEN}  ` })()).toBeUndefined()
   })
 })
