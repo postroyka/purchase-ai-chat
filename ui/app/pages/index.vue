@@ -318,6 +318,7 @@
 import { fileBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
 import { mmss, timingLine, plural } from '~/utils/format-duration'
 import { failActiveFiles } from '~/utils/job-status'
+import { perfDiagNotes } from '~/utils/perf-diag'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
 definePageMeta({ layout: 'default' })
@@ -732,22 +733,11 @@ function processingLogOf(file: FileEntry): string {
 }
 
 // Само-диагностика скорости агента (#279): записи feedback[] с kind:'perf' — что замедлило разбор.
-// Показываем ВСЕГДА, когда агент прислал (не привязано к SHOW_TIMINGS — свёрнутый блок). На GitHub-issue
-// perf не идёт (#294), поэтому это единственное место, где оператор его видит.
-// `note` — НЕДОВЕРЕННЫЙ вывод модели (она читает недоверенный документ). Vue экранирует HTML ({{ }}),
-// но bidi/zero-width/управляющие символы могут «перевернуть» текст (Trojan Source) — вырезаем их тем же
-// классом, что и серверный путь отзывов (backend stripHostileChars). Затем cap длины/числа — защита DOM.
-// eslint-disable-next-line no-control-regex
-const PERF_HOSTILE_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\u202a-\u202e\u2066-\u2069\u200b-\u200d\ufeff]/g
+// Показываем ВСЕГДА, когда агент прислал (не привязано к SHOW_TIMINGS — свёрнутый блок; HIDE_PERF_NOTE
+// прячет блок). На GitHub-issue perf не идёт (#294). Санитизация (Trojan Source) и cap вынесены в
+// utils/perf-diag.ts (покрыты unit-тестом); здесь — тонкая обёртка над result файла.
 function perfDiagOf(file: FileEntry): string[] {
-  const r = file.result as { feedback?: unknown } | null | undefined
-  if (!r || typeof r !== 'object' || !Array.isArray(r.feedback)) return []
-  return r.feedback
-    .filter((f): f is { kind?: unknown, note?: unknown } => !!f && typeof f === 'object')
-    .filter(f => f.kind === 'perf' && typeof f.note === 'string' && f.note.trim() !== '')
-    .map(f => (f.note as string).replace(PERF_HOSTILE_CHARS, '').trim().slice(0, 2000)) // sanitize + cap
-    .filter(note => note !== '') // после вырезания мог остаться пустой
-    .slice(0, 5) // не более 5 записей
+  return perfDiagNotes(file.result)
 }
 
 async function submitFileFeedback(file: FileEntry) {

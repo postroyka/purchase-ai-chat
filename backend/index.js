@@ -238,7 +238,9 @@ export function createApp(config = {}) {
   // Только для лога на странице, НЕ в метрики. По умолчанию выключено (opt-in). Живой mm:ss
   // «обрабатывается N сек» UI показывает всегда (от клиентского procSince), независимо от флага (#203).
   const showTimings = config.showTimings ?? (String(process.env.SHOW_TIMINGS ?? '').toLowerCase() === 'true');
-  // HIDE_PERF_NOTE=true — скрыть блок «⏱ Диагностика скорости агента» в UI (по умолчанию виден).
+  // HIDE_PERF_NOTE=true — скрыть блок «⏱ Диагностика скорости агента» в UI (#317). По умолчанию (false)
+  // блок виден. Это ТОЛЬКО UI-косметика: perf-данные всё равно отдаются в JSON ответа /job/:id/status
+  // (result.feedback) и пишутся в лог [perf-diag] — флаг не убирает данные из API, лишь прячет блок.
   const hidePerfNote = config.hidePerfNote ?? (String(process.env.HIDE_PERF_NOTE ?? '').toLowerCase() === 'true');
   // Пороги «быстро/медленно» по total-времени файла для лога замеров (#замеры): ≤FAST → fast,
   // ≥SLOW → slow, между — normal. Оценочные — калибруются реальностью через env (docs/PARSING_PERFORMANCE.md).
