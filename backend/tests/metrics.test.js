@@ -304,19 +304,40 @@ describe('metrics economics (#75)', () => {
     expect(e.enabled).toBe(true);
     expect(e.positions).toBe(10);
     expect(e.positionsNoArticle).toBe(4);
-    expect(e.positionsNoArticlePct).toBe(40);
+    // #264: pct относительно (matched + без артикула) = 4/(10+4) = 28.6%
+    expect(e.positionsNoArticlePct).toBe(28.6);
     expect(e.grossSavedByn).toBeCloseTo(6, 2);       // 10 × 2/60 × 18
     expect(e.modelCostByn).toBeCloseTo(0.3, 2);       // 0.10 USD × 3
     expect(e.netSavedByn).toBeCloseTo(5.7, 2);
     expect(e.lostNoArticleByn).toBeCloseTo(2.4, 2);   // 4 × 2/60 × 18
   });
 
-  it('clamps positionsNoArticle to positions and disables savings when rate is 0', async () => {
+  it('#264: positionsNoArticle НЕ зажимается по positions (приходит структурно от агента)', async () => {
+    const m = econMem();
+    // matched=3, без артикула=5 — раньше зажималось до 3; теперь честные 5.
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 0, agent: null, positions: 3, positionsNoArticle: 5 });
+    const e = (await m.snapshot()).economics;
+    expect(e.positionsNoArticle).toBe(5);
+    expect(e.positionsNoArticlePct).toBe(62.5); // 5/(3+5)
+    expect(e.lostNoArticleByn).toBeCloseTo(3, 2); // 5 × 2/60 × 18
+  });
+
+  it('#264: документ, где ВСЕ позиции без артикула (matched=0) — потеря записывается, не теряется', async () => {
+    const m = econMem();
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'no_deal', durationMs: 0, agent: null, positions: 0, positionsNoArticle: 7 });
+    const e = (await m.snapshot()).economics;
+    expect(e.positions).toBe(0);
+    expect(e.positionsNoArticle).toBe(7);           // не загейчено pos>0
+    expect(e.positionsNoArticlePct).toBe(100);      // 7/(0+7)
+    expect(e.lostNoArticleByn).toBeCloseTo(4.2, 2); // 7 × 2/60 × 18
+  });
+
+  it('disables savings when rate is 0', async () => {
     const m = createMetrics({ redisUrl: '', hourlyRateByn: 0 });
-    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 0, agent: null, positions: 3, positionsNoArticle: 99 });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 0, agent: null, positions: 3, positionsNoArticle: 2 });
     const e = (await m.snapshot()).economics;
     expect(e.enabled).toBe(false);
-    expect(e.positionsNoArticle).toBe(3); // clamped to positions
+    expect(e.positionsNoArticle).toBe(2);
     expect(e.grossSavedByn).toBe(0);
   });
 });

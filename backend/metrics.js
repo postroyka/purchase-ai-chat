@@ -220,13 +220,14 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
       // Распределение скорости разбора (issue #207): считаем только валидный бакет (fast/normal/slow).
       if (KNOWN_SPEED_BUCKETS.has(speed)) ops.push(['hincrby', K.speed, speed, 1]);
       if (out === 'ok') ops.push(['hincrby', K.totals, 'ok', 1]);
-      // Line-item counts drive the savings estimate (#75): positions recognised, and how
-      // many lacked a supplier article (vendorCode) → not auto-matchable, manual fallback.
+      // Line-item counts drive the savings/loss estimate (#75). #264: positionsNoArticle теперь
+      // приходит СТРУКТУРНО от агента (позиции без артикула в items[] не лежат), поэтому НЕ зажимаем
+      // его по `pos` (matched) и НЕ гейтим по `pos > 0` — иначе документ, где ВСЕ позиции без
+      // артикула (matched = 0), не записал бы потерю вовсе (та самая инверсия метрики из #264).
       const pos = Math.max(0, Math.trunc(Number(positions) || 0));
-      if (pos > 0) {
-        ops.push(['hincrby', K.totals, 'positions', pos]);
-        ops.push(['hincrby', K.totals, 'positions_no_article', Math.min(pos, Math.max(0, Math.trunc(Number(positionsNoArticle) || 0)))]);
-      }
+      const noArt = Math.max(0, Math.trunc(Number(positionsNoArticle) || 0));
+      if (pos > 0) ops.push(['hincrby', K.totals, 'positions', pos]);
+      if (noArt > 0) ops.push(['hincrby', K.totals, 'positions_no_article', noArt]);
       if (agent) {
         ops.push(['hincrby', K.totals, 'agent_runs', 1]);
         ops.push(['hincrby', K.totals, 'agent_ms', Math.max(0, Math.round(Number(agent.agentDurationMs) || 0))]);
@@ -369,7 +370,13 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
         usdBynSource,
         positions,
         positionsNoArticle,
-        positionsNoArticlePct: positions ? round1((positionsNoArticle / positions) * 100) : 0,
+        // #264: доля позиций без артикула среди ВСЕХ распознанных по цене/кол-ву позиций
+        // (сопоставленные `positions` + без артикула `positionsNoArticle`). Раньше знаменателем были
+        // только matched-позиции, но после #258 позиции без артикула в них не входят — pct ушёл бы
+        // вверх/некорректно. База (matched + без артикула) даёт устойчивый «процент потери».
+        positionsNoArticlePct: (positions + positionsNoArticle)
+          ? round1((positionsNoArticle / (positions + positionsNoArticle)) * 100)
+          : 0,
         grossSavedByn: savedByn,
         modelCostByn,
         netSavedByn: round2(savedByn - modelCostByn),
