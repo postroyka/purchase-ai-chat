@@ -135,7 +135,7 @@ function warningLabel(s) {
 
 // Feedback kinds — shared by the user channel (👍/👎/💡) and the agent channel. label() + this
 // allowlist bound cardinality (agent output is untrusted). Mirror backend/feedback.js FEEDBACK_KINDS.
-const KNOWN_FEEDBACK_KINDS = new Set(['positive', 'problem', 'suggestion', 'other']);
+const KNOWN_FEEDBACK_KINDS = new Set(['positive', 'problem', 'suggestion', 'perf', 'other']);
 function feedbackKindLabel(s) {
   const v = label(s, 'other');
   return KNOWN_FEEDBACK_KINDS.has(v) ? v : 'other';
