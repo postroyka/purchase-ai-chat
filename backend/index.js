@@ -704,7 +704,7 @@ export function createApp(config = {}) {
       files: job.files.map((f) => ({
         name: f.name, status: f.status, result: f.result, error: f.error, problem: f.problem,
         // Тайминги отдаём только при SHOW_TIMINGS (#замеры) — иначе ответ без изменений.
-        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, agentTurns: f.agentTurns ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null, extractMs: f.extractMs ?? null, speed: classifySpeed(f.durationMs, timingFastMs, timingSlowMs) } : {}),
+        ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, agentTurns: f.agentTurns ?? null, toolMs: f.toolMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null, extractMs: f.extractMs ?? null, speed: classifySpeed(f.durationMs, timingFastMs, timingSlowMs) } : {}),
       })),
     });
   });
@@ -1106,6 +1106,9 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       // Число ходов агента (#222: «думает vs ищет»): много ходов = агент много раз ходил в инструменты
       // (поиск/итерации); мало ходов при большом agentMs = модель дольше «думала» на ход. Для лога.
       fileEntry.agentTurns = (agentMeta && Number.isFinite(agentMeta.numTurns)) ? agentMeta.numTurns : null;
+      // Время агента в инструментах (#262, Шаг 2): agentMs − время в API модели ≈ ожидание MCP/REST к
+      // Bitrix24. Даёт «из них на портал/инструменты» прямо в Логе обработки рядом с agentMs. Для лога.
+      fileEntry.toolMs = (agentMeta && Number.isFinite(agentMeta.toolMs)) ? agentMeta.toolMs : null;
       // Бакет скорости разбора для распределения на /metrics (#207) — по total-времени файла.
       // Считаем только на УСПЕШНОМ разборе (status done); ошибочные/таймаут-файлы в распределение не
       // попадают (их длительность не отражает скорость разбора). Пороги — из createApp (timing).

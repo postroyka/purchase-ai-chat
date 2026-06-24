@@ -318,6 +318,7 @@ interface FileEntry {
   startedAt?: number | null
   agentMs?: number | null
   agentTurns?: number | null
+  toolMs?: number | null
   durationMs?: number | null
   extractMethod?: string | null
   extractMs?: number | null

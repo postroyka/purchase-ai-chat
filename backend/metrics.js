@@ -21,7 +21,7 @@ import Redis from 'ioredis';
  *     positions?: number,
  *     positionsNoArticle?: number,
  *     speed?: 'fast'|'normal'|'slow'|null,
- *     agent?: { extractMethod?: string|null, costUsd?: number|null, agentDurationMs?: number }|null,
+ *     agent?: { extractMethod?: string|null, costUsd?: number|null, agentDurationMs?: number, numTurns?: number|null, toolMs?: number|null }|null,
  *   }): Promise<void>,
  *   recordWarnings(codes: string[]): Promise<void>,
  *   recordFeedback(arg: { source: 'user'|'agent', kind?: string }): Promise<void>,
@@ -231,6 +231,13 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
         if (Number.isFinite(agent.numTurns)) {
           ops.push(['hincrby', K.totals, 'agent_turns', Math.max(0, Math.round(Number(agent.numTurns)))]);
         }
+        // Время агента в инструментах (#262 Шаг 2 ≈ ожидание MCP/REST к Bitrix24). Отдельный счётчик
+        // прогонов: toolMs есть не всегда (обёртка может не отдать duration_api_ms), и среднее должно
+        // делиться только на прогоны С известным toolMs, а не на все agent_runs.
+        if (Number.isFinite(agent.toolMs)) {
+          ops.push(['hincrby', K.totals, 'tool_ms', Math.max(0, Math.round(Number(agent.toolMs)))]);
+          ops.push(['hincrby', K.totals, 'tool_runs', 1]);
+        }
         if (typeof agent.extractMethod === 'string') {
           ops.push(['hincrby', K.extract, label(agent.extractMethod, 'unknown'), 1]);
         }
@@ -379,6 +386,10 @@ function makeApi(b, econ = { hourlyRateByn: 0, minutesPerPosition: 2, usdByn: 3.
         avgAgentMs: agentRuns ? Math.round((t.agent_ms || 0) / agentRuns) : 0,
         // Среднее число ходов агента (#222): много ходов = поиск/итерации, мало = «думает».
         avgAgentTurns: agentRuns ? round1((t.agent_turns || 0) / agentRuns) : 0,
+        // Среднее время агента в инструментах (#262 Шаг 2 ≈ ожидание REST к Bitrix24). Делится на
+        // tool_runs (прогоны с известным toolMs), а не на agentRuns.
+        toolRuns: t.tool_runs || 0,
+        avgToolMs: (t.tool_runs || 0) ? Math.round((t.tool_ms || 0) / (t.tool_runs || 0)) : 0,
         avgFileMs: processed ? Math.round((t.file_ms || 0) / processed) : 0,
       },
       outcomes: toSortedArray(outcomes),

@@ -32,6 +32,17 @@ describe('metrics (in-memory)', () => {
     expect(s.totals.avgAgentMs).toBe(3000);
   });
 
+  it('aggregates toolMs only over runs that reported it (#262 Шаг 2)', async () => {
+    const m = mem();
+    // два прогона с toolMs, один без — среднее делится на 2, не на 3.
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 1000, agent: { agentDurationMs: 1000, toolMs: 600 } });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 2000, agent: { agentDurationMs: 2000, toolMs: 1400 } });
+    await m.recordFile({ format: 'pdf', status: 'done', outcome: 'ok', durationMs: 3000, agent: { agentDurationMs: 3000 } });
+    const s = await m.snapshot();
+    expect(s.totals.toolRuns).toBe(2);
+    expect(s.totals.avgToolMs).toBe(1000); // (600+1400)/2
+  });
+
   it('computes derived totals over a mixed batch', async () => {
     const m = mem();
     await m.recordUpload({ fileCount: 4 });

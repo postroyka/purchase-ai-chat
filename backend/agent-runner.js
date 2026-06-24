@@ -109,7 +109,7 @@ const AGENT_ENV_KEYS = [
  *   extractFn?: (filePath: string) => Promise<{ text: string, method: string }|null>,
  *   sleepFn?: (ms: number) => Promise<void>,
  *   randomFn?: () => number,
- *   onMeta?: (meta: { extractMethod: string|null, extractMs: number|null, costUsd: number|null, agentDurationMs: number, numTurns: number|null }) => void,
+ *   onMeta?: (meta: { extractMethod: string|null, extractMs: number|null, costUsd: number|null, agentDurationMs: number, numTurns: number|null, toolMs: number|null }) => void,
  * }} AgentConfig
  */
 export async function runAgent(filePath, responsibleUserId, config = {}) {
@@ -543,10 +543,26 @@ function spawnClaude({
 
       // The `claude --output-format json` wrapper carries run metadata (cost/turns/
       // duration) that was previously discarded — surface it for usage metrics (#67).
+      //
+      // toolMs (#262, Шаг 2): «сколько агент ждал инструменты» per-file, рядом с
+      // agentMs/extractMs/agentTurns. Обёртка отдаёт duration_ms (полное время агента)
+      // и duration_api_ms (кумулятивное время в API модели — «думание»); их разность ≈
+      // время в инструментах. У этого агента инструменты — это MCP-вызовы к Bitrix24
+      // (find_supplier/contract/products/create_deal), поэтому toolMs ≈ ожидание REST к
+      // порталу (это и есть «REST vs агент», которое просил issue, прямо в backend — без
+      // межпроцессного канала к MCP). Считаем ТОЛЬКО когда оба поля — конечные числа из
+      // обёртки (а не fallback durationMs), и клампим в ≥0 (защита от рассинхрона полей).
+      const wrapDurationMs = typeof wrapper.duration_ms === 'number' ? wrapper.duration_ms : null;
+      const apiDurationMs = typeof wrapper.duration_api_ms === 'number' ? wrapper.duration_api_ms : null;
       const meta = {
         costUsd: typeof wrapper.total_cost_usd === 'number' ? wrapper.total_cost_usd : null,
-        agentDurationMs: typeof wrapper.duration_ms === 'number' ? wrapper.duration_ms : durationMs,
+        agentDurationMs: wrapDurationMs ?? durationMs,
         numTurns: typeof wrapper.num_turns === 'number' ? wrapper.num_turns : null,
+        // Время в инструментах (≈ ожидание MCP/REST к Bitrix24). null, если обёртка не
+        // отдала оба поля длительности.
+        toolMs: (wrapDurationMs !== null && apiDurationMs !== null)
+          ? Math.max(0, wrapDurationMs - apiDurationMs)
+          : null,
       };
       resolve({ result: parsed, meta });
     });

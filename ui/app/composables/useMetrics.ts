@@ -34,6 +34,8 @@ export interface MetricsSnapshot {
     agentRuns: number
     avgAgentMs: number
     avgAgentTurns: number
+    toolRuns: number
+    avgToolMs: number
     avgFileMs: number
   }
   outcomes: MetricNamedCount[]
