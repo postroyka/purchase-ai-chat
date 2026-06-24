@@ -197,6 +197,29 @@ describe('runAgent', () => {
     expect(promptOf(spawnFn)).toContain('FILE_PATH: /f.pdf');
   });
 
+  it('#105 P2: allowlist инструментов через --allowedTools (Read + наши MCP-инструменты)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn });
+    const [_bin, args] = spawnFn.mock.calls[0];
+    const idx = args.indexOf('--allowedTools');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const value = args[idx + 1];
+    expect(value).toContain('Read');
+    expect(value).toContain('mcp__procure-ai__b24_pst_crm_create_deal');
+    expect(value).toContain('mcp__procure-ai__b24_pst_crm_find_supplier');
+    // опасных встроенных инструментов в allowlist быть не должно
+    expect(value).not.toContain('Bash');
+    expect(value).not.toContain('Write');
+  });
+
+  it('#105 P2: allowlist настраивается через config.allowedTools', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn, allowedTools: 'Read,mcp__x__y' });
+    const [_bin, args] = spawnFn.mock.calls[0];
+    const idx = args.indexOf('--allowedTools');
+    expect(args[idx + 1]).toBe('Read,mcp__x__y');
+  });
+
   it('passes --model when model is configured', async () => {
     const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
     await runAgent('/f.pdf', null, { ...BASE_CONFIG, spawnFn, model: 'claude-opus-4-5' });
