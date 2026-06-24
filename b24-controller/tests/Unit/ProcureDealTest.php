@@ -102,6 +102,32 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame(2, \CCrmDeal::$lastAddFields['ASSIGNED_BY_ID']);
 	}
 
+	public function testProductNameComesFromCatalogNotDocument(): void
+	{
+		// #301: имя строки сделки — каноническое из каталога по productId, а не из документа.
+		\CCrmDeal::$addReturn = 1;
+		// каталог по ID=7 отдаёт «правильное» имя; в документе пришло «Болт» (см. items()).
+		\CIBlockElement::$resultQueue = [[['ID' => 7, 'NAME' => 'Болт М8 ГОСТ 7798 (каталог)']]];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'f.pdf', '', 'log', $this->items());
+		$row = \CCrmDeal::$lastProductRows[0];
+		$this->assertSame('Болт М8 ГОСТ 7798 (каталог)', $row['PRODUCT_NAME']);
+		$this->assertSame(7, $row['PRODUCT_ID']);
+		// батч-запрос имён сделан по ID IN [7].
+		$call = \CIBlockElement::$calls[0];
+		$this->assertSame([7], $call['filter']['ID']);
+	}
+
+	public function testProductNameFallsBackToDocumentWhenNotInCatalog(): void
+	{
+		// #301: если товар не нашёлся в каталоге (рассинхрон/неактивен) — фолбэк на имя из документа.
+		\CCrmDeal::$addReturn = 1;
+		\CIBlockElement::$resultQueue = [[]]; // каталог ничего не вернул
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'f.pdf', '', 'log', $this->items());
+		$this->assertSame('Болт', \CCrmDeal::$lastProductRows[0]['PRODUCT_NAME']);
+	}
+
 	public function testNegativePriceAndQuantityAreClamped(): void
 	{
 		\CCrmDeal::$addReturn = 1;
