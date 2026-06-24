@@ -214,7 +214,7 @@ const sparkPoints = computed(() => {
             label="Среднее время агента"
             :value="fmtMs(data.totals.avgAgentMs)"
             :icon="ClockIcon"
-            :sub="`прогонов: ${data.totals.agentRuns} · ~${data.totals.avgAgentTurns} ходов/прогон${data.totals.avgToolMs ? ` · ~${fmtMs(data.totals.avgToolMs)} инструменты` : ''}`"
+            :sub="`прогонов: ${data.totals.agentRuns} · ~${data.totals.avgAgentTurns} ходов/прогон${data.totals.avgToolMs ? ` · ~${fmtMs(data.totals.avgToolMs)} в инструментах` : ''}`"
           />
           <MetricsStatCard
             label="Стоимость модели"

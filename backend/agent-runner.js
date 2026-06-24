@@ -546,14 +546,14 @@ function spawnClaude({
       //
       // toolMs (#262, Шаг 2): «сколько агент ждал инструменты» per-file, рядом с
       // agentMs/extractMs/agentTurns. Обёртка отдаёт duration_ms (полное время агента)
-      // и duration_api_ms (кумулятивное время в API модели — «думание»); их разность ≈
-      // время в инструментах. У этого агента инструменты — это MCP-вызовы к Bitrix24
-      // (find_supplier/contract/products/create_deal), поэтому toolMs ≈ ожидание REST к
-      // порталу (это и есть «REST vs агент», которое просил issue, прямо в backend — без
-      // межпроцессного канала к MCP). Считаем ТОЛЬКО когда оба поля — конечные числа из
-      // обёртки (а не fallback durationMs), и клампим в ≥0 (защита от рассинхрона полей).
-      const wrapDurationMs = typeof wrapper.duration_ms === 'number' ? wrapper.duration_ms : null;
-      const apiDurationMs = typeof wrapper.duration_api_ms === 'number' ? wrapper.duration_api_ms : null;
+      // и duration_api_ms (кумулятивное время в API модели — «думание»); их разность —
+      // ВСЁ не-API время = инструменты + накладные harness'а. У этого агента инструменты —
+      // это MCP-вызовы к Bitrix24, поэтому toolMs — грубый ПРОКСИ «REST vs агент» (завышен
+      // на overhead; точный серверный srv — только в [rest-timing]-логах MCP). Считаем
+      // ТОЛЬКО когда оба поля — конечные числа из обёртки (а не fallback durationMs), и
+      // клампим в ≥0 (защита от рассинхрона полей). Поле опускается → graceful (как agentMs).
+      const wrapDurationMs = Number.isFinite(wrapper.duration_ms) ? wrapper.duration_ms : null;
+      const apiDurationMs = Number.isFinite(wrapper.duration_api_ms) ? wrapper.duration_api_ms : null;
       const meta = {
         costUsd: typeof wrapper.total_cost_usd === 'number' ? wrapper.total_cost_usd : null,
         agentDurationMs: wrapDurationMs ?? durationMs,
