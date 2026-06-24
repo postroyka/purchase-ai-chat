@@ -72,16 +72,9 @@ function phpRestNames(): Set<string> {
  *   - procureinstall.ensureschema — инфраструктурный: самонастройка схемы (создание
  *     полей сделки), её зовёт дашборд/бэкенд напрямую по REST, а не LLM-инструмент
  *     (заводить агенту инструмент для мутации схемы CRM нельзя).
- *   - procureproduct.findbyvendorcodes — БАТЧ-поиск товаров (#262, рычаг №1): PHP-метод
- *     задеплоен ПЕРВЫМ (PHP деплоится отдельно от TS — этот тест и существует ради
- *     порядка). MCP-инструмент `b24_pst_crm_find_products` + адаптация промпта —
- *     следующий QA-gated шаг (поведение агента проверяется на живом портале),
- *     **трекается открытым issue #272**. Когда инструмент появится — убрать отсюда
- *     (1:1 восстановится), исключение временное.
  */
 const NON_MCP_PHP_ACTIONS = new Set<string>([
   'shef:purchase.api.procureinstall.ensureschema',
-  'shef:purchase.api.procureproduct.findbyvendorcodes',
 ])
 
 describe('contract: MCP tool method names ↔ PHP controllers (#90)', () => {
