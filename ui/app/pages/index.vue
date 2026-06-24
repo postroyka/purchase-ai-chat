@@ -185,10 +185,11 @@
               {{ timingLine(file) }}
             </p>
 
-            <!-- Само-диагностика скорости агента (#279): что замедлило разбор. Только при SHOW_TIMINGS
-                 (диагностический сигнал, как и тайминги). На GitHub-issue не идёт (#294). -->
+            <!-- Само-диагностика скорости агента (#279): что замедлило разбор. Показываем ВСЕГДА, когда
+                 агент её прислал (не привязано к SHOW_TIMINGS): данные всё равно в result.feedback, note
+                 санитизирован и без ПДн, блок свёрнут. На GitHub-issue не идёт (#294). -->
             <details
-              v-if="job?.showTimings && perfDiagOf(file).length"
+              v-if="perfDiagOf(file).length"
               class="mt-1 text-xs"
             >
               <summary class="cursor-pointer select-none text-base-500">
