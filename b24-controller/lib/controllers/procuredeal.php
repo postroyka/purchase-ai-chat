@@ -296,6 +296,10 @@ class ProcureDeal
 		}
 
 		// --- 2) Товарные позиции (TAX_RATE=20, TAX_INCLUDED=Y — бизнес-решение) ---
+		// #301: наименование строки товара — server-authoritative из каталога Битрикса по productId,
+		// а НЕ из документа поставщика (присланный name используем лишь как фолбэк). Один батч-запрос
+		// имён по всем productId (без N+1, #148). Дублирует правило промпта #270 на уровне контроллера.
+		$catalogNames = self::fetchCatalogNames($items);
 		$productRows = [];
 		foreach($items as $item)
 		{
@@ -332,9 +336,17 @@ class ProcureDeal
 				$quantity = 1.0;
 			}
 
+			// #301: каноническое имя из каталога по productId; фолбэк на присланное имя, если товар
+			// не нашёлся (рассинхрон/неактивен) или у него пустое имя.
+			$pid = (int)$item['productId'];
+			$productName = $catalogNames[$pid] ?? '';
+			if($productName === '')
+			{
+				$productName = (string)($item['name'] ?? '');
+			}
 			$productRows[] = [
-				'PRODUCT_ID'   => (int)$item['productId'], // всегда задан: позиции без productId отсеяны выше (#258)
-				'PRODUCT_NAME' => (string)($item['name'] ?? ''),
+				'PRODUCT_ID'   => $pid, // всегда задан: позиции без productId отсеяны выше (#258)
+				'PRODUCT_NAME' => $productName,
 				'PRICE'        => $price,
 				'QUANTITY'     => $quantity,
 				'TAX_RATE'     => 20,
@@ -422,5 +434,50 @@ class ProcureDeal
 			$result['warnings'] = $warnings;
 		}
 		return $result;
+	}
+
+	/**
+	 * #301: каноническое наименование товара из каталога по productId.
+	 *
+	 * Собирает уникальные положительные productId из позиций и ОДНИМ запросом (`CIBlockElement::GetList`
+	 * с фильтром ID IN [...]) тянет их NAME — server-authoritative имя строки сделки, не зависящее от
+	 * того, что прислал агент/прямой REST. Без N+1 (один round-trip, #148). Позиции без productId
+	 * (несопоставленные) сюда не попадают — они и так не кладутся в сделку (#258).
+	 *
+	 * @param array $items позиции запроса (каждая может содержать productId)
+	 * @return array<int,string> карта productId → NAME (только для найденных в каталоге)
+	 */
+	private static function fetchCatalogNames(array $items): array
+	{
+		$ids = [];
+		foreach($items as $item)
+		{
+			$pid = (int)($item['productId'] ?? 0);
+			if($pid > 0)
+			{
+				$ids[$pid] = true; // dedup по id
+			}
+		}
+		if(empty($ids))
+		{
+			return [];
+		}
+
+		$names = [];
+		$res = \CIBlockElement::GetList(
+			['ID' => 'ASC'],
+			['ID' => array_keys($ids), 'IBLOCK_ID' => Config::getCatalogIblockId()],
+			false,
+			false,
+			['ID', 'NAME']
+		);
+		if(is_object($res))
+		{
+			while($row = $res->Fetch())
+			{
+				$names[(int)$row['ID']] = (string)$row['NAME'];
+			}
+		}
+		return $names;
 	}
 }
