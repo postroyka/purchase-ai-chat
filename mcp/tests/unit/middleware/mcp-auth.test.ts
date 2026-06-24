@@ -7,6 +7,7 @@ vi.mock('h3', () => ({
   defineEventHandler: <T>(fn: T) => fn,
   getRequestURL: (event: FakeEvent) => new URL(event._url, 'http://test.local'),
   getHeader: (event: FakeEvent, name: string) => event._headers?.[name.toLowerCase()],
+  getRequestIP: (event: FakeEvent) => event._ip,
   setResponseHeader: (event: FakeEvent, name: string, value: string) => {
     event._responseHeaders ??= {}
     event._responseHeaders[name.toLowerCase()] = value
@@ -22,10 +23,16 @@ vi.mock('h3', () => ({
   },
 }))
 
+// #105 P3: middleware логирует WARN при 429 (наблюдаемость) — мок, чтобы не тянуть реальный логгер.
+vi.mock('~/server/utils/logger', () => ({
+  useLogger: () => ({ warning: () => Promise.resolve() }),
+}))
+
 interface FakeEvent {
   _url: string
   _headers?: Record<string, string>
   _responseHeaders?: Record<string, string>
+  _ip?: string
 }
 
 // Realistic server token: ≥32 chars (intended is `openssl rand -hex 32` = 64 chars).
@@ -42,8 +49,9 @@ vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
 // etc.), so the default export's static type is EventHandler. Our mocked
 // version (above) is the identity function — at runtime it IS our handler —
 // hence the deliberate `as unknown` two-step cast.
-const middleware = (await import('../../../server/middleware/mcp-auth'))
-  .default as unknown as (event: FakeEvent) => void
+const mcpAuthModule = await import('../../../server/middleware/mcp-auth')
+const middleware = mcpAuthModule.default as unknown as (event: FakeEvent) => void
+const resetRateLimit = mcpAuthModule._resetMcpAuthRateLimitForTests
 
 function callMiddleware(url: string, headers: Record<string, string> = {}) {
   return () => middleware({ _url: url, _headers: headers })
@@ -53,6 +61,7 @@ describe('mcp-auth middleware', () => {
   beforeEach(() => {
     runtimeConfig.mcpAuthToken = VALID_TOKEN
     runtimeConfig.bitrix24OauthEnabled = false
+    resetRateLimit() // #105 P3: чистим анти-брутфорс счётчики между тестами
   })
 
   it('yields when NUXT_BITRIX24_OAUTH_ENABLED=true AND the request carries a Bearer header (toolkit middleware owns auth)', () => {
@@ -191,5 +200,70 @@ describe('mcp-auth middleware', () => {
 
   it('trims surrounding whitespace from the token', () => {
     expect(callMiddleware('/mcp', { authorization: `Bearer   ${VALID_TOKEN}  ` })()).toBeUndefined()
+  })
+
+  describe('#105 P3 — анти-брутфорс по IP', () => {
+    const wrong = (ip: string) => () => middleware({ _url: '/mcp', _headers: { authorization: 'Bearer wrong-token' }, _ip: ip })
+    // Setup-итерации: глотаем ожидаемый 401, чтобы накопить счётчик неудач.
+    const failN = (ip: string, n: number) => { for (let i = 0; i < n; i++) { try { wrong(ip)() } catch { /* expected 401 */ } } }
+
+    it('после 10 неудач с одного IP отдаёт 429', () => {
+      failN('9.9.9.9', 10)
+      // 11-я попытка блокируется до сравнения токена
+      expect(wrong('9.9.9.9')).toThrow(expect.objectContaining({ statusCode: 429 }))
+    })
+
+    it('429-ответ несёт Retry-After', () => {
+      failN('8.8.8.8', 10)
+      const event: FakeEvent = { _url: '/mcp', _headers: { authorization: 'Bearer wrong-token' }, _ip: '8.8.8.8' }
+      expect(() => middleware(event)).toThrow(expect.objectContaining({ statusCode: 429 }))
+      expect(event._responseHeaders?.['retry-after']).toBeDefined()
+    })
+
+    it('успешная auth сбрасывает счётчик неудач IP', () => {
+      failN('7.7.7.7', 9)
+      // верный токен с того же IP — проходит и чистит счётчик
+      expect(middleware({ _url: '/mcp', _headers: { authorization: `Bearer ${VALID_TOKEN}` }, _ip: '7.7.7.7' })).toBeUndefined()
+      // снова можно ошибаться без немедленного 429 (счётчик обнулён)
+      expect(wrong('7.7.7.7')).toThrow(expect.objectContaining({ statusCode: 401 }))
+    })
+
+    it('лимит независим по IP', () => {
+      failN('1.1.1.1', 10)
+      expect(wrong('1.1.1.1')).toThrow(expect.objectContaining({ statusCode: 429 }))
+      // другой IP не затронут
+      expect(wrong('2.2.2.2')).toThrow(expect.objectContaining({ statusCode: 401 }))
+    })
+
+    it('верный токен не лимитируется даже после многих успехов', () => {
+      for (let i = 0; i < 20; i++) {
+        expect(middleware({ _url: '/mcp', _headers: { authorization: `Bearer ${VALID_TOKEN}` }, _ip: '3.3.3.3' })).toBeUndefined()
+      }
+    })
+
+    it('после истечения окна (60с) попытки снова разрешены', () => {
+      vi.useFakeTimers()
+      try {
+        vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+        failN('4.4.4.4', 10)
+        expect(wrong('4.4.4.4')).toThrow(expect.objectContaining({ statusCode: 429 }))
+        vi.setSystemTime(new Date('2026-01-01T00:01:01Z')) // +61с — окно истекло
+        // снова обычный 401 (не 429): старые неудачи выпали из окна
+        expect(wrong('4.4.4.4')).toThrow(expect.objectContaining({ statusCode: 401 }))
+      }
+      finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('missing-header не засчитывается за неудачу (не накручивает брутфорс-счётчик)', () => {
+      for (let i = 0; i < 20; i++) {
+        // без Authorization → 401 Missing, но счётчик неудач НЕ растёт
+        expect(() => middleware({ _url: '/mcp', _headers: {}, _ip: '5.5.5.5' }))
+          .toThrow(expect.objectContaining({ statusCode: 401, message: 'Missing Authorization header' }))
+      }
+      // следующий неверный токен — всё ещё 401 (не 429), т.к. missing-header не считались
+      expect(wrong('5.5.5.5')).toThrow(expect.objectContaining({ statusCode: 401, message: 'Invalid bearer token' }))
+    })
   })
 })
