@@ -127,6 +127,9 @@ const KNOWN_WARNING_CODES = new Set([
   'document_date_unparsed', 'timeline_comment_failed',
   // agent-detected during matching (step 4)
   'articles_not_in_catalog', 'items_without_article',
+  // agent-detected during contract lookup (step 3, #269): точный договор из документа не найден,
+  // подставлен активный договор поставщика.
+  'contract_substituted',
 ]);
 function warningLabel(s) {
   const v = label(s, 'other');
