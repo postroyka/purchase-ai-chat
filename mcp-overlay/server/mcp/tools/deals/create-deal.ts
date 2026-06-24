@@ -84,7 +84,7 @@ export default defineMcpTool({
       // JSON.stringify "null" → price silently 0 in the deal). 1e9/unit is far beyond
       // any real procurement unit price; rounded to 2 decimals in the handler (#101).
       priceExclVat: z.number().positive().max(1_000_000_000).describe('Price per unit excluding VAT, as stated in document (rounded to 2 decimals at this boundary)'),
-      quantity: z.number().int().positive().describe('Quantity from document (integer — unit is always шт)'),
+      quantity: z.number().positive().max(1_000_000_000).describe('Quantity from document — may be fractional (e.g. 224.8 for m/kg/m³); rounded to 2 decimals at this boundary'),
     })).describe('Line items. Unit is always шт. Может быть пустым: если ни одна позиция не сопоставлена с каталогом (все артикулы не найдены), сделка создаётся без позиций с warning no_items_matched, а позиции уходят в processingLog.'),
   },
   handler: async ({ supplierId, contractId, responsibleUserId, filePath, documentDate, processingLog, items }) => {
@@ -120,9 +120,14 @@ export default defineMcpTool({
       fileName: basename(filePath),
       fileContent,
       processingLog,
-      // Округляем цену до копеек на MCP-границе (#101): защита от float-погрешности
-      // OCR/LLM (напр. 12.991) ещё до REST-контроллера. quantity уже целое по Zod (.int()).
-      items: items.map((it) => ({ ...it, priceExclVat: Math.round(it.priceExclVat * 100) / 100 })),
+      // Округляем цену И количество до 2 знаков на MCP-границе (#101, #286): защита от
+      // float-погрешности OCR/LLM (напр. 12.991) ещё до REST-контроллера. Количество может быть
+      // дробным (224.8 м/кг/м³), но не более 2 знаков — как и цена.
+      items: items.map((it) => ({
+        ...it,
+        priceExclVat: Math.round(it.priceExclVat * 100) / 100,
+        quantity: Math.round(it.quantity * 100) / 100,
+      })),
     }
     // contractId обязателен по схеме (z.string().min(1)), но guard оставляем:
     // юнит-тест вызывает handler напрямую (минуя Zod) и проверяет, что при

@@ -316,15 +316,18 @@ class ProcureDeal
 			//   float-погрешность OCR/LLM (напр. 12.991) уедет в PRICE и сумма сделки
 			//   разойдётся с бумажным счётом. Округление есть и на MCP-границе —
 			//   намеренное дублирование: контроллер прикрывает прямой REST в обход MCP.
-			// - количество — целое число (правило 4 промпта, единица всегда «шт»);
-			//   держим как float — Bitrix ждёт double в QUANTITY, значение всегда целое.
+			// - количество (#286) — может быть дробным (224.8 м/кг/м³), округляем до 2 знаков
+			//   (как цену); Bitrix QUANTITY принимает double. До #286 округляли до целого.
 			$price = round(max(0.0, (float)($item['priceExclVat'] ?? 0)), 2);
 			if(!is_finite($price))
 			{
 				$price = 0.0; // астрономический/Infinity-вход → 0, а не мусор в сделке
 			}
-			$quantity = round((float)($item['quantity'] ?? 1));
-			if($quantity <= 0)
+			$quantity = round((float)($item['quantity'] ?? 1), 2);
+			// is_finite — та же страховка, что и у цены: на прямом REST в обход MCP
+			// (Infinity/NaN/1e308) round() не финитизирует, а `<= 0` не ловит NaN/+INF →
+			// мусор в QUANTITY и битый total сделки. Не-финит/≤0 → 1.0.
+			if(!is_finite($quantity) || $quantity <= 0)
 			{
 				$quantity = 1.0;
 			}

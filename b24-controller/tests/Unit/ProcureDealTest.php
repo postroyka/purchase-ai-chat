@@ -117,11 +117,27 @@ final class ProcureDealTest extends TestCase
 		$this->assertEquals(1, $row['QUANTITY']);
 	}
 
-	public function testPriceRoundedToKopecksAndQuantityToInteger(): void
+	public function testNonFiniteQuantityClampsToOne(): void
+	{
+		// #286: на прямом REST (в обход Zod) Infinity/NaN в quantity не должны утечь в
+		// QUANTITY — is_finite-страховка зажимает их к 1.0 (иначе total сделки = INF/NaN).
+		\CCrmDeal::$addReturn = 1;
+		$items = [
+			['name' => 'INF', 'priceExclVat' => 10.0, 'quantity' => INF, 'productId' => '7'],
+			['name' => 'NaN', 'priceExclVat' => 10.0, 'quantity' => NAN, 'productId' => '8'],
+		];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
+
+		$this->assertSame(1.0, \CCrmDeal::$lastProductRows[0]['QUANTITY']);
+		$this->assertSame(1.0, \CCrmDeal::$lastProductRows[1]['QUANTITY']);
+	}
+
+	public function testPriceRoundedToKopecksAndQuantityToTwoDecimals(): void
 	{
 		// Прямой REST в обход Zod: float-погрешность цены (>2 знаков) и дробное кол-во.
-		// #101 — цена округляется до копеек, кол-во до целого («шт»), иначе сумма
-		// сделки в Б24 разойдётся с бумажным счётом.
+		// #101 — цена округляется до копеек; #286 — кол-во до 2 знаков (а не до целого:
+		// 1.5 м/кг/м³ — допустимое значение), иначе сумма сделки разойдётся с бумажным счётом.
 		$items = [
 			['name' => 'Кабель', 'priceExclVat' => 12.991, 'quantity' => 1.5, 'productId' => '7'],
 		];
@@ -130,23 +146,23 @@ final class ProcureDealTest extends TestCase
 
 		$row = \CCrmDeal::$lastProductRows[0];
 		$this->assertSame(12.99, $row['PRICE']);  // round(12.991, 2)
-		$this->assertSame(2.0, $row['QUANTITY']);  // round(1.5) — целое значение, тип float
+		$this->assertSame(1.5, $row['QUANTITY']);  // #286 — дробное кол-во сохраняется
 	}
 
-	public function testHalfKopeckRoundsHalfUpAndZeroDotFourQuantityClampsToOne(): void
+	public function testHalfKopeckRoundsHalfUpAndFractionalQuantityKeptToTwoDecimals(): void
 	{
 		// Краевые случаи прямого REST: PHP round() — HALF_UP (12.995 → 13.00, как
 		// бумажный счёт). MCP-граница (Math.round(12.995*100)/100) даёт тот же 13 —
-		// расхождения на этой границе нет. Кол-во 0.4 → round=0 → clamp 1.0.
+		// расхождения на этой границе нет. Кол-во 224.805 → round(.,2)=224.81 (#286).
 		$items = [
-			['name' => 'Штука', 'priceExclVat' => 12.995, 'quantity' => 0.4, 'productId' => '7'],
+			['name' => 'Штука', 'priceExclVat' => 12.995, 'quantity' => 224.805, 'productId' => '7'],
 		];
 		$c = new ProcureDeal();
 		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
 
 		$row = \CCrmDeal::$lastProductRows[0];
 		$this->assertSame(13.0, $row['PRICE']);   // round(12.995, 2) HALF_UP
-		$this->assertSame(1.0, $row['QUANTITY']);  // round(0.4)=0 → clamp 1.0
+		$this->assertSame(224.81, $row['QUANTITY']);  // #286 — округление кол-ва до 2 знаков
 	}
 
 	public function testContractIdBoundWhenPositive(): void
