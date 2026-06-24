@@ -325,6 +325,27 @@ describe('GET /job/:id/status — тайминги (#замеры, SHOW_TIMINGS)
   });
 });
 
+describe('GET /job/:id/status — hidePerfNote (HIDE_PERF_NOTE)', () => {
+  const spawn = () => makeAgentSpawn({ result: { deal: { dealId: '5' } } });
+  const extract = async () => ({ text: 'СЧЁТ', method: 'pdftotext' });
+
+  it('HIDE_PERF_NOTE on → ответ содержит hidePerfNote:true', async () => {
+    const app = appWith({ hidePerfNote: true, agentConfig: { spawnFn: spawn(), extractFn: extract } });
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`).attach('files[]', validPdf(), 'a.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+    const res = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.body.hidePerfNote).toBe(true);
+  });
+
+  it('по умолчанию (выключено) — hidePerfNote в ответе отсутствует', async () => {
+    const app = appWith({ agentConfig: { spawnFn: spawn(), extractFn: extract } });
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`).attach('files[]', validPdf(), 'a.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+    const res = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.body.hidePerfNote).toBeUndefined();
+  });
+});
+
 describe('classifySpeed (#замеры — пороги быстро/медленно)', () => {
   it('fast ≤ FAST, slow ≥ SLOW, между — normal (границы включительно)', () => {
     expect(classifySpeed(10000, 45000, 90000)).toBe('fast');

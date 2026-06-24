@@ -238,6 +238,8 @@ export function createApp(config = {}) {
   // Только для лога на странице, НЕ в метрики. По умолчанию выключено (opt-in). Живой mm:ss
   // «обрабатывается N сек» UI показывает всегда (от клиентского procSince), независимо от флага (#203).
   const showTimings = config.showTimings ?? (String(process.env.SHOW_TIMINGS ?? '').toLowerCase() === 'true');
+  // HIDE_PERF_NOTE=true — скрыть блок «⏱ Диагностика скорости агента» в UI (по умолчанию виден).
+  const hidePerfNote = config.hidePerfNote ?? (String(process.env.HIDE_PERF_NOTE ?? '').toLowerCase() === 'true');
   // Пороги «быстро/медленно» по total-времени файла для лога замеров (#замеры): ≤FAST → fast,
   // ≥SLOW → slow, между — normal. Оценочные — калибруются реальностью через env (docs/PARSING_PERFORMANCE.md).
   const timingFastMs = config.timingFastMs ?? (Number.parseInt(process.env.TIMING_FAST_MS ?? '', 10) || 45000);
@@ -704,6 +706,7 @@ export function createApp(config = {}) {
       jobId: job.jobId,
       status: job.status,
       ...(showTimings ? { showTimings: true } : {}),
+      ...(hidePerfNote ? { hidePerfNote: true } : {}),
       files: job.files.map((f) => ({
         name: f.name, status: f.status, result: f.result, error: f.error, problem: f.problem,
         // Тайминги отдаём только при SHOW_TIMINGS (#замеры) — иначе ответ без изменений.

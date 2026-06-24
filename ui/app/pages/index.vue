@@ -185,11 +185,11 @@
               {{ timingLine(file) }}
             </p>
 
-            <!-- Само-диагностика скорости агента (#279): что замедлило разбор. Показываем ВСЕГДА, когда
-                 агент её прислал (не привязано к SHOW_TIMINGS): данные всё равно в result.feedback, note
-                 санитизирован и без ПДн, блок свёрнут. На GitHub-issue не идёт (#294). -->
+            <!-- Само-диагностика скорости агента (#279): показываем всегда, когда агент прислал.
+                 HIDE_PERF_NOTE=true на бэке → бэк шлёт hidePerfNote=true → блок скрыт.
+                 note санитизирован и без ПДн, блок свёрнут. На GitHub-issue не идёт (#294). -->
             <details
-              v-if="perfDiagOf(file).length"
+              v-if="!job?.hidePerfNote && perfDiagOf(file).length"
               class="mt-1 text-xs"
             >
               <summary class="cursor-pointer select-none text-base-500">
@@ -352,6 +352,7 @@ interface JobStatus {
   status: 'pending' | 'processing' | 'done' | 'error' | 'cancelled'
   files: FileEntry[]
   showTimings?: boolean
+  hidePerfNote?: boolean
 }
 
 // ── Состояние ────────────────────────────────────────────────────────────────
