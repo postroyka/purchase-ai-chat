@@ -1018,11 +1018,12 @@ export async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
     const kind = normalizeKind(typeof fb.kind === 'string' ? fb.kind : '') ?? 'problem';
     const tool = typeof fb.tool === 'string' ? fb.tool : '';
     metrics?.recordFeedback({ source: 'agent', kind })?.catch(() => {});
-    // perf (#279): диагностика скорости — агрегатный сигнал, НЕ задача-трекер. На проде почти каждый
-    // файл «медленный» (≳15 позиций, ~100с), а note уникальна per-file → дедуп не ловит → issue почти на
-    // КАЖДЫЙ файл + выжигание общего hourly-cap (глушит реальные problem/suggestion). Поэтому perf идёт
-    // ТОЛЬКО в метрику (счётчик «Скорость») + строку лога (содержимое для разбора, греп `[perf-diag]`),
-    // БЕЗ GitHub-issue. redactToken — на всякий случай (note по промпту и так без документа/секретов).
+    // perf (#279): диагностика скорости — агрегатный сигнал, НЕ задача-трекер. На проде файлы с заметной
+    // работой (≳20 позиций / трения) частые, а note уникальна per-file → дедуп не ловит → issue почти на
+    // КАЖДЫЙ файл + выжигание общего hourly-cap (глушит реальные problem/suggestion). Поэтому perf НЕ
+    // заводит GitHub-issue: идёт в метрику (счётчик «Скорость») + строку лога (греп `[perf-diag]`); оператору
+    // показывается в UI под таймингами (читается из result.feedback напрямую, при SHOW_TIMINGS, #294).
+    // redactToken — на всякий случай (note по промпту и так без документа/секретов).
     if (kind === 'perf') {
       // note — недоверенный вывод модели (она читает недоверенный документ). Санитизируем лог-строку
       // НЕ слабее issue-пути: sanitizeComment → stripHostileChars (убирает ANSI/bidi/zero-width — защита

@@ -185,6 +185,26 @@
               {{ timingLine(file) }}
             </p>
 
+            <!-- Само-диагностика скорости агента (#279): что замедлило разбор. Только при SHOW_TIMINGS
+                 (диагностический сигнал, как и тайминги). На GitHub-issue не идёт (#294). -->
+            <details
+              v-if="job?.showTimings && perfDiagOf(file).length"
+              class="mt-1 text-xs"
+            >
+              <summary class="cursor-pointer select-none text-base-500">
+                ⏱ Диагностика скорости агента
+              </summary>
+              <ul class="mt-1 list-disc pl-5 text-base-600">
+                <li
+                  v-for="(note, i) in perfDiagOf(file)"
+                  :key="i"
+                  class="whitespace-pre-wrap break-words"
+                >
+                  {{ note }}
+                </li>
+              </ul>
+            </details>
+
             <!-- Лог обработки по файлу (#218). Если есть замечания (нет сделки / ошибка) — лог сразу
                  развёрнут и подсвечен в B24Alert (#251), чтобы было видно, почему так. Чистый успех
                  (создана сделка) — лог свёрнут под «details», как было: при штатном результате он не нужен. -->
@@ -683,6 +703,25 @@ function processingLogOf(file: FileEntry): string {
   const r = file.result as { processingLog?: unknown } | null | undefined
   if (!r || typeof r !== 'object' || typeof r.processingLog !== 'string') return ''
   return r.processingLog.trim().slice(0, 10000) // cap: защита DOM от гигантского лога
+}
+
+// Само-диагностика скорости агента (#279): записи feedback[] с kind:'perf' — что замедлило разбор.
+// Показываем под таймингами (только при SHOW_TIMINGS — это диагностический сигнал). На GitHub-issue
+// perf не идёт (#294), поэтому это единственное место, где оператор его видит.
+// `note` — НЕДОВЕРЕННЫЙ вывод модели (она читает недоверенный документ). Vue экранирует HTML ({{ }}),
+// но bidi/zero-width/управляющие символы могут «перевернуть» текст (Trojan Source) — вырезаем их тем же
+// классом, что и серверный путь отзывов (backend stripHostileChars). Затем cap длины/числа — защита DOM.
+// eslint-disable-next-line no-control-regex
+const PERF_HOSTILE_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\u202a-\u202e\u2066-\u2069\u200b-\u200d\ufeff]/g
+function perfDiagOf(file: FileEntry): string[] {
+  const r = file.result as { feedback?: unknown } | null | undefined
+  if (!r || typeof r !== 'object' || !Array.isArray(r.feedback)) return []
+  return r.feedback
+    .filter((f): f is { kind?: unknown, note?: unknown } => !!f && typeof f === 'object')
+    .filter(f => f.kind === 'perf' && typeof f.note === 'string' && f.note.trim() !== '')
+    .map(f => (f.note as string).replace(PERF_HOSTILE_CHARS, '').trim().slice(0, 2000)) // sanitize + cap
+    .filter(note => note !== '') // после вырезания мог остаться пустой
+    .slice(0, 5) // не более 5 записей
 }
 
 async function submitFileFeedback(file: FileEntry) {
