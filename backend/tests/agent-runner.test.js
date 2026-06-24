@@ -680,13 +680,14 @@ describe('runAgent — общий бюджет файла (#285)', () => {
   });
 
   it('не уходит в ретрай транзиентного сбоя, если остаток бюджета ≤ grace (#285)', async () => {
-    // Бюджет крошечный (=timeoutMs=1мс): после первой транзиентной ошибки остаток ≤ SIGKILL_GRACE_MS
-    // → новый ретрай не стартуем, surface исходную ошибку. spawn вызывается РОВНО один раз, несмотря
-    // на maxAttempts:3.
+    // Бюджет = grace (5000мс): первая попытка отрабатывает штатно (мок закрывается мгновенно, таймаут
+    // попытки большой — гонки с 1мс-таймаутом нет), затем остаток бюджета (≈5000) ≤ SIGKILL_GRACE_MS
+    // → новый ретрай НЕ стартуем, surface исходную транзиентную ошибку. spawn вызывается РОВНО один
+    // раз, несмотря на maxAttempts:3. (timeoutMs=fileBudgetMs, чтобы clamp Math.max не поднял бюджет.)
     const spawnFn = makeMockSpawn({ exitCode: 1, stderr: 'API Error: 429 rate limit exceeded' });
     await expect(
       runAgent('/f.pdf', '20', {
-        ...BASE_CONFIG, maxAttempts: 3, sleepFn: async () => {}, timeoutMs: 1, fileBudgetMs: 1, spawnFn,
+        ...BASE_CONFIG, maxAttempts: 3, sleepFn: async () => {}, timeoutMs: 5000, fileBudgetMs: 5000, spawnFn,
       }),
     ).rejects.toThrow(/429|exited with code/i);
     expect(spawnFn).toHaveBeenCalledTimes(1);
