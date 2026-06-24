@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createJobsStore } from '../jobs-store.js';
+import { createJobsStore, recoverStuckJobs } from '../jobs-store.js';
 
 // Suppress expected store noise — warn (in-memory) and error (Redis parse/schema failures)
 vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -48,6 +48,94 @@ describe('createJobsStore — in-memory (no redisUrl)', () => {
     const got = await store.get('job-2');
     expect(got.status).toBe('processing');
     expect(got.createdAt).toBe(1000);
+  });
+});
+
+describe('recoverStuckJobs — #44 recovery «зомби»-заданий при старте', () => {
+  let store;
+  beforeEach(() => { store = createJobsStore({ redisUrl: '' }); });
+
+  it('помечает processing-задание и его незавершённые файлы как error', async () => {
+    await store.set('z1', {
+      jobId: 'z1', status: 'processing', responsibleUserId: null, dir: '/tmp/z1', createdAt: Date.now(),
+      files: [
+        { name: 'a.pdf', status: 'done', result: { ok: true }, error: null },
+        { name: 'b.pdf', status: 'processing', result: null, error: null },
+        { name: 'c.pdf', status: 'pending', result: null, error: null },
+      ],
+    });
+    const res = await recoverStuckJobs(store);
+    expect(res.recovered).toBe(1);
+    const got = await store.get('z1');
+    expect(got.status).toBe('error');
+    expect(got.error).toMatch(/перезапущ/i);
+    expect(got.files[0].status).toBe('done');      // завершённый файл не трогаем
+    expect(got.files[1].status).toBe('error');     // processing → error
+    expect(got.files[2].status).toBe('error');     // pending → error
+  });
+
+  it('помечает и pending-задание (создано, но не стартовало)', async () => {
+    await store.set('z2', {
+      jobId: 'z2', status: 'pending', responsibleUserId: null, dir: '/tmp/z2', createdAt: Date.now(),
+      files: [{ name: 'a.pdf', status: 'pending', result: null, error: null }],
+    });
+    const res = await recoverStuckJobs(store);
+    expect(res.recovered).toBe(1);
+    expect((await store.get('z2')).status).toBe('error');
+  });
+
+  it('НЕ трогает завершённые задания (done/error/cancelled)', async () => {
+    for (const st of ['done', 'error', 'cancelled']) {
+      await store.set(st, {
+        jobId: st, status: st, responsibleUserId: null, dir: '/tmp/' + st, createdAt: Date.now(),
+        files: [{ name: 'a.pdf', status: st === 'done' ? 'done' : 'error', result: null, error: null }],
+      });
+    }
+    const res = await recoverStuckJobs(store);
+    expect(res.recovered).toBe(0);
+    expect((await store.get('done')).status).toBe('done');
+    expect((await store.get('cancelled')).status).toBe('cancelled');
+  });
+
+  it('идемпотентна: повторный вызов уже ничего не меняет', async () => {
+    await store.set('z3', {
+      jobId: 'z3', status: 'processing', responsibleUserId: null, dir: '/tmp/z3', createdAt: Date.now(),
+      files: [{ name: 'a.pdf', status: 'processing', result: null, error: null }],
+    });
+    expect((await recoverStuckJobs(store)).recovered).toBe(1);
+    expect((await recoverStuckJobs(store)).recovered).toBe(0);
+  });
+
+  it('пустой стор → recovered: 0, без ошибок', async () => {
+    const res = await recoverStuckJobs(store);
+    expect(res).toEqual({ recovered: 0, ids: [] });
+  });
+
+  it('processing-задание без массива files не падает', async () => {
+    await store.set('nofiles', {
+      jobId: 'nofiles', status: 'processing', responsibleUserId: null, dir: '/tmp/nf', createdAt: Date.now(),
+      files: [], // стор требует массив; проверяем устойчивость к пустому
+    });
+    const res = await recoverStuckJobs(store);
+    expect(res.recovered).toBe(1);
+    expect((await store.get('nofiles')).status).toBe('error');
+  });
+
+  it('стор без listJobIds → безопасный no-op', async () => {
+    const res = await recoverStuckJobs({ get: async () => null, set: async () => {} });
+    expect(res).toEqual({ recovered: 0, ids: [] });
+  });
+
+  it('сохраняет исходную причину файла/задания, если она уже задана', async () => {
+    await store.set('z4', {
+      jobId: 'z4', status: 'processing', responsibleUserId: null, dir: '/tmp/z4', createdAt: Date.now(),
+      error: 'исходная причина',
+      files: [{ name: 'a.pdf', status: 'processing', result: null, error: 'файл-причина' }],
+    });
+    await recoverStuckJobs(store);
+    const got = await store.get('z4');
+    expect(got.error).toBe('исходная причина');
+    expect(got.files[0].error).toBe('файл-причина');
   });
 });
 

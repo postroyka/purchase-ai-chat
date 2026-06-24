@@ -2,7 +2,7 @@ import Redis from 'ioredis';
 
 /**
  * @param {{ redisUrl?: string, ttlHours?: number }} [config]
- * @returns {{ get(id: string): Promise<object|null>, set(id: string, job: object): Promise<void>, markCancelled(id: string): Promise<void>, isCancelled(id: string): Promise<boolean>, ping(): Promise<void> }}
+ * @returns {{ get(id: string): Promise<object|null>, set(id: string, job: object): Promise<void>, markCancelled(id: string): Promise<void>, isCancelled(id: string): Promise<boolean>, ping(): Promise<void>, listJobIds(): Promise<string[]> }}
  */
 export function createJobsStore(config = {}) {
   const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? '';
@@ -73,6 +73,21 @@ function createRedisStore(url, ttlSeconds) {
     async ping() {
       await client.ping();
     },
+    // #44 (P1): перечислить id всех заданий для recovery «зомби» при старте. SCAN (не KEYS) —
+    // не блокирует Redis на больших наборах; ключи отмены (`job:<id>:cancel`) пропускаем.
+    async listJobIds() {
+      const ids = [];
+      let cursor = '0';
+      do {
+        const [next, keys] = await client.scan(cursor, 'MATCH', 'job:*', 'COUNT', 200);
+        cursor = next;
+        for (const key of keys) {
+          if (key.endsWith(':cancel')) continue;
+          ids.push(key.slice('job:'.length));
+        }
+      } while (cursor !== '0');
+      return ids;
+    },
   };
 }
 
@@ -115,5 +130,73 @@ function createMemoryStore(ttlSeconds) {
     async ping() {
       // in-memory store is always available
     },
+    // #44: для symmetry с Redis-стором. У in-memory данные не переживают рестарт, поэтому
+    // «зомби»-заданий после рестарта тут не бывает — но метод нужен для тестов recoverStuckJobs().
+    async listJobIds() {
+      return [...map.keys()];
+    },
   };
+}
+
+/**
+ * #44 (P1) — Recovery «зомби»-заданий при старте сервера.
+ *
+ * При краше/деплое контейнера задание могло остаться в статусе `processing` (или `pending`):
+ * процесс, который его вёл, умер, файлы уже могли быть удалены, и клиент завис бы на бесконечном
+ * «обрабатывается». При старте помечаем такие задания (и их незавершённые файлы) как `error` с
+ * понятной причиной, чтобы клиент получил определённый ответ. Завершённые файлы (`done`) не трогаем.
+ *
+ * Best-effort и идемпотентно: ошибки чтения/записи отдельных заданий логируются и не прерывают
+ * остальные. На in-memory сторе всегда no-op (нет переживающего рестарт состояния).
+ *
+ * @param {{ get: Function, set: Function, listJobIds: Function }} jobs
+ * @param {{ reason?: string }} [opts]
+ * @returns {Promise<{ recovered: number, ids: string[] }>}
+ */
+export async function recoverStuckJobs(jobs, opts = {}) {
+  const reason = opts.reason
+    ?? 'Сервер был перезапущен во время обработки — задание прервано, загрузите файл повторно';
+  if (typeof jobs.listJobIds !== 'function') return { recovered: 0, ids: [] };
+
+  let ids;
+  try {
+    ids = await jobs.listJobIds();
+  } catch (e) {
+    console.error('[jobs-store] recoverStuckJobs: listJobIds failed:', e);
+    return { recovered: 0, ids: [] };
+  }
+
+  const recovered = [];
+  for (const id of ids) {
+    let job;
+    try {
+      job = await jobs.get(id);
+    } catch (e) {
+      console.error(`[jobs-store] recoverStuckJobs: get failed for ${id}:`, e);
+      continue;
+    }
+    if (!job || (job.status !== 'processing' && job.status !== 'pending')) continue;
+
+    job.status = 'error';
+    if (job.error == null) job.error = reason;
+    if (Array.isArray(job.files)) {
+      for (const f of job.files) {
+        if (f && (f.status === 'processing' || f.status === 'pending')) {
+          f.status = 'error';
+          if (f.error == null) f.error = reason;
+        }
+      }
+    }
+    try {
+      await jobs.set(id, job);
+      recovered.push(id);
+    } catch (e) {
+      console.error(`[jobs-store] recoverStuckJobs: set failed for ${id}:`, e);
+    }
+  }
+
+  if (recovered.length) {
+    console.log(`[jobs-store] #44 recovery: ${recovered.length} зависших задани(й) помечены error после рестарта: ${recovered.join(', ')}`);
+  }
+  return { recovered: recovered.length, ids: recovered };
 }
