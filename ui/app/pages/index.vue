@@ -316,6 +316,7 @@
 <script setup lang="ts">
 import { fileBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
 import { mmss, timingLine, plural } from '~/utils/format-duration'
+import { failActiveFiles } from '~/utils/job-status'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
 definePageMeta({ layout: 'default' })
@@ -402,9 +403,15 @@ const jobElapsedMs = computed(() => {
 let pollController: AbortController | null = null
 let pollErrors = 0
 let pollDelay = 2000
+let lastPollSuccessTs = 0
 const POLL_MIN_MS = 2000
 const POLL_MAX_MS = 30000
 const MAX_POLL_ERRORS = 5
+// #280: счётчик ПОДРЯД идущих ошибок ловит «бэкенд лёг наглухо», но НЕ ловит интермиттентные сбои
+// (редкий успех сбрасывает счётчик в 0) при залипшем задании. Второй, устойчивый к чередованию
+// сигнал — «давно НЕ было успешного опроса»: здоровое задание опрашивается не реже POLL_MAX_MS (30 с),
+// поэтому порог 60 с (2 пропущенных окна) не убивает живое задание, но ловит реальную потерю связи.
+const POLL_NO_SUCCESS_CEILING_MS = 60000
 
 // ── Созданная сделка ───────────────────────────────────────────────────────────
 // Достаём ссылку на сделку из результата файла и открываем её. Внутри Bitrix24 —
@@ -537,6 +544,7 @@ function startPolling(jobId: string) {
   polling.value = true
   pollErrors = 0
   pollDelay = POLL_MIN_MS
+  lastPollSuccessTs = Date.now()
   scheduleNextPoll(jobId)
 }
 
@@ -552,6 +560,7 @@ async function pollOnce(jobId: string) {
       signal: controller.signal
     })
     pollErrors = 0
+    lastPollSuccessTs = Date.now()
     job.value = data
 
     if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
@@ -597,12 +606,23 @@ async function pollOnce(jobId: string) {
     // Запрос отменён (stopPolling / уход со страницы) — выходим без перезапуска.
     if (controller.signal.aborted) return
     pollErrors++
-    if (pollErrors >= MAX_POLL_ERRORS) {
+    const lostContact = pollErrors >= MAX_POLL_ERRORS
+      || (Date.now() - lastPollSuccessTs) >= POLL_NO_SUCCESS_CEILING_MS
+    if (lostContact) {
       stopPolling()
-      // Бэкенд недостижим — помечаем задание ошибочным, иначе hasActiveWork залипнет на
-      // 'pending' и guard будет зря удерживать пользователя на странице.
-      if (job.value) job.value = { ...job.value, status: 'error' }
-      uploadError.value = 'Не удалось получить статус задачи. Обновите страницу.'
+      // #280: бэкенд недостижим. Помечаем ошибкой не только само задание, но и ВСЕ ещё не
+      // завершённые файлы — иначе per-file строки залипнут на «Обработка…», а liveTiming/таймер
+      // не остановятся (источник истины для них — статусы файлов, не job.status). hasActiveWork
+      // при этом тоже спадёт, и guard перестанет зря удерживать пользователя на странице.
+      const msg = 'Не удалось получить статус обработки: сервер недоступен. Обновите страницу или попробуйте позже.'
+      if (job.value) job.value = failActiveFiles(job.value, msg)
+      uploadError.value = msg
+      toast.add({
+        title: 'Потеряна связь с сервером',
+        description: 'Статус обработки недоступен. Файлы помечены ошибкой — обновите страницу или попробуйте позже.',
+        color: 'air-primary-alert',
+        duration: 7000
+      })
       return
     }
     pollDelay = Math.min(pollDelay * 1.5, POLL_MAX_MS)
@@ -620,6 +640,10 @@ function stopPolling() {
     pollController = null
   }
   polling.value = false
+  // #280: гигиена — обнуляем счётчики опроса, чтобы следующий запуск стартовал «с чистого листа»
+  // (startPolling их и так переинициализирует, но явный сброс убирает зависимость от порядка).
+  pollErrors = 0
+  lastPollSuccessTs = 0
 }
 
 // ── Остановка импорта (#cancel) ───────────────────────────────────────────────
