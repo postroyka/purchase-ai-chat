@@ -53,6 +53,18 @@ export default defineEventHandler((event) => {
     })
   }
 
+  // #105 (P3): reject a too-short server token as "not configured". A 3-char token
+  // would pass timingSafeEqual and guard /mcp with a guessable/brute-forceable
+  // secret. The intended value is `openssl rand -hex 32` (64 chars); require ≥32 so
+  // a typo/truncated MCP_AUTH_TOKEN can't silently weaken auth. Same 503 — don't
+  // leak misconfiguration to anonymous callers.
+  if (expected.length < 32) {
+    throw createError({
+      statusCode: 503,
+      statusMessage: 'MCP endpoint is not available',
+    })
+  }
+
   const header = getHeader(event, 'authorization')
   if (!header) {
     // RFC 6750 §3: a 401 from a Bearer-protected resource MUST carry a
