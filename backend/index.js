@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import Redis from 'ioredis';
 import { createHash } from 'node:crypto';
 import { MIME_SNIFF_BYTES, validateSniffedMime } from './file-validation.js';
-import { createJobsStore } from './jobs-store.js';
+import { createJobsStore, recoverStuckJobs } from './jobs-store.js';
 import { createMetrics } from './metrics.js';
 import { createNbrbRate } from './nbrb-rate.js';
 import { startUploadsCleanup } from './uploads-cleanup.js';
@@ -432,6 +432,9 @@ export function createApp(config = {}) {
   // Track in-flight processJob calls so graceful shutdown can wait for them.
   let activeJobs = 0;
   app.getActiveJobCount = () => activeJobs;
+  // #44 (P1): recovery «зомби»-заданий после рестарта. Вызывается из прод-entrypoint при старте
+  // (НЕ внутри createApp — держим импорт в тестах герметичным, как и таймеры выше/ниже).
+  app.recoverStuckJobs = (opts) => recoverStuckJobs(jobs, opts);
   // Expose the resolved upload dir so the prod entrypoint's retention sweep targets the SAME
   // directory createApp uses — the two must never resolve UPLOAD_DIR independently and diverge.
   app.getUploadDir = () => uploadDir;
@@ -1203,6 +1206,15 @@ if (process.argv[1] === __filename) {
   nbrbRate.get()
     .then((r) => console.log(`[backend] USD→BYN rate: ${r.rate} (source: ${r.source}${r.date ? `, ${r.date}` : ''})`))
     .catch(() => {});
+  // #44 (P1): пометить «зомби»-задания (processing/pending от прошлого, умершего процесса) как error,
+  // чтобы клиент не висел на бесконечном «обрабатывается». Делаем ДО listen() — сервер ещё не
+  // принимает запросы, поэтому recovery не может задеть свежесозданное задание (гонка исключена).
+  // Best-effort: recoverStuckJobs не бросает (ошибки ловятся внутри и логируются).
+  const recovery = await app.recoverStuckJobs();
+  if (recovery.recovered) {
+    console.log(`[backend] #44 recovery: помечено error ${recovery.recovered} зависших задани(й) после рестарта`);
+  }
+
   const server = app.listen(PORT, () => {
     console.log(`[backend] procure-ai backend listening on port ${PORT}`);
   });
