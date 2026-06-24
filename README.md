@@ -78,7 +78,8 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `USD_BYN_RATE` | app | — | **Фолбэк** курса USD→BYN (живой курс берётся из НБРБ `api.nbrb.by`, кэш 12 ч; фолбэк — при сбое). По умолчанию `3.3` |
 | `CLAUDE_CODE_BIN` | app | — | Путь к бинарнику Claude Code CLI (по умолчанию: `claude` из PATH) |
 | `CLAUDE_MODEL` | app | — | Модель Claude для агента (по умолчанию из настроек claude CLI) |
-| `AGENT_TIMEOUT_MS` | app | — | Жёсткий лимит разбора **одного файла** (по умолчанию: `360000` = 6 мин). По таймауту разбор останавливается с ошибкой и **не** ретраится (#260) |
+| `AGENT_TIMEOUT_MS` | app | — | Лимит **одной попытки** claude (по умолчанию: `360000` = 6 мин). По таймауту попытка останавливается и **не** ретраится (#260) |
+| `AGENT_FILE_BUDGET_MS` | app | — | Общий wall-clock бюджет на **файл целиком**: извлечение/OCR + все попытки (#285). Исчерпан → стоп с timeout. По умолчанию `720000` = 12 мин (2× попытки); не меньше одной попытки |
 | `ANTHROPIC_API_KEY` | app | ✅² | Ключ Claude API для агента. **В Docker обязателен** — подписка claude в контейнере не работает |
 | `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX` + `AWS_*` / `GOOGLE_*` | app | — | Альтернативные провайдеры Claude (Bedrock/Vertex) — пробрасываются агенту |
 | `NODE_ENV` / `PORT` / `UPLOAD_DIR` | app | — | Стандартные настройки рантайма |

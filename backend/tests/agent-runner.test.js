@@ -653,6 +653,46 @@ describe('runAgent — transient retry (#104)', () => {
   });
 });
 
+describe('runAgent — общий бюджет файла (#285)', () => {
+  it('прерывается с timeout-ошибкой, если бюджет файла исчерпан извлечением текста (OCR входит в бюджет)', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    // extract медленнее бюджета → к первой попытке остатка нет → стоп, spawn не зовём.
+    const slowExtract = async () => { await new Promise((r) => setTimeout(r, 40)); return null; };
+    await expect(
+      runAgent('/f.pdf', '20', {
+        ...BASE_CONFIG, timeoutMs: 10, fileBudgetMs: 10, extractFn: slowExtract, spawnFn,
+      }),
+    ).rejects.toThrow(/file budget exhausted/);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it('бюджет файла классифицируется как терминальный timeout, не транзиентный (без ретрая)', () => {
+    expect(isTransientAgentError(new Error('Agent timed out after 360000ms (file budget exhausted)'))).toBe(false);
+  });
+
+  it('бюджет не опускается ниже одной попытки: при fileBudgetMs < timeoutMs обычный прогон успешен', async () => {
+    const spawnFn = makeMockSpawn({ stdout: wrapResult(VALID_DEAL_RESULT) });
+    const result = await runAgent('/f.pdf', '20', {
+      ...BASE_CONFIG, timeoutMs: 1000, fileBudgetMs: 5, spawnFn, // 5 < 1000 → бюджет поднимается до 1000
+    });
+    expect(result.deal.dealId).toBe('d-7');
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('не уходит в ретрай транзиентного сбоя, если остаток бюджета ≤ grace (#285)', async () => {
+    // Бюджет крошечный (=timeoutMs=1мс): после первой транзиентной ошибки остаток ≤ SIGKILL_GRACE_MS
+    // → новый ретрай не стартуем, surface исходную ошибку. spawn вызывается РОВНО один раз, несмотря
+    // на maxAttempts:3.
+    const spawnFn = makeMockSpawn({ exitCode: 1, stderr: 'API Error: 429 rate limit exceeded' });
+    await expect(
+      runAgent('/f.pdf', '20', {
+        ...BASE_CONFIG, maxAttempts: 3, sleepFn: async () => {}, timeoutMs: 1, fileBudgetMs: 1, spawnFn,
+      }),
+    ).rejects.toThrow(/429|exited with code/i);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('isTransientAgentError (#104)', () => {
   it('classifies provider/network blips as transient', () => {
     for (const m of [

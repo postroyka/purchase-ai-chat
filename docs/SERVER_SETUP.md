@@ -178,11 +178,13 @@ bash agent-e2e-test.sh
 > **♻️ Ретрай агента (#104).** Транзиентные сбои провайдера (HTTP 429/5xx,
 > сеть, таймаут) агент повторяет с бэкоффом: `AGENT_MAX_ATTEMPTS` (по умолч. 3),
 > `AGENT_RETRY_BASE_MS`, `AGENT_RETRY_MAX_MS` (подробности — в `.env.prod.example`).
-> `AGENT_MAX_ATTEMPTS=1` выключает ретрай. ⚠️ У каждой попытки полный
-> `AGENT_TIMEOUT_MS`, поэтому при недоступности провайдера задание может держать
-> слот до `AGENT_MAX_ATTEMPTS × AGENT_TIMEOUT_MS`; с `MAX_CONCURRENT_JOBS=2`
-> новые загрузки в это время получают `429`. Если важнее «быстро падать» —
-> снизьте `AGENT_MAX_ATTEMPTS` или `AGENT_TIMEOUT_MS`.
+> `AGENT_MAX_ATTEMPTS=1` выключает ретрай. ⚠️ У каждой попытки лимит
+> `AGENT_TIMEOUT_MS` (6 мин), но суммарное время файла ограничено **общим бюджетом**
+> `AGENT_FILE_BUDGET_MS` (#285, по умолч. 12 мин = 2× попытки): извлечение/OCR + все
+> попытки. Поэтому задание держит слот не дольше `AGENT_FILE_BUDGET_MS` (а не
+> `AGENT_MAX_ATTEMPTS × AGENT_TIMEOUT_MS`); с `MAX_CONCURRENT_JOBS=2` новые загрузки в
+> это время получают `429`. Если важнее «быстро падать» — снизьте `AGENT_FILE_BUDGET_MS`
+> (или `AGENT_MAX_ATTEMPTS`/`AGENT_TIMEOUT_MS`).
 
 > **Что считать успехом.** Полный флоу: агент запустился, авторизовался, прочитал
 > файл, вызвал инструменты `b24_pst_crm_*` и **создал сделку** в Bitrix24
