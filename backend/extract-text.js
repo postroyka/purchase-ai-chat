@@ -17,8 +17,18 @@ const MIN_TEXT_CHARS = 24;
 // DPI × pages). Tunable via env if more capacity is available.
 const MAX_OCR_PAGES = parseInt(process.env.MAX_OCR_PAGES || '8', 10);
 const MAX_TEXT_CHARS = 100_000;
+// #267: гибридный PDF (таблица — текстовый слой, шапка/печать с УНП — картинка). Если в текстовом
+// слое нет налогового номера, OCR'им страницы и подмешиваем реквизиты со скана, резервируя под них
+// этот бюджет символов, чтобы УНП не срезался лимитом MAX_TEXT_CHARS.
+const OCR_SUPPLEMENT_BUDGET = 8_000;
+const OCR_SUPPLEMENT_HEADER = '=== OCR со скана (реквизиты поставщика/договора; НЕ источник товарных позиций) ===';
 // OCR raster DPI — 150 is enough for invoice text and ~4× lighter on RAM than 300.
 const OCR_DPI = process.env.OCR_DPI || '150';
+// #267: гибридный-PDF OCR-фолбэк нацелен на МЕЛКИЙ УНП в шапке/печати, поэтому растеризуем плотнее
+// (300 DPI) и только первые страницы (реквизиты в шапке) — это и улучшает распознавание печати, и
+// держит стоимость/RAM в узде (1–2 стр. @300 дешевле 8 стр. @150 по худшему случаю).
+const OCR_FALLBACK_DPI = process.env.OCR_FALLBACK_DPI || '300';
+const OCR_FALLBACK_PAGES = parseInt(process.env.OCR_FALLBACK_PAGES || '2', 10);
 // tesseract language packs that must be installed in the image (Dockerfile.app).
 const OCR_LANGS = process.env.OCR_LANGS || 'rus+eng+bel';
 // Hard cap per external process so a stuck pdftotext/tesseract/python can't wedge a job.
@@ -59,6 +69,19 @@ export function rlimitWrap(cmd, args, { asMb = OCR_RLIMIT_AS_MB, prlimitPath = P
 /** @param {string} s @returns {number} length ignoring whitespace */
 function meaningfulLen(s) {
   return s.replace(/\s+/g, '').length;
+}
+
+// #267: есть ли в тексте налоговый номер поставщика (РБ УНП = 9 цифр; РФ ИНН = 10/12 цифр).
+// Используется, чтобы понять, попал ли в извлечённый текст ключевой реквизит — без него агент не
+// найдёт поставщика и встанет на шаге 1. Детектор **только по ключевому слову** рядом с числом
+// (надёжно для нормальных счётов: «УНП 123456789», «ИНН: 1234567890», с пробелами/дефисами).
+// СОЗНАТЕЛЬНО НЕ ловим «голое» 9-значное число: счета пестрят 9-значными (номер счёта, телефон,
+// код), и такое ложное «номер есть» ГЛУШИЛО БЫ OCR-фолбэк ровно на гибридных счетах, ради которых
+// он и нужен. Лучше лишний (безопасный) OCR, чем тихо не добытый УНП.
+const TAX_ID_KEYWORD_RE = /(УН[ПН]|ИНН|UNP|INN)\s*[:.№#-]*\s*\d[\d\s-]{7,13}\d/iu;
+export function hasTaxId(text) {
+  if (typeof text !== 'string' || !text) return false;
+  return TAX_ID_KEYWORD_RE.test(text);
 }
 
 /**
@@ -105,42 +128,69 @@ function run(cmd, args) {
  * Returns null for anything else (the agent reads it via FILE_PATH) or on failure.
  *
  * @param {string} filePath
- * @returns {Promise<{ text: string, method: 'pdftotext'|'ocr'|'office' }|null>}
+ * @returns {Promise<{ text: string, method: 'pdftotext'|'pdftotext_ocr'|'ocr'|'office' }|null>}
  */
 export async function extractDocumentText(filePath) {
   const ext = extname(filePath).toLowerCase();
+  let result = null;
 
-  if (ext === '.pdf') return extractPdf(filePath);
-
-  if (IMAGE_EXTS.has(ext)) {
+  if (ext === '.pdf') {
+    result = await extractPdf(filePath);
+  } else if (IMAGE_EXTS.has(ext)) {
     const text = await ocrImage(filePath);
-    return text ? { text: text.slice(0, MAX_TEXT_CHARS), method: 'ocr' } : null;
-  }
-
-  if (OFFICE_EXTS.has(ext)) {
+    result = text ? { text: text.slice(0, MAX_TEXT_CHARS), method: 'ocr' } : null;
+  } else if (OFFICE_EXTS.has(ext)) {
     try {
       const out = await run('python3', [DOC_PY, filePath]);
       const text = out.toString('utf8');
-      return meaningfulLen(text) > 0 ? { text: text.slice(0, MAX_TEXT_CHARS), method: 'office' } : null;
+      result = meaningfulLen(text) > 0 ? { text: text.slice(0, MAX_TEXT_CHARS), method: 'office' } : null;
     } catch {
-      return null;
+      result = null;
     }
   }
 
-  return null;
+  // #267 диагностика: явно сигналим, когда в извлечённом тексте НЕТ налогового номера — это
+  // отличает «реквизита нет в документе» от «OCR/pdftotext его не добил». Без УНП агент встанет на
+  // шаге 1 (поиск поставщика), поэтому такой случай стоит видеть в логах.
+  if (result && !hasTaxId(result.text)) {
+    console.warn(`[extract-text] налоговый номер (УНП/ИНН) НЕ найден в извлечённом тексте (способ=${result.method}) для ${filePath} — агент может не найти поставщика (#267)`);
+  }
+
+  return result;
 }
 
 /** PDF: embedded text layer, else OCR. @returns {Promise<{text,method}|null>} */
 async function extractPdf(filePath) {
+  let layerText = null;
   try {
     const out = await run('pdftotext', ['-layout', '-q', filePath, '-']);
     const text = out.toString('utf8');
-    if (meaningfulLen(text) >= MIN_TEXT_CHARS) {
-      return { text: text.slice(0, MAX_TEXT_CHARS), method: 'pdftotext' };
-    }
+    if (meaningfulLen(text) >= MIN_TEXT_CHARS) layerText = text;
   } catch {
     // pdftotext missing or failed → try OCR.
   }
+
+  if (layerText) {
+    // Есть текстовый слой с налоговым номером — это нормальный текстовый PDF, OCR не нужен.
+    if (hasTaxId(layerText)) {
+      return { text: layerText.slice(0, MAX_TEXT_CHARS), method: 'pdftotext' };
+    }
+    // #267: текст есть, но УНП/ИНН в нём НЕТ — частый случай гибридного счёта, где шапка/печать с
+    // реквизитами вшита картинкой. OCR'им страницы и, если OCR добыл налоговый номер, подмешиваем
+    // его как ОТДЕЛЬНУЮ секцию «реквизиты со скана», сохраняя чистую табличную часть из текстового
+    // слоя (чтобы не зашуметь позиции и не задвоить их). OCR-секцию помечаем — промпт берёт из неё
+    // только реквизиты, не товарные строки.
+    const ocr = await ocrPdf(filePath, { dpi: OCR_FALLBACK_DPI, maxPages: OCR_FALLBACK_PAGES });
+    if (ocr && hasTaxId(ocr)) {
+      const head = layerText.slice(0, MAX_TEXT_CHARS - OCR_SUPPLEMENT_BUDGET - OCR_SUPPLEMENT_HEADER.length - 4);
+      const merged = `${head}\n\n${OCR_SUPPLEMENT_HEADER}\n${ocr.slice(0, OCR_SUPPLEMENT_BUDGET)}`;
+      return { text: merged.slice(0, MAX_TEXT_CHARS), method: 'pdftotext_ocr' };
+    }
+    // OCR не добавил налоговый номер (или недоступен) — отдаём текстовый слой как есть.
+    return { text: layerText.slice(0, MAX_TEXT_CHARS), method: 'pdftotext' };
+  }
+
+  // Нет читаемого текстового слоя → скан → полностраничный OCR.
   const text = await ocrPdf(filePath);
   return text ? { text: text.slice(0, MAX_TEXT_CHARS), method: 'ocr' } : null;
 }
@@ -156,8 +206,14 @@ async function ocrImage(filePath) {
   }
 }
 
-/** Rasterise up to MAX_OCR_PAGES pages to PNG and OCR each. @returns {Promise<string|null>} */
-async function ocrPdf(filePath) {
+/**
+ * Rasterise up to `maxPages` pages to PNG and OCR each.
+ * @param {string} filePath
+ * @param {{ dpi?: string, maxPages?: number }} [opts] — override raster DPI / page cap (#267 fallback
+ *   uses higher DPI + fewer pages for small УНП in the header). Defaults: OCR_DPI / MAX_OCR_PAGES.
+ * @returns {Promise<string|null>}
+ */
+async function ocrPdf(filePath, { dpi = OCR_DPI, maxPages = MAX_OCR_PAGES } = {}) {
   let dir;
   try {
     dir = mkdtempSync(join(tmpdir(), 'procure-ocr-'));
@@ -165,7 +221,7 @@ async function ocrPdf(filePath) {
     return null;
   }
   try {
-    await run('pdftoppm', ['-png', '-r', OCR_DPI, '-l', String(MAX_OCR_PAGES), filePath, join(dir, 'page')]);
+    await run('pdftoppm', ['-png', '-r', String(dpi), '-l', String(maxPages), filePath, join(dir, 'page')]);
     const pages = readdirSync(dir).filter((f) => f.endsWith('.png')).sort();
     let text = '';
     for (const png of pages) {
