@@ -1154,8 +1154,9 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       console.error(`[processJob] error processing file ${fileEntry.name} (job ${jobId}): ${safeMsg}`);
       fileEntry.status = 'error';
       const outcome = classifyAgentError(safeMsg);
-      // #260: по таймауту показываем оператору понятную причину вместо технического
-      // «Agent timed out after …ms». Лимит разбора одного файла — AGENT_TIMEOUT_MS (по умолч. 6 мин).
+      // #260/#285: по таймауту показываем оператору понятную причину вместо технического
+      // «Agent timed out after …ms». Лимит файла — AGENT_FILE_BUDGET_MS (extract+попытки, по умолч.
+      // 12 мин); лимит одной попытки — AGENT_TIMEOUT_MS (6 мин).
       fileEntry.error = outcome === 'timeout'
         ? 'Разбор файла превысил лимит времени и был остановлен.'
         : safeMsg.slice(0, MAX_ERROR_CHARS);

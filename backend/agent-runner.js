@@ -31,7 +31,16 @@ function injectForcedFeedback(result, tag = '[agent]') {
   return result;
 }
 
-const DEFAULT_TIMEOUT_MS = 6 * 60 * 1000; // 6 minutes (#260 — жёсткий лимит разбора одного файла)
+const DEFAULT_TIMEOUT_MS = 6 * 60 * 1000; // 6 minutes (#260 — лимит ОДНОЙ попытки claude)
+// #285: общий wall-clock бюджет на обработку ОДНОГО файла — извлечение текста/OCR + ВСЕ попытки.
+// #260-таймаут ограничивал лишь одну попытку, поэтому скан с OCR + до 3 ретраев теоретически давал
+// до 3×6мин+extract. Бюджет — потолок файла целиком: исчерпан → стоп с timeout-ошибкой на границе
+// попытки (текущую долгую стадию не прерываем мгновенно — wall-clock может превысить бюджет на ≤
+// SIGKILL_GRACE_MS из-за SIGTERM→SIGKILL grace). Default = 2× per-attempt (12 мин): сохраняет
+// прежний худший случай (одна полная попытка ПОСЛЕ долгого OCR) + запас на один транзиентный ретрай
+// (#104), не регрессируя тяжёлые сканы. Поднять/опустить через AGENT_FILE_BUDGET_MS; не меньше
+// одной попытки (clamp Math.max(timeoutMs, …)).
+const DEFAULT_FILE_BUDGET_MS = 2 * DEFAULT_TIMEOUT_MS;
 // Grace period between SIGTERM and SIGKILL on timeout — gives claude a chance
 // to flush output and exit cleanly before we force-kill.
 const SIGKILL_GRACE_MS = 5_000;
@@ -42,8 +51,9 @@ const SIGKILL_GRACE_MS = 5_000;
 // faults (missing CLI, bad input, unparseable output) are never retried — see
 // isTransientAgentError(). NB (#260): our OWN run timeout is also TERMINAL (not retried) — the
 // AGENT_TIMEOUT_MS budget (6 мин) caps a SINGLE parse attempt; on our timeout we stop and surface
-// an error rather than burning another full budget on a retry. (The budget is PER ATTEMPT, so a
-// file hitting rare transient provider blips can still span a few attempts before failing.)
+// an error rather than burning another full budget on a retry. Transient blips may still span a few
+// attempts — но суммарно не дольше AGENT_FILE_BUDGET_MS (#285): общий бюджет файла (extract+попытки)
+// режет ретраи, когда времени уже не осталось.
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_MS = 1_000;
 const DEFAULT_RETRY_MAX_MS = 15_000;
@@ -101,6 +111,7 @@ const AGENT_ENV_KEYS = [
  *   mcpToken?: string,
  *   model?: string,
  *   timeoutMs?: number,
+ *   fileBudgetMs?: number,
  *   maxAttempts?: number,
  *   retryBaseMs?: number,
  *   retryMaxMs?: number,
@@ -122,8 +133,16 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   const mcpUrl = config.mcpUrl ?? process.env.MCP_SERVER_URL ?? 'http://mcp:3000/mcp';
   const mcpToken = config.mcpToken ?? process.env.NUXT_MCP_AUTH_TOKEN ?? '';
   const model = config.model ?? process.env.CLAUDE_MODEL ?? null;
-  const timeoutMs = config.timeoutMs
-    ?? parseInt(process.env.AGENT_TIMEOUT_MS ?? String(DEFAULT_TIMEOUT_MS), 10);
+  // toNum (а не голый parseInt): мусорный AGENT_TIMEOUT_MS не должен дать NaN, который потом
+  // отравит бюджет файла (Math.max(NaN,…)=NaN) и обнулит все его проверки (#285).
+  const timeoutMs = toNum(config.timeoutMs, process.env.AGENT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+  // #285: общий бюджет на файл (extract + все попытки + grace). Не меньше одной попытки (timeoutMs),
+  // иначе единственная попытка стартовала бы уже «просроченной».
+  const fileBudgetMs = Math.max(
+    timeoutMs,
+    toNum(config.fileBudgetMs, process.env.AGENT_FILE_BUDGET_MS, DEFAULT_FILE_BUDGET_MS),
+  );
+  const runStart = Date.now(); // старт бюджета файла — ДО извлечения текста (OCR входит в бюджет)
   // Retry knobs (transient-only), clamped to sane bounds: ≥1 attempt (1 disables retry),
   // base ≥ 0, and retryMaxMs held ≥ retryBaseMs so the backoff cap can't invert.
   const maxAttempts = Math.max(1, Math.trunc(toNum(config.maxAttempts, process.env.AGENT_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS)));
@@ -211,6 +230,14 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
   try {
     let lastErr;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // #285: сколько бюджета файла осталось на эту попытку. Извлечение текста/OCR и предыдущие
+      // попытки уже списаны (runStart — до extract). Эффективный таймаут попытки = min(на попытку,
+      // остаток бюджета). Если бюджет исчерпан — терминальный timeout (не стартуем новую попытку).
+      const remainingBudgetMs = fileBudgetMs - (Date.now() - runStart);
+      if (remainingBudgetMs <= 0) {
+        throw new Error(`Agent timed out after ${fileBudgetMs}ms (file budget exhausted)`);
+      }
+      const attemptTimeoutMs = Math.min(timeoutMs, remainingBudgetMs);
       try {
         const { result, meta } = await spawnClaude({
           spawnFn,
@@ -220,7 +247,7 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
           userMessage,
           mcpConfigPath,
           cwd,
-          timeoutMs,
+          timeoutMs: attemptTimeoutMs,
           jobId,
         });
         if (attempt > 1) console.log(`${tag} succeeded on attempt ${attempt}/${maxAttempts}`);
@@ -238,11 +265,16 @@ export async function runAgent(filePath, responsibleUserId, config = {}) {
         // Last attempt, or a permanent fault → surface the real error (callers/metrics
         // classify it). Only transient provider/network failures are worth a retry.
         if (attempt >= maxAttempts || !isTransientAgentError(err)) throw err;
+        // #285: не стартуем ретрай, если остатка бюджета не хватит даже на grace новой попытки —
+        // иначе попытка спавнится только чтобы тут же быть убитой. Surface transient-ошибку сразу.
+        if (fileBudgetMs - (Date.now() - runStart) <= SIGKILL_GRACE_MS) throw err;
         // Exponential backoff with partial jitter (50–100% of the window) so concurrent
         // jobs don't retry in lockstep against an already-stressed provider. (Named
         // backoffWindow, not `window`, to avoid shadowing the global of that name.)
+        // Backoff не должен «съесть» весь остаток бюджета: ограничиваем его остатком (#285).
         const backoffWindow = Math.min(retryMaxMs, retryBaseMs * 2 ** (attempt - 1));
-        const delay = Math.round(backoffWindow * (0.5 + randomFn() * 0.5));
+        const remainingForBackoff = Math.max(0, fileBudgetMs - (Date.now() - runStart));
+        const delay = Math.min(remainingForBackoff, Math.round(backoffWindow * (0.5 + randomFn() * 0.5)));
         console.warn(
           `${tag} attempt ${attempt}/${maxAttempts} failed (transient), retrying in ${delay}ms: `
           + redactToken(err.message),
