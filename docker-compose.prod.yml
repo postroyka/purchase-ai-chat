@@ -13,6 +13,15 @@ services:
   app:
     image: ghcr.io/postroyka/procure-ai-app:${APP_IMAGE_TAG:-latest}
     container_name: procure-app
+    # #44 (P1): даём процессу доработать текущие задания при `docker compose stop/down` перед
+    # SIGKILL. Должно быть БОЛЬШЕ окна graceful-drain бэкенда (SHUTDOWN_DRAIN_MS, по умолч. под
+    # бюджет файла AGENT_FILE_BUDGET_MS ~12 мин) с запасом. Для Watchtower-деплоя действует его
+    # `--stop-timeout` (см. сервис watchtower) — держим оба согласованными.
+    stop_grace_period: 13m
+    # #44 (P2): бэкенд держит rate-limiter и счётчик активных заданий В ПАМЯТИ процесса, очереди нет —
+    # поэтому строго ОДИН инстанс. НЕ запускать с `--scale app=N` и не масштабировать горизонтально без
+    # вынесения состояния в Redis/очередь. (`deploy.replicas` тут не ставим — в non-swarm compose он
+    # игнорируется и лишь вводит в заблуждение; ограничение обеспечивается этим правилом эксплуатации.)
     # Ротация логов: иначе json-file растёт без границ (см. OPERATIONS §2.4/§2.5).
     logging:
       driver: json-file
@@ -122,7 +131,10 @@ services:
     container_name: procure-watchtower
     # --scope limits this instance to containers labelled watchtower.scope=procure-ai
     # (app, mcp) — hard isolation from any other stack/watchtower on the host.
-    command: --interval 300 --cleanup --label-enable --scope procure-ai --stop-timeout 30s
+    # #44 (P1): --stop-timeout поднят с 30s, чтобы Watchtower при обновлении дал бэкенду доработать
+    # текущий разбор файла (до AGENT_FILE_BUDGET_MS ~12 мин) перед SIGKILL — иначе задание гибнет на
+    # полпути. Согласовано со stop_grace_period сервиса app и SHUTDOWN_DRAIN_MS бэкенда (timeout > drain).
+    command: --interval 300 --cleanup --label-enable --scope procure-ai --stop-timeout 13m
     # scope only — no watchtower.enable label: Watchtower must NOT self-update (pinned image).
     labels:
       - "com.centurylinklabs.watchtower.scope=procure-ai"

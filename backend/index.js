@@ -1270,14 +1270,19 @@ if (process.argv[1] === __filename) {
     server.closeAllConnections?.();
     server.close();
     feedbackOutbox.stop(); // halt the outbox drainer so its timer can't fire mid-shutdown
-    // Wait up to 25 s — leave 5 s headroom before Docker's stop-timeout (30 s)
-    // so the process exits cleanly before Docker sends SIGKILL.
-    const deadline = Date.now() + 25_000;
+    // #44 (P1): ждём завершения текущих заданий перед выходом, чтобы деплой/рестарт не убивал
+    // обработку на полпути. Окно настраивается `SHUTDOWN_DRAIN_MS` (по умолч. 25 с — безопасно для
+    // dev/локали). В проде его поднимают под бюджет файла (`AGENT_FILE_BUDGET_MS`, ~12 мин), а
+    // `stop_grace_period` контейнера и Watchtower `--stop-timeout` ДОЛЖНЫ быть больше этого окна
+    // (запас ~30 с), иначе Docker/Watchtower пришлёт SIGKILL раньше, чем процесс завершит задания.
+    // Что не успело за окно — поднимет recovery при следующем старте (статус error, не «зомби»).
+    const drainMs = Math.max(0, parseInt(process.env.SHUTDOWN_DRAIN_MS ?? '25000', 10) || 25000);
+    const deadline = Date.now() + drainMs;
     while (app.getActiveJobCount() > 0 && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 200));
     }
     if (app.getActiveJobCount() > 0) {
-      console.error('[backend] shutdown deadline exceeded — forcing exit');
+      console.error(`[backend] shutdown deadline (${drainMs}ms) exceeded with ${app.getActiveJobCount()} active job(s) — forcing exit; recovery пометит их error при следующем старте`);
       process.exit(1);
     }
     console.log('[backend] all jobs finished — exiting cleanly');
