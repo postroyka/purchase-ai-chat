@@ -53,6 +53,11 @@ docker inspect --format '{{.RestartCount}}' procure-app procure-mcp   # част
 отзывов, ждущих отправки в GitHub (durable-outbox #190); стабильно растёт → GitHub недоступен или токен
 протух (отзывы не теряются, но проверьте `GITHUB_FEEDBACK_TOKEN`).
 
+Поля `activeJobs` / `maxConcurrentJobs` в `/health` (#44) — текущая загрузка инстанса; `activeJobs ==
+maxConcurrentJobs` означает насыщение (новые `/upload` получают `429`, см. `MAX_CONCURRENT_JOBS`). На
+завершении каждого задания в лог пишется машиночитаемая строка `[job] {"jobId":…,"status":…,"files":…,
+"byStatus":{…},"totalMs":…}` (#44) — грепайте `\[job\]` для агрегации исходов/времени по заданиям.
+
 **Минимальный алертинг (рекомендуется):** внешний uptime-чек на `/health` (≠ 200 → алерт), плюс контроль
 места на диске (§2.4) и срока TLS (§2.7, < 14 дней).
 

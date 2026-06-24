@@ -743,7 +743,15 @@ export function createApp(config = {}) {
   app.get('/health', async (_req, res) => {
     try {
       await jobs.ping();
-      return res.json({ ok: true, redis: 'ok', feedbackOutboxPending: await feedbackOutbox.size() });
+      // #44 (P2): расширенный health — текущее число активных заданий + cap. Даёт оператору видеть
+      // загрузку инстанса и насыщение очереди (activeJobs == max → новые /upload получают 429).
+      return res.json({
+        ok: true,
+        redis: 'ok',
+        activeJobs,
+        maxConcurrentJobs,
+        feedbackOutboxPending: await feedbackOutbox.size(),
+      });
     } catch {
       return res.status(503).json({ ok: false, redis: 'unavailable' });
     }
@@ -1052,6 +1060,28 @@ export function classifySpeed(durationMs, fastMs, slowMs) {
   return 'normal';
 }
 
+// #44 (P2): структурная сводка задания для JSON-лога. Один машиночитаемый объект на завершённое
+// задание (jobId, итоговый статус, разбивка файлов по статусам, суммарное время обработки) — чтобы
+// ops мог грепать/агрегировать ход обработки, а не парсить разрозненные console-строки. Чистая
+// функция → юнит-тестируемо без всего пайплайна.
+export function summarizeJob(job) {
+  const files = Array.isArray(job?.files) ? job.files : [];
+  const byStatus = {};
+  let totalMs = 0;
+  for (const f of files) {
+    const st = (f && typeof f.status === 'string') ? f.status : 'unknown';
+    byStatus[st] = (byStatus[st] ?? 0) + 1;
+    if (f && Number.isFinite(f.durationMs)) totalMs += f.durationMs;
+  }
+  return {
+    jobId: typeof job?.jobId === 'string' ? job.jobId : null,
+    status: typeof job?.status === 'string' ? job.status : null,
+    files: files.length,
+    byStatus,
+    totalMs,
+  };
+}
+
 async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null, timing = {}) {
   const job = await jobs.get(jobId);
   if (!job) return;
@@ -1182,6 +1212,9 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
     job.status = job.files.every((f) => f.status === 'error') ? 'error' : 'done';
   }
   await jobs.set(jobId, job);
+
+  // #44 (P2): структурный JSON-лог завершения задания (грепаемо/агрегируемо по jobId/исходам).
+  try { console.log(`[job] ${JSON.stringify(summarizeJob(job))}`); } catch { /* лог не должен влиять на пайплайн */ }
 
   // Clean up uploaded files after processing — agent has already read them.
   if (job.dir) {
