@@ -391,6 +391,35 @@ describe('buildAgentFeedbackIssue', () => {
     expect(body).toContain('job-9');
     expect(body).toContain('scan.pdf');
   });
+
+  it('#219: тело несёт per-file контекст — сделку и человекочитаемый исход', () => {
+    const withDeal = buildAgentFeedbackIssue({
+      kind: 'problem',
+      tool: 'force_test',
+      note: 'AGENT_FORCE_FEEDBACK: тестовый фидбэк',
+      context: { jobId: 'job-1', fileName: 'invoice.pdf', dealId: '4242', outcome: 'ok' },
+    });
+    expect(withDeal.body).toContain('**Сделка:** #4242');             // ссылка на сделку с меткой
+    expect(withDeal.body).toContain('**Исход:** ok (сделка создана)'); // исход расшифрован
+    expect(withDeal.body).toContain('**Файл:** invoice.pdf');
+
+    // Без сделки — строка «Сделка» опускается, а исход называет причину словами
+    const noDeal = buildAgentFeedbackIssue({
+      kind: 'problem',
+      tool: 'force_test',
+      note: 'тест',
+      context: { jobId: 'job-2', fileName: 'scan.pdf', outcome: 'no_deal' },
+    });
+    expect(noDeal.body).toContain('**Исход:** no_deal (сделка не создана)');
+    expect(noDeal.body).not.toContain('**Сделка:**');                 // нет dealId → строки сделки нет
+
+    // Неизвестный код исхода показываем как есть (без падения)
+    const unknown = buildAgentFeedbackIssue({
+      kind: 'problem', tool: 'force_test', note: 'x',
+      context: { jobId: 'j', fileName: 'f.pdf', outcome: 'weird_code' },
+    });
+    expect(unknown.body).toContain('**Исход:** weird_code');
+  });
 });
 
 // ── Route: GET /feedback/config ───────────────────────────────────────────────
