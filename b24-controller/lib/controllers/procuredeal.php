@@ -14,8 +14,9 @@ use Shef\Purchase\Config;
  *   CATEGORY_ID = 1 («Закупки»)
  *   STAGE_ID    = C1:NEW
  *   CURRENCY_ID = BYN
- *   TITLE       = «Импорт прайса от <название компании-поставщика>»
- *   Каждая позиция: TAX_RATE=20, TAX_INCLUDED=Y, единица=шт, цена = priceExclVat
+ *   TITLE       = «Импорт прайса от <название компании-поставщика>»; если поставщик не найден —
+ *                 «Импорт прайса — поставщик не найден (УНП …)», сделка без COMPANY_ID
+ *   Каждая позиция: TAX_RATE=20, TAX_INCLUDED=N (цена нетто, НДС сверху), единица=шт, цена = priceExclVat
  *   Позиция с артикулом, не сопоставленным с каталогом, в сделку не кладётся.
  *   Сделка создаётся всегда (дублей не проверяем).
  *   fileContent (base64) → UF_CRM_DEAL_SH_PRCHS_AI_FILE + таймлайн-комментарий.
@@ -149,7 +150,8 @@ class ProcureDeal
 	}
 
 	/**
-	 * @param int    $supplierId        ID компании-поставщика
+	 * @param int    $supplierId        ID компании-поставщика (0 = не найден → сделка без COMPANY_ID,
+	 *                                  warning supplier_not_found, УНП в заголовок)
 	 * @param int    $responsibleUserId ID ответственного (b_user)
 	 * @param string $fileName          Оригинальное имя файла
 	 * @param string $fileContent       Содержимое файла в base64
@@ -162,9 +164,11 @@ class ProcureDeal
 	 * @param int    $contractId        ID договора (0 = не найден) → UF_CRM_DEAL_DOGOVOR
 	 * @param string $documentDate      Дата документа (счёта) в формате d.m.Y →
 	 *                                   BEGINDATE на 09:00. Пусто → текущие дата-время.
+	 * @param string $supplierUnp       УНП/ИНН поставщика из документа — в заголовок, КОГДА компания
+	 *                                  не найдена (supplierId=0). Недоверенный: в title только цифры.
 	 * @return array|null { dealId, warnings?: string[] } | null при ошибке создания.
-	 *   Возможные warnings: no_items_matched | product_rows_failed | file_attach_failed |
-	 *   invalid_base64_file | document_date_unparsed | timeline_comment_failed.
+	 *   Возможные warnings: supplier_not_found | no_items_matched | product_rows_failed |
+	 *   file_attach_failed | invalid_base64_file | document_date_unparsed | timeline_comment_failed.
 	 */
 	public function createAction(
 		int $supplierId,
@@ -174,7 +178,8 @@ class ProcureDeal
 		string $processingLog,
 		array $items,
 		int $contractId = 0,
-		string $documentDate = ''
+		string $documentDate = '',
+		string $supplierUnp = ''
 	): ?array
 	{
 		$response = $this->includeModules();
@@ -184,11 +189,15 @@ class ProcureDeal
 			return null;
 		}
 
-		if($supplierId < 1 || $responsibleUserId < 1)
+		// supplierId может быть 0 — поставщик по УНП не найден (#supplier-not-found): сделку всё равно
+		// создаём, но БЕЗ COMPANY_ID, с УНП в заголовке и warning supplier_not_found. Обязателен только
+		// ответственный (сделку нужно на кого-то назначить).
+		if($responsibleUserId < 1)
 		{
-			$this->addError(new Error('Invalid supplierId or responsibleUserId', 'deal:010'));
+			$this->addError(new Error('Invalid responsibleUserId', 'deal:010'));
 			return null;
 		}
+		$hasSupplier = $supplierId >= 1;
 
 		// Пустой items[] больше НЕ ошибка: если все позиции имели артикул, но ни одна не
 		// сопоставлена с каталогом (см. prompts/main.md, Шаг 4), сделку всё равно создаём
@@ -224,9 +233,18 @@ class ProcureDeal
 		$measureCode = Config::getUnitOkeiSht();
 
 		// --- 1) Создать сделку ---
-		// Заголовок — «Импорт прайса от <поставщик>». Имя поставщика берём из CRM по
-		// COMPANY_ID; имя файла остаётся только для вложения (в заголовок не идёт).
-		$supplierName = static::fetchSupplierName($supplierId);
+		// Заголовок — «Импорт прайса от <поставщик>» (имя из CRM по COMPANY_ID). Если поставщик не
+		// найден — «Импорт прайса — поставщик не найден (УНП …)»: УНП недоверенный (из документа),
+		// поэтому в заголовок берём только цифры/латиницу и обрезаем. Имя файла в заголовок не идёт.
+		if($hasSupplier)
+		{
+			$titleRaw = 'Импорт прайса от '.static::fetchSupplierName($supplierId);
+		}
+		else
+		{
+			$unp = substr(preg_replace('/\D/', '', $supplierUnp) ?? '', 0, 20); // УНП/ИНН — только цифры
+			$titleRaw = 'Импорт прайса — поставщик не найден'.($unp !== '' ? ' (УНП '.$unp.')' : '');
+		}
 		// BEGINDATE («Дата начала») — обязательное поле воронки «Закупки».
 		// Если передана дата документа (счёта) — ставим её на 09:00 (считаем, что
 		// документ оформлен утром); иначе — текущие дата-время.
@@ -257,11 +275,10 @@ class ProcureDeal
 
 		// TITLE сделки — varchar(255) в Б24: длинное название компании обрезаем, иначе БД
 		// усечёт молча (или уронит вставку в strict-режиме → сделка не создастся).
-		$title = mb_substr('Импорт прайса от '.$supplierName, 0, 255, 'UTF-8');
+		$title = mb_substr($titleRaw, 0, 255, 'UTF-8');
 
 		$dealFields = [
 			'TITLE'          => $title,
-			'COMPANY_ID'     => $supplierId,
 			'ASSIGNED_BY_ID' => $responsibleUserId,
 			'CATEGORY_ID'    => $categoryId,
 			'STAGE_ID'       => $stageId,
@@ -269,6 +286,11 @@ class ProcureDeal
 			'COMMENTS'       => $processingLog,
 			'BEGINDATE'      => \ConvertTimeStamp($beginTs, 'FULL'),
 		];
+		// COMPANY_ID — только если поставщик найден; иначе сделка без компании (привязка вручную).
+		if($hasSupplier)
+		{
+			$dealFields['COMPANY_ID'] = $supplierId;
+		}
 
 		// Привязка договора к сделке (поле подтверждено заказчиком).
 		if($contractId > 0)
@@ -290,12 +312,16 @@ class ProcureDeal
 		// Некритичные проблемы после создания сделки: не валят вызов (агент должен
 		// получить dealId), но возвращаются в payload, чтобы попасть в отчёт.
 		$warnings = [];
+		if(!$hasSupplier)
+		{
+			$warnings[] = 'supplier_not_found';
+		}
 		if($documentDateUnparsed)
 		{
 			$warnings[] = 'document_date_unparsed';
 		}
 
-		// --- 2) Товарные позиции (TAX_RATE=20, TAX_INCLUDED=Y — бизнес-решение) ---
+		// --- 2) Товарные позиции (TAX_RATE=20, TAX_INCLUDED=N — цена priceExclVat нетто, НДС сверху, #325) ---
 		// #301: наименование строки товара — server-authoritative из каталога Битрикса по productId,
 		// а НЕ из документа поставщика (присланный name используем лишь как фолбэк). Один батч-запрос
 		// имён по всем productId (без N+1, #148). Дублирует правило промпта #270 на уровне контроллера.
@@ -350,7 +376,10 @@ class ProcureDeal
 				'PRICE'        => $price,
 				'QUANTITY'     => $quantity,
 				'TAX_RATE'     => 20,
-				'TAX_INCLUDED' => 'Y',
+				// TAX_INCLUDED='N' (#325): priceExclVat — цена БЕЗ НДС (нетто). Помечаем её как нетто,
+				// чтобы Bitrix добавил 20% сверху и НЕ пересчитывал нетто делением на 1.2 (что округляло
+				// до 2 знаков и давало расхождение в 1 копейку). Так цена вносится 1-в-1 с бумажным счётом.
+				'TAX_INCLUDED' => 'N',
 				'MEASURE_CODE' => $measureCode,
 				'MEASURE_NAME' => 'шт',
 			];

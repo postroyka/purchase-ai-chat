@@ -187,9 +187,12 @@ print(json.dumps({
 }))")
 b24 "shef:purchase.api.procuredeal.create" "${BODY}"
 
-echo_sep "4c. create deal — supplierId=0 (ожидаем error deal:010)"
+# responsibleUserId=0 → ранняя ошибка deal:010 ДО Add (НЕ создаёт данных, безопасно на боевой).
+# ВАЖНО: supplierId=0 больше НЕ ошибка — сделка создаётся без компании (#supplier-not-found),
+# поэтому негативный кейс держим на responsibleUserId, иначе health-чек завёл бы сделку.
+echo_sep "4c. create deal — responsibleUserId=0 (ожидаем error deal:010)"
 b24 "shef:purchase.api.procuredeal.create" \
-  '{"supplierId":0,"responsibleUserId":1,"fileName":"x.pdf","fileContent":"dGVzdA==","processingLog":"","items":[{"name":"x","priceExclVat":1,"quantity":1}]}' \
+  '{"supplierId":1,"responsibleUserId":0,"fileName":"x.pdf","fileContent":"dGVzdA==","processingLog":"","items":[{"name":"x","priceExclVat":1,"quantity":1}]}' \
   || echo "(ожидается ошибка)"
 
 echo_sep "4d. create deal — пустой items[] (ожидаем сделку + warning no_items_matched, #150)"

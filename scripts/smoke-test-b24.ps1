@@ -164,8 +164,10 @@ Invoke-B24 "shef:purchase.api.procuredeal.create/4b — с contractId и documen
     )
 }
 
-Invoke-B24 "shef:purchase.api.procuredeal.create/4c — supplierId=0 (ожидаем error)" @{
-    supplierId = 0; responsibleUserId = 1
+# responsibleUserId=0 → deal:010 ДО Add (без записи данных). supplierId=0 больше НЕ ошибка
+# (#supplier-not-found: сделка без компании), поэтому негатив держим на ответственном.
+Invoke-B24 "shef:purchase.api.procuredeal.create/4c — responsibleUserId=0 (ожидаем error)" @{
+    supplierId = 1; responsibleUserId = 0
     fileName = "x.pdf"; fileContent = "dGVzdA=="
     processingLog = ""; items = @(@{ name = "x"; priceExclVat = 1; quantity = 1 })
 } -ExpectError

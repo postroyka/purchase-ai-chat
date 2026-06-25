@@ -26,11 +26,31 @@ final class ProcureDealTest extends TestCase
 		];
 	}
 
-	public function testInvalidSupplierIdReturnsDeal010(): void
+	public function testSupplierNotFoundCreatesDealWithoutCompany(): void
 	{
+		// #supplier-not-found: supplierId=0 больше НЕ ошибка — сделка создаётся БЕЗ COMPANY_ID,
+		// УНП идёт в заголовок, warning supplier_not_found. Обработку не останавливаем.
+		\CCrmDeal::$addReturn = 777;
 		$c = new ProcureDeal();
-		$this->assertNull($c->createAction(0, 1, 'f.pdf', '', 'log', $this->items()));
-		$this->assertSame(['deal:010'], $c->errorCodes());
+		$res = $c->createAction(0, 2, 'f.pdf', '', 'log', $this->items(), 0, '', '192775574');
+
+		$this->assertSame(777, $res['dealId']);
+		$this->assertContains('supplier_not_found', $res['warnings']);
+		// Компания НЕ привязана.
+		$this->assertArrayNotHasKey('COMPANY_ID', \CCrmDeal::$lastAddFields);
+		// УНП (только цифры) — в заголовке.
+		$this->assertStringContainsString('192775574', \CCrmDeal::$lastAddFields['TITLE']);
+		$this->assertStringContainsString('не найден', \CCrmDeal::$lastAddFields['TITLE']);
+	}
+
+	public function testSupplierUnpSanitizedInTitle(): void
+	{
+		// УНП недоверенный (из документа) — в заголовок только цифры, буквы/спецсимволы вырезаются.
+		\CCrmDeal::$addReturn = 778;
+		$c = new ProcureDeal();
+		$c->createAction(0, 2, 'f.pdf', '', 'log', $this->items(), 0, '', "19<script>27\n55-74");
+		$this->assertStringContainsString('192755', \CCrmDeal::$lastAddFields['TITLE']);
+		$this->assertStringNotContainsString('<script>', \CCrmDeal::$lastAddFields['TITLE']);
 	}
 
 	public function testInvalidResponsibleUserIdReturnsDeal010(): void
@@ -87,10 +107,10 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame(321, $res['dealId']);
 		$this->assertArrayNotHasKey('warnings', $res);
 
-		// Бизнес-правила позиции: TAX_RATE=20, TAX_INCLUDED=Y, единица «шт», цена как есть.
+		// Бизнес-правила позиции: TAX_RATE=20, TAX_INCLUDED=N (нетто, НДС сверху, #325), «шт», цена как есть.
 		$row = \CCrmDeal::$lastProductRows[0];
 		$this->assertSame(20, $row['TAX_RATE']);
-		$this->assertSame('Y', $row['TAX_INCLUDED']);
+		$this->assertSame('N', $row['TAX_INCLUDED']);
 		$this->assertSame('шт', $row['MEASURE_NAME']);
 		$this->assertSame(100.0, $row['PRICE']);
 		$this->assertSame(2.0, $row['QUANTITY']); // целое значение, тип float (Bitrix QUANTITY = double)
@@ -173,6 +193,23 @@ final class ProcureDealTest extends TestCase
 		$row = \CCrmDeal::$lastProductRows[0];
 		$this->assertSame(12.99, $row['PRICE']);  // round(12.991, 2)
 		$this->assertSame(1.5, $row['QUANTITY']);  // #286 — дробное кол-во сохраняется
+	}
+
+	public function testNetPriceWrittenOneToOneWithTaxNotIncluded(): void
+	{
+		// #325: цена нетто пишется 1-в-1 (без деления на 1.2), TAX_INCLUDED='N' → B24 добавит
+		// 20% сверху. Берём цену, на которой старый путь (='Y') давал расхождение в копейку
+		// (0.51/1.2 = 0.425 → округлялось до 0.43). Теперь PRICE = 0.51 как в счёте.
+		$items = [
+			['name' => 'Круг отрезной', 'priceExclVat' => 0.51, 'quantity' => 50, 'productId' => '7'],
+		];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
+
+		$row = \CCrmDeal::$lastProductRows[0];
+		$this->assertSame('N', $row['TAX_INCLUDED']); // нетто, НДС сверху
+		$this->assertSame(0.51, $row['PRICE']);       // 1-в-1, без деления/округления
+		$this->assertSame(20, $row['TAX_RATE']);
 	}
 
 	public function testHalfKopeckRoundsHalfUpAndFractionalQuantityKeptToTwoDecimals(): void
