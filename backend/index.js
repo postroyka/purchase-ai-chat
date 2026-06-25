@@ -704,13 +704,19 @@ export function createApp(config = {}) {
       return res.status(503).json({ error: 'Job store unavailable — please retry' });
     }
     if (!job) return res.status(404).json({ error: 'Job not found' });
+    // #282: per-file отмена — файл, который пользователь убрал из очереди, показываем 'cancelled'
+    // СРАЗУ, даже если processJob ещё до него не дошёл (он pending в хранилище). Best-effort.
+    let cancelSet = new Set();
+    try { cancelSet = new Set(await jobs.cancelledFiles(req.params.id)); } catch { /* нет оверлея */ }
     return res.json({
       jobId: job.jobId,
       status: job.status,
       ...(showTimings ? { showTimings: true } : {}),
       ...(hidePerfNote ? { hidePerfNote: true } : {}),
       files: job.files.map((f) => ({
-        name: f.name, status: f.status, result: f.result, error: f.error, problem: f.problem,
+        name: f.name,
+        status: (f.status === 'pending' && cancelSet.has(f.name)) ? 'cancelled' : f.status,
+        result: f.result, error: f.error, problem: f.problem,
         // Тайминги отдаём только при SHOW_TIMINGS (#замеры) — иначе ответ без изменений.
         ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, agentTurns: f.agentTurns ?? null, toolMs: f.toolMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null, extractMs: f.extractMs ?? null, speed: classifySpeed(f.durationMs, timingFastMs, timingSlowMs) } : {}),
       })),
@@ -736,6 +742,42 @@ export function createApp(config = {}) {
       await jobs.markCancelled(req.params.id);
     } catch (e) {
       console.error(`[job cancel] mark error for ${req.params.id}:`, e.message);
+      return res.status(503).json({ error: 'Job store unavailable — please retry' });
+    }
+    return res.json({ ok: true, status: 'cancelling' });
+  });
+
+  // POST /job/:id/file-cancel — убрать ОДИН ещё не начатый (pending) файл из очереди (#282). В отличие
+  // от /cancel (останавливает ВСЁ задание), отменяет только указанный файл: processJob его пропустит,
+  // статус станет 'cancelled', остальные обрабатываются. Уже начатый/завершённый файл убрать нельзя.
+  app.post('/job/:id/file-cancel', requireAuth, express.json({ limit: '1kb' }), async (req, res) => {
+    const fileName = req.body?.fileName;
+    if (typeof fileName !== 'string' || fileName === '') {
+      return res.status(400).json({ error: 'fileName is required' });
+    }
+    let job;
+    try {
+      job = await jobs.get(req.params.id);
+    } catch (e) {
+      console.error(`[file cancel] store error for ${req.params.id}:`, e.message);
+      return res.status(503).json({ error: 'Job store unavailable — please retry' });
+    }
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (job.status === 'done' || job.status === 'error' || job.status === 'cancelled') {
+      return res.json({ ok: true, status: job.status }); // терминальное задание — no-op
+    }
+    // Отмена адресуется по ИМЕНИ файла (как и ключ v-for в UI). Дубли имён в одной загрузке —
+    // вырожденный случай (UI и так ломал бы ключи): тогда отменятся все одноимённые. Допустимо.
+    const file = job.files.find((f) => f.name === fileName);
+    if (!file) return res.status(404).json({ error: 'File not found in job' });
+    if (file.status !== 'pending') {
+      // уже обрабатывается или завершён — из очереди убрать нельзя (агент не прервать)
+      return res.status(409).json({ error: 'File already started or finished', status: file.status });
+    }
+    try {
+      await jobs.markFileCancelled(req.params.id, fileName);
+    } catch (e) {
+      console.error(`[file cancel] mark error for ${req.params.id}:`, e.message);
       return res.status(503).json({ error: 'Job store unavailable — please retry' });
     }
     return res.json({ ok: true, status: 'cancelling' });
@@ -1102,6 +1144,18 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       if (await jobs.isCancelled(jobId)) { cancelled = true; break; }
     } catch { /* флаг недоступен — не валим обработку, продолжаем */ }
 
+    // #282: пользователь убрал ЭТОТ файл из очереди (он ещё не начат) — помечаем 'cancelled' и
+    // переходим к следующему. Проверяем перед стартом агента, чтобы отмена, пришедшая во время
+    // обработки предыдущего файла, успела сработать. Best-effort: сбой стора не отменяет файл.
+    try {
+      const fileCancels = await jobs.cancelledFiles(jobId);
+      if (fileCancels.includes(fileEntry.name)) {
+        fileEntry.status = 'cancelled';
+        await jobs.set(jobId, job);
+        continue;
+      }
+    } catch { /* стор недоступен — обрабатываем файл как обычно */ }
+
     fileEntry.status = 'processing';
     const startedAt = Date.now();
     fileEntry.startedAt = startedAt; // тайминги (#замеры): для живого mm:ss, пока файл обрабатывается
@@ -1226,7 +1280,17 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
     }
     job.status = 'cancelled';
   } else {
-    job.status = job.files.every((f) => f.status === 'error') ? 'error' : 'done';
+    // Терминальный статус задания по файлам (#282: учитываем 'cancelled' — пользователь мог убрать
+    // отдельные файлы из очереди, не останавливая всё задание):
+    //   есть хоть один 'done' → 'done'; иначе все отменены → 'cancelled'; иначе (есть error) → 'error'.
+    const files = job.files;
+    if (files.some((f) => f.status === 'done')) {
+      job.status = 'done';
+    } else if (files.every((f) => f.status === 'cancelled')) {
+      job.status = 'cancelled';
+    } else {
+      job.status = 'error';
+    }
   }
   await jobs.set(jobId, job);
 

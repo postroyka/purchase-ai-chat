@@ -2,7 +2,7 @@ import Redis from 'ioredis';
 
 /**
  * @param {{ redisUrl?: string, ttlHours?: number }} [config]
- * @returns {{ get(id: string): Promise<object|null>, set(id: string, job: object): Promise<void>, markCancelled(id: string): Promise<void>, isCancelled(id: string): Promise<boolean>, ping(): Promise<void>, listJobIds(): Promise<string[]> }}
+ * @returns {{ get(id: string): Promise<object|null>, set(id: string, job: object): Promise<void>, markCancelled(id: string): Promise<void>, isCancelled(id: string): Promise<boolean>, markFileCancelled(id: string, fileName: string): Promise<void>, cancelledFiles(id: string): Promise<string[]>, ping(): Promise<void>, listJobIds(): Promise<string[]> }}
  */
 export function createJobsStore(config = {}) {
   const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? '';
@@ -70,6 +70,26 @@ function createRedisStore(url, ttlSeconds) {
         return false;
       }
     },
+    // #282: per-file отмена — пользователь убрал ОДИН ещё не начатый (pending) файл из очереди.
+    // Храним именами в SET (отдельный ключ, как и отмена всего задания) — processJob пропускает
+    // помеченные файлы, а GET /status показывает их 'cancelled' сразу.
+    async markFileCancelled(id, fileName) {
+      try {
+        await client.sadd(`job:${id}:filecancel`, fileName);
+        await client.expire(`job:${id}:filecancel`, ttlSeconds);
+      } catch (e) {
+        console.error(`[jobs-store] Redis markFileCancelled error for job:${id}:`, e);
+        throw e;
+      }
+    },
+    async cancelledFiles(id) {
+      try {
+        return await client.smembers(`job:${id}:filecancel`);
+      } catch (e) {
+        console.error(`[jobs-store] Redis cancelledFiles error for job:${id}:`, e);
+        return []; // best-effort: на сбое не отменяем файлы
+      }
+    },
     async ping() {
       await client.ping();
     },
@@ -82,7 +102,7 @@ function createRedisStore(url, ttlSeconds) {
         const [next, keys] = await client.scan(cursor, 'MATCH', 'job:*', 'COUNT', 200);
         cursor = next;
         for (const key of keys) {
-          if (key.endsWith(':cancel')) continue;
+          if (key.endsWith(':cancel') || key.endsWith(':filecancel')) continue; // #cancel / #282 per-file
           ids.push(key.slice('job:'.length));
         }
       } while (cursor !== '0');
@@ -94,6 +114,7 @@ function createRedisStore(url, ttlSeconds) {
 function createMemoryStore(ttlSeconds) {
   const map = new Map();
   const cancelled = new Set();
+  const fileCancels = new Map(); // #282: jobId → Set<fileName>
 
   // Evict expired entries every 10 min (lightweight TTL for in-memory/dev/test).
   // .unref() prevents this timer from keeping the Node.js process alive in tests.
@@ -103,6 +124,7 @@ function createMemoryStore(ttlSeconds) {
       if (now - (entry.createdAt ?? 0) > ttlSeconds * 1000) {
         map.delete(id);
         cancelled.delete(id);
+        fileCancels.delete(id);
       }
     }
   }, 10 * 60 * 1000).unref();
@@ -126,6 +148,15 @@ function createMemoryStore(ttlSeconds) {
     },
     async isCancelled(id) {
       return cancelled.has(id);
+    },
+    // #282: per-file отмена — отдельным множеством имён на задание.
+    async markFileCancelled(id, fileName) {
+      let set = fileCancels.get(id);
+      if (!set) { set = new Set(); fileCancels.set(id, set); }
+      set.add(fileName);
+    },
+    async cancelledFiles(id) {
+      return [...(fileCancels.get(id) ?? [])];
     },
     async ping() {
       // in-memory store is always available

@@ -843,6 +843,72 @@ describe('cancel import', () => {
   });
 });
 
+// ── Cancel a single queued file (#282) ────────────────────────────────────────
+
+describe('cancel single file (#282)', () => {
+  it('removes a pending file from the queue: it ends cancelled, others process', async () => {
+    const gated = makeGatedAgentSpawn();
+    const a = createApp({
+      token: TOKEN,
+      uploadDir: UPLOAD_DIR,
+      agentConfig: { spawnFn: gated.spawn, extractFn: async () => null },
+      rateLimitMax: 0,
+    });
+    const up = await request(a)
+      .post('/upload')
+      .set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { filename: 'a.pdf', contentType: 'application/pdf' })
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { filename: 'b.pdf', contentType: 'application/pdf' });
+    const jobId = up.body.jobId;
+
+    // file #1 (a.pdf) is being processed (gated); cancel the still-pending file #2 (b.pdf).
+    const d1 = Date.now() + 3000;
+    while (Date.now() < d1 && gated.calls() < 1) await new Promise((r) => setTimeout(r, 20));
+    expect(gated.calls()).toBe(1);
+
+    const cancel = await request(a)
+      .post(`/job/${jobId}/file-cancel`)
+      .set('Authorization', auth())
+      .send({ fileName: 'b.pdf' });
+    expect(cancel.status).toBe(200);
+    expect(cancel.body).toMatchObject({ ok: true, status: 'cancelling' });
+
+    // overlay: b.pdf shows cancelled immediately, even before the loop reaches it.
+    const mid = await request(a).get(`/job/${jobId}/status`).set('Authorization', auth());
+    expect(mid.body.files.find((f) => f.name === 'b.pdf').status).toBe('cancelled');
+
+    gated.releaseNext(); // release a.pdf → finishes; b.pdf must be skipped
+    const final = await pollJob(a, jobId, 3000);
+    expect(final.files.find((f) => f.name === 'a.pdf').status).toBe('done');
+    expect(final.files.find((f) => f.name === 'b.pdf').status).toBe('cancelled');
+    expect(gated.calls()).toBe(1); // b.pdf's agent never ran
+    expect(final.status).toBe('done'); // задание завершено (не cancelled — отменён лишь один файл)
+  });
+
+  it('400 when fileName is missing', async () => {
+    const up = await request(app)
+      .post('/upload').set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    const res = await request(app)
+      .post(`/job/${up.body.jobId}/file-cancel`).set('Authorization', auth()).send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('404 when the file is not in the job', async () => {
+    const up = await request(app)
+      .post('/upload').set('Authorization', auth())
+      .attach('files[]', path.join(FIXTURES, 'valid.pdf'), { contentType: 'application/pdf' });
+    const res = await request(app)
+      .post(`/job/${up.body.jobId}/file-cancel`).set('Authorization', auth()).send({ fileName: 'nope.pdf' });
+    expect([404, 200]).toContain(res.status); // 404 если задание ещё живо; 200 no-op если уже завершилось
+  });
+
+  it('requires auth', async () => {
+    const res = await request(app).post('/job/whatever/file-cancel').send({ fileName: 'x.pdf' });
+    expect(res.status).toBe(401);
+  });
+});
+
 // ── Security headers ──────────────────────────────────────────────────────────
 
 describe('Security headers', () => {
