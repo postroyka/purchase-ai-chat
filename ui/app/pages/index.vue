@@ -35,17 +35,23 @@
             layout="list"
             class="w-full min-h-[220px]"
             label="Перетащите файлы сюда"
-            description="или нажмите, чтобы выбрать · до 10 файлов, по 20 МБ · затем нажмите «Загрузить»"
+            :description="`или нажмите, чтобы выбрать · до ${MAX_FILES} файлов, по 20 МБ · затем нажмите «Загрузить»`"
             :file-delete="!uploading && !polling"
             :disabled="uploading || polling"
           />
 
           <!-- Явная загрузка (#238): выбор файлов НЕ стартует загрузку сразу — сначала можно убрать
                лишний файл (крестик у файла выше), потом нажать «Загрузить». -->
-          <div v-if="selectedFiles?.length && !uploading && !polling" class="mt-5 flex justify-end">
-            <B24Button color="air-primary" @click="doUpload">
-              Загрузить {{ selectedFiles.length }} {{ plural(selectedFiles.length, ['файл', 'файла', 'файлов']) }}
-            </B24Button>
+          <div v-if="selectedFiles?.length && !uploading && !polling" class="mt-5 space-y-2">
+            <!-- #278: превышение лимита показываем СРАЗУ и блокируем загрузку, а не после клика. -->
+            <p v-if="tooManyFiles" class="text-sm text-red-500 text-right">
+              Выбрано {{ selectedCount }} — это больше лимита в {{ MAX_FILES }} файлов. Уберите лишние (крестик у файла выше).
+            </p>
+            <div class="flex justify-end">
+              <B24Button color="air-primary" :disabled="tooManyFiles" @click="doUpload">
+                Загрузить {{ selectedCount }} {{ plural(selectedCount, ['файл', 'файла', 'файлов']) }}
+              </B24Button>
+            </div>
           </div>
 
           <div v-if="uploading || polling" class="mt-5">
@@ -78,14 +84,28 @@
             <h2 class="text-sm font-medium text-base-700">
               Статус обработки
             </h2>
-            <!-- Общее время импорта (#timing): тикает с начала обработки, фиксируется по готовности. -->
-            <span
-              v-if="jobElapsedMs > 0"
-              class="shrink-0 text-xs tabular-nums text-base-500"
-              title="Общее время импорта"
-            >
-              ⏱ всего {{ mmss(jobElapsedMs) }}
-            </span>
+            <div class="flex items-center gap-3 shrink-0">
+              <!-- Общее время импорта (#timing): тикает с начала обработки, фиксируется по готовности. -->
+              <span
+                v-if="jobElapsedMs > 0"
+                class="text-xs tabular-nums text-base-500"
+                title="Общее время импорта"
+              >
+                ⏱ всего {{ mmss(jobElapsedMs) }}
+              </span>
+              <!-- #281: «Остановить импорт» — в шапке статуса (рядом с активным импортом, всегда видна
+                   сверху), а не только внизу под пачкой карточек. Текущий файл долетит, очередь отменится. -->
+              <B24Button
+                v-if="job.status === 'processing' || job.status === 'pending'"
+                color="air-secondary"
+                size="xs"
+                :disabled="cancelling"
+                title="Остановить импорт"
+                @click="cancelJob"
+              >
+                {{ cancelling ? 'Останавливаем…' : 'Остановить' }}
+              </B24Button>
+            </div>
           </div>
 
           <B24Card
@@ -278,18 +298,9 @@
             </div>
           </B24Card>
 
-          <!-- Пока идёт импорт — можно остановить (текущий файл долетит, очередь отменится). -->
-          <div v-if="job.status === 'processing' || job.status === 'pending'" class="flex justify-center pt-2">
-            <B24Button
-              color="air-secondary"
-              size="sm"
-              :disabled="cancelling"
-              @click="cancelJob"
-            >
-              {{ cancelling ? 'Останавливаем…' : 'Остановить импорт' }}
-            </B24Button>
-          </div>
-          <div v-else-if="job.status === 'done' || job.status === 'error' || job.status === 'cancelled'" class="flex justify-center pt-2">
+          <!-- #281: кнопка «Остановить» перенесена в шапку статуса (выше, у активного импорта). Внизу
+               оставляем только «Загрузить ещё» для терминальных статусов. -->
+          <div v-if="job.status === 'done' || job.status === 'error' || job.status === 'cancelled'" class="flex justify-center pt-2">
             <B24Button color="air-primary" size="xl" @click="resetState">
               Загрузить ещё
             </B24Button>
@@ -359,6 +370,11 @@ interface JobStatus {
 // ── Состояние ────────────────────────────────────────────────────────────────
 
 const selectedFiles = ref<File[] | null>(null)
+// #278: предел числа файлов на одну загрузку — зеркалит backend MAX_FILES_PER_REQUEST (дефолт 10).
+// Проверяем СРАЗУ при выборе (а не после «Загрузить»), чтобы не словить ошибку постфактум.
+const MAX_FILES = 10
+const selectedCount = computed(() => selectedFiles.value?.length ?? 0)
+const tooManyFiles = computed(() => selectedCount.value > MAX_FILES)
 const uploading = ref(false)
 const polling = ref(false)
 const cancelling = ref(false) // нажали «Остановить»: ждём, пока бэкенд доведёт задание до 'cancelled'
@@ -489,6 +505,11 @@ function currentB24UserId(): number | null {
 async function doUpload() {
   const files = selectedFiles.value
   if (!files?.length) return
+  // #278: защита на случай программного вызова — кнопка и так задизейблена при превышении лимита.
+  if (files.length > MAX_FILES) {
+    uploadError.value = `Слишком много файлов: ${files.length}. Максимум за раз — ${MAX_FILES}.`
+    return
+  }
 
   uploading.value = true
   uploadError.value = null
