@@ -384,6 +384,17 @@ describe('reportAgentFeedback — perf без GitHub-issue (#279)', () => {
     expect(metrics.recordFeedback).toHaveBeenCalledWith({ source: 'agent', kind: 'problem' });
     expect(reporter.report).toHaveBeenCalledTimes(1);
   });
+
+  it('#219: ctx (jobId/fileName/dealId/outcome) проброшен в report() для per-file issue', async () => {
+    const metrics = mkMetrics(); const reporter = mkReporter();
+    const ctx = { jobId: 'j3', fileName: 'inv.pdf', dealId: '4242', outcome: 'ok' };
+    await reportAgentFeedback(
+      { feedback: [{ kind: 'problem', tool: 'force_test', note: 'AGENT_FORCE_FEEDBACK: x' }] },
+      reporter, metrics, ctx,
+    );
+    expect(reporter.report).toHaveBeenCalledTimes(1);
+    expect(reporter.report.mock.calls[0][0].context).toEqual(ctx);
+  });
 });
 
 // Poll a job to a terminal state; returns the final status.

@@ -32,6 +32,31 @@ export const FEEDBACK_KINDS = {
 // Слова типов БЕЗ эмодзи — для заголовков GitHub-issue (#219). Эмодзи остаётся только в FEEDBACK_KINDS.
 const FEEDBACK_KIND_WORDS = { positive: 'Хорошо', problem: 'Проблема', suggestion: 'Предложение', perf: 'Скорость' };
 
+// Человекочитаемые исходы файла для строки «Исход» в теле agent-issue (#219): мейнтейнеру понятнее,
+// чем машинный код. Коды — из backend/metrics.js KNOWN_OUTCOMES / index.js classifyAgentError. Неизвестный
+// код показываем как есть. outcomeText('no_deal') → 'no_deal (сделка не создана)'.
+const OUTCOME_WORDS = {
+  ok: 'сделка создана',
+  no_deal: 'сделка не создана',
+  supplier_not_found: 'поставщик не найден',
+  contract_not_found: 'договор не найден',
+  tool_unavailable: 'инструмент недоступен',
+  unreadable_document: 'документ не распознан',
+  foreign_supplier: 'иностранный поставщик',
+  unsupported_currency: 'валюта не поддерживается',
+  timeout: 'тайм-аут обработки',
+  cli_missing: 'CLI агента недоступен',
+  agent_crash: 'сбой агента',
+  bad_output: 'некорректный ответ агента',
+  other_error: 'прочая ошибка',
+};
+function outcomeText(outcome) {
+  const code = typeof outcome === 'string' ? outcome.trim() : '';
+  if (!code) return '';
+  const word = OUTCOME_WORDS[code];
+  return word ? `${code} (${word})` : code;
+}
+
 // Caps. The comment is the only large free-text field; 5000 chars is generous for a feedback note
 // and well under any GitHub body limit. Title/context values are short by construction.
 const MAX_COMMENT_LENGTH = 5000;
@@ -193,6 +218,8 @@ export function formatAgentFeedbackBody({ tool, note, context = {} }) {
     contextLine('Инструмент', safeToolName(tool)),
     contextLine('Задача (jobId)', context.jobId),
     contextLine('Файл', context.fileName),
+    contextLine('Сделка', context.dealId ? `#${context.dealId}` : ''),
+    contextLine('Исход', outcomeText(context.outcome)),
   ].filter(Boolean);
 
   const safeNote = escapeHtml(stripHostileChars(note)).trim() || '(без описания)';
@@ -220,6 +247,8 @@ export function formatAgentFeedbackBody({ tool, note, context = {} }) {
 /**
  * Build { title, body, labels, kind } for an AGENT-feedback issue. Unknown kind → 'problem'.
  * Title = "[Агент] <kind> · <tool?> · <first line>"; labels distinguish the channel (agent-feedback).
+ * context (#219): { jobId, fileName, dealId?, outcome? } — per-file pointer so a maintainer (and the
+ * AGENT_FORCE_FEEDBACK test, whose note is constant) can tell WHICH file/outcome the issue is about.
  */
 export function buildAgentFeedbackIssue({ kind, tool, note, context = {} }) {
   const k = normalizeKind(kind) ?? 'problem';

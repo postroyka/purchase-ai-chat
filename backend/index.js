@@ -1191,7 +1191,14 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       if (warnings.length) metrics?.recordWarnings(warnings);
       // Fire-and-forget: agent-feedback issue creation / metrics must NEVER delay the job — it never
       // feeds back into job state, and the metrics count (not the issue) is the durable signal.
-      void reportAgentFeedback(result, agentFeedback, metrics, { jobId, fileName: fileEntry.name }).catch(() => {});
+      // #219: кладём в issue per-file контекст (сделка/исход), чтобы было видно, к чему относится отзыв
+      // (особенно форс-тест AGENT_FORCE_FEEDBACK с константной note).
+      void reportAgentFeedback(result, agentFeedback, metrics, {
+        jobId,
+        fileName: fileEntry.name,
+        dealId: hasDeal ? String(dealId) : undefined,
+        outcome,
+      }).catch(() => {});
     } catch (err) {
       // Redact any Bearer token before the message is logged, persisted, or returned.
       const safeMsg = redactToken(String(err?.message ?? 'agent error'));
