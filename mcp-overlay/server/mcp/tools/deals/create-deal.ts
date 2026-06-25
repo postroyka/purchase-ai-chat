@@ -61,7 +61,7 @@ async function resolveWithinUploads(filePath: string): Promise<string> {
 export default defineMcpTool({
   name: 'b24_pst_crm_create_deal',
   description:
-    'Create a procurement deal in Bitrix24 (funnel "Закупки", category 1, stage C1:NEW, currency BYN). Attaches the source file (read by path from the uploads volume) to the deal card and writes the processing log as a comment and timeline entry. Tax 20%, VAT included in price (Y). Unit always "шт". Deal is always created — no duplicate check. If this tool hinders you (unexpected response shape, an unclear warning, or a missing capability), record it in your result\'s feedback[] (see the system prompt, "Сигналы и обратная связь агента").',
+    'Create a procurement deal in Bitrix24 (funnel "Закупки", category 1, stage C1:NEW, currency BYN). Attaches the source file (read by path from the uploads volume) to the deal card and writes the processing log as a comment and timeline entry. Tax 20%, price is net — VAT added on top (TAX_INCLUDED=N). Unit always "шт". Deal is always created — no duplicate check. If this tool hinders you (unexpected response shape, an unclear warning, or a missing capability), record it in your result\'s feedback[] (see the system prompt, "Сигналы и обратная связь агента").',
   inputSchema: {
     supplierId: z.string().min(1).describe('Bitrix24 company id of the supplier'),
     contractId: z.string().min(1).describe('Bitrix24 contract id — required: a procurement deal must reference a contract (агент в шаге 3 останавливается, если договор не найден)'),
@@ -76,10 +76,10 @@ export default defineMcpTool({
       productId: z.string().nullish().describe('Bitrix24 product id (сопоставленный товар каталога). null/опущено — позиция НЕ попадает в сделку (#258).'),
       vendorCode: z.string().nullish().describe('Артикул поставщика из документа. Может быть null/опущен.'),
       name: z.string().describe('Product name from document'),
-      // INTENTIONAL by docs/PROJECT_BRIEF.md (lines 42-43): the document price
-      // is per-unit and EXCLUDING VAT, but in Bitrix24 we write it with
-      // TAX_RATE=20 and TAX_INCLUDED=Y. This is a deliberate business decision,
-      // not a bug — do not "fix" it to exclude VAT during review.
+      // The document price is per-unit and EXCLUDING VAT (нетто). In Bitrix24 we write it
+      // with TAX_RATE=20 and TAX_INCLUDED=N (#325): price is net, B24 adds 20% on top — so
+      // the unit price is stored 1:1 with the paper invoice and isn't re-derived/rounded
+      // (TAX_INCLUDED=Y previously divided net by 1.2 → 1-kopeck drift).
       // .max guards against an astronomically large float (overflow → Infinity →
       // JSON.stringify "null" → price silently 0 in the deal). 1e9/unit is far beyond
       // any real procurement unit price; rounded to 2 decimals in the handler (#101).
