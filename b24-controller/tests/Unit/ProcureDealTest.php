@@ -26,11 +26,31 @@ final class ProcureDealTest extends TestCase
 		];
 	}
 
-	public function testInvalidSupplierIdReturnsDeal010(): void
+	public function testSupplierNotFoundCreatesDealWithoutCompany(): void
 	{
+		// #supplier-not-found: supplierId=0 больше НЕ ошибка — сделка создаётся БЕЗ COMPANY_ID,
+		// УНП идёт в заголовок, warning supplier_not_found. Обработку не останавливаем.
+		\CCrmDeal::$addReturn = 777;
 		$c = new ProcureDeal();
-		$this->assertNull($c->createAction(0, 1, 'f.pdf', '', 'log', $this->items()));
-		$this->assertSame(['deal:010'], $c->errorCodes());
+		$res = $c->createAction(0, 2, 'f.pdf', '', 'log', $this->items(), 0, '', '192775574');
+
+		$this->assertSame(777, $res['dealId']);
+		$this->assertContains('supplier_not_found', $res['warnings']);
+		// Компания НЕ привязана.
+		$this->assertArrayNotHasKey('COMPANY_ID', \CCrmDeal::$lastAddFields);
+		// УНП (только цифры) — в заголовке.
+		$this->assertStringContainsString('192775574', \CCrmDeal::$lastAddFields['TITLE']);
+		$this->assertStringContainsString('не найден', \CCrmDeal::$lastAddFields['TITLE']);
+	}
+
+	public function testSupplierUnpSanitizedInTitle(): void
+	{
+		// УНП недоверенный (из документа) — в заголовок только цифры, буквы/спецсимволы вырезаются.
+		\CCrmDeal::$addReturn = 778;
+		$c = new ProcureDeal();
+		$c->createAction(0, 2, 'f.pdf', '', 'log', $this->items(), 0, '', "19<script>27\n55-74");
+		$this->assertStringContainsString('192755', \CCrmDeal::$lastAddFields['TITLE']);
+		$this->assertStringNotContainsString('<script>', \CCrmDeal::$lastAddFields['TITLE']);
 	}
 
 	public function testInvalidResponsibleUserIdReturnsDeal010(): void

@@ -125,6 +125,8 @@ const KNOWN_WARNING_CODES = new Set([
   // surfaced from create_deal's response (prompts/main.md step 5)
   'no_items_matched', 'product_rows_failed', 'file_attach_failed', 'invalid_base64_file',
   'document_date_unparsed', 'timeline_comment_failed',
+  // поставщик по УНП не найден — сделка создана без компании (контроллер проставляет warning)
+  'supplier_not_found',
   // agent-detected during matching (step 4)
   'articles_not_in_catalog', 'items_without_article',
   // agent-detected during contract lookup (step 3): договор не найден — сделка создана без договора.
