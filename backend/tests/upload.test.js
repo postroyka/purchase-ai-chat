@@ -1037,6 +1037,29 @@ describe('rate limiting on /upload', () => {
     }
   });
 
+  // Дефолт без env RATE_LIMIT_MAX → 0 → без лимита (внутренний инструмент). Фиксируем контракт.
+  it('default (no RATE_LIMIT_MAX env, no config) → not limited', async () => {
+    const old = process.env.RATE_LIMIT_MAX;
+    delete process.env.RATE_LIMIT_MAX;
+    try {
+      const defApp = createApp({
+        token: TOKEN,
+        uploadDir: UPLOAD_DIR,
+        agentConfig: { spawnFn: makeMockAgentSpawn() },
+        maxConcurrentJobs: 50,
+        // rateLimitMax НЕ задан → должен взять env-дефолт '0'
+      });
+      for (let i = 0; i < 5; i++) {
+        const r = await request(defApp).post('/upload').set('Authorization', auth())
+          .attach('files[]', pdf(), { contentType: 'application/pdf' });
+        expect(r.status).toBe(201);
+      }
+    } finally {
+      if (old === undefined) delete process.env.RATE_LIMIT_MAX;
+      else process.env.RATE_LIMIT_MAX = old;
+    }
+  });
+
   // #105: when a Redis client is present the limiter uses it (multi-instance-safe).
   it('uses per-key Redis INCR/pexpire, arms the correct TTL, and 429s over the limit', async () => {
     const counters = new Map(); // per-key — proves keyFor isolates clients, not a global counter

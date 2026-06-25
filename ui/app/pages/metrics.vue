@@ -80,6 +80,8 @@ const WARNING_LABELS: Record<string, string> = {
   document_date_unparsed: 'Дата документа не распознана',
   timeline_comment_failed: 'Комментарий в таймлайн не добавлен',
   supplier_not_found: 'Поставщик не найден (сделка без компании)',
+  contract_not_found: 'Договор не найден (сделка без договора)',
+  contract_substituted: 'Подставлен активный договор',
   other: 'Прочее'
 }
 
