@@ -215,8 +215,10 @@ export function createApp(config = {}) {
   const basicAuthUser = config.basicAuthUser ?? process.env.PUBLIC_PAGE_BASIC_AUTH_USER ?? 'procure';
   const basicAuthPass = config.basicAuthPass ?? process.env.PUBLIC_PAGE_BASIC_AUTH_PASS ?? '';
   const uiPublicDir = config.uiPublicDir ?? path.join(__dirname, '..', 'ui', 'public');
+  // По умолчанию 0 = БЕЗ лимита: это внутренний инструмент, сотрудники вносят данные ответственно,
+  // а обратная связь/поток загрузок важнее анти-абуза. Лимит включается явно через RATE_LIMIT_MAX>0.
   const rateLimitMax = config.rateLimitMax
-    ?? parseInt(process.env.RATE_LIMIT_MAX ?? '20', 10);
+    ?? parseInt(process.env.RATE_LIMIT_MAX ?? '0', 10);
   const rateLimitWindowMs = config.rateLimitWindowMs
     ?? parseInt(process.env.RATE_LIMIT_WINDOW_MS ?? '60000', 10);
   // App-session lifetime. Default 12h: long enough that a B24 workday doesn't re-prompt, short
@@ -246,12 +248,12 @@ export function createApp(config = {}) {
   // ≥SLOW → slow, между — normal. Оценочные — калибруются реальностью через env (docs/PARSING_PERFORMANCE.md).
   const timingFastMs = config.timingFastMs ?? (Number.parseInt(process.env.TIMING_FAST_MS ?? '', 10) || 45000);
   const timingSlowMs = config.timingSlowMs ?? (Number.parseInt(process.env.TIMING_SLOW_MS ?? '', 10) || 90000);
-  // Guard NaN explicitly: a garbled FEEDBACK_RATE_LIMIT_MAX would otherwise become NaN, which the
-  // limiter reads as "disabled" (fail-OPEN) — the wrong direction for an anti-spam-into-our-repo
-  // control. Number.isFinite keeps a deliberate 0 (disable) working while a garbled value → default 5.
+  // По умолчанию 0 = БЕЗ лимита: внутренний инструмент, обратная связь важнее анти-абуза (включить
+  // явно через FEEDBACK_RATE_LIMIT_MAX>0). Number.isFinite оставляем как страховку: ОШИБОЧНО заданное
+  // (нечисловое) значение → не «fail-OPEN в NaN», а явный дефолт 0 (тот же «без лимита»).
   const parsedFeedbackMax = config.feedbackRateLimitMax
-    ?? parseInt(process.env.FEEDBACK_RATE_LIMIT_MAX ?? '5', 10);
-  const feedbackRateLimitMax = Number.isFinite(parsedFeedbackMax) ? parsedFeedbackMax : 5;
+    ?? parseInt(process.env.FEEDBACK_RATE_LIMIT_MAX ?? '0', 10);
+  const feedbackRateLimitMax = Number.isFinite(parsedFeedbackMax) ? parsedFeedbackMax : 0;
   const parsedFeedbackWindow = config.feedbackRateLimitWindowMs
     ?? parseInt(process.env.FEEDBACK_RATE_LIMIT_WINDOW_MS ?? '3600000', 10);
   // A non-finite or non-positive window breaks the limiter (pexpire(NaN) throws → fails open;
@@ -1076,9 +1078,9 @@ export async function reportAgentFeedback(result, agentFeedback, metrics, ctx) {
     const kind = normalizeKind(typeof fb.kind === 'string' ? fb.kind : '') ?? 'problem';
     const tool = typeof fb.tool === 'string' ? fb.tool : '';
     metrics?.recordFeedback({ source: 'agent', kind })?.catch(() => {});
-    // perf (#279): диагностика скорости — агрегатный сигнал, НЕ задача-трекер. На проде файлы с заметной
-    // работой (≳20 позиций / трения) частые, а note уникальна per-file → дедуп не ловит → issue почти на
-    // КАЖДЫЙ файл + выжигание общего hourly-cap (глушит реальные problem/suggestion). Поэтому perf НЕ
+    // perf (#279): диагностика скорости — агрегатный сигнал, НЕ задача-трекер. Агент шлёт perf на КАЖДОМ
+    // файле, а note уникальна per-file → дедуп не ловит → issue почти на КАЖДЫЙ файл + выжигание общего
+    // hourly-cap (глушит реальные problem/suggestion). Поэтому perf НЕ
     // заводит GitHub-issue: идёт в метрику (счётчик «Скорость») + строку лога (греп `[perf-diag]`); оператору
     // показывается в UI всегда (читается из result.feedback напрямую, свёрнутый блок, не зависит от SHOW_TIMINGS, #294).
     // redactToken — на всякий случай (note по промпту и так без документа/секретов).

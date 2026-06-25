@@ -105,7 +105,7 @@ procure-ai/
 | `NUXT_PUBLIC_GIT_SHA` | версия билда в подвале UI (ТЗ §6). **Build-time** (Dockerfile.app ARG→ENV; CI подставляет commit sha), запекается в статику на `pnpm build`, в рантайме НЕ переопределяется. `dev` = локальная сборка. |
 | `GITHUB_FEEDBACK_TOKEN` | вкл. каналы обратной связи (issue #182): отзыв сотрудника **и** сигналы агента → GitHub issue. Нет токена → виджет скрыт, `POST /feedback` → 503, agent-issue не заводятся (счётчики в `/metrics` пишутся). fine-grained PAT, право Issues: Read and write. См. `docs/FEEDBACK.md`. |
 | `GITHUB_FEEDBACK_REPO` | куда писать issue, `owner/repo` (умолч. `postroyka/purchase-ai-chat`). ⚠️ репо приватный на запуске → контекст задания в issue допустим. |
-| `FEEDBACK_RATE_LIMIT_MAX` / `_WINDOW_MS` | антиспам отзывов (умолч. `5` / `3600000`). Считаются попытки. |
+| `FEEDBACK_RATE_LIMIT_MAX` / `_WINDOW_MS` | антиспам отзывов (умолч. `0` = выкл. / `3600000`). Считаются попытки; `>0` включает лимит. |
 
 ---
 
