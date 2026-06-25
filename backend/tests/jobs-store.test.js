@@ -49,6 +49,14 @@ describe('createJobsStore — in-memory (no redisUrl)', () => {
     expect(got.status).toBe('processing');
     expect(got.createdAt).toBe(1000);
   });
+
+  it('#282: markFileCancelled / cancelledFiles — множество имён на задание, с дедупом', async () => {
+    await store.markFileCancelled('j', 'a.pdf');
+    await store.markFileCancelled('j', 'b.pdf');
+    await store.markFileCancelled('j', 'a.pdf'); // повтор — дедуп
+    expect((await store.cancelledFiles('j')).sort()).toEqual(['a.pdf', 'b.pdf']);
+    expect(await store.cancelledFiles('other-job')).toEqual([]); // изоляция по заданию
+  });
 });
 
 describe('recoverStuckJobs — #44 recovery «зомби»-заданий при старте', () => {
