@@ -118,12 +118,24 @@
               <span class="text-sm text-base-master truncate min-w-0">
                 {{ file.name }}
               </span>
-              <B24Badge
-                :label="fileBadge(file).label"
-                :color="fileBadge(file).color"
-                size="sm"
-                class="shrink-0"
-              />
+              <div class="flex items-center gap-2 shrink-0">
+                <B24Badge
+                  :label="fileBadge(file).label"
+                  :color="fileBadge(file).color"
+                  size="sm"
+                />
+                <!-- #282: убрать ещё не начатый (pending) файл из очереди. Видно только пока файл ждёт. -->
+                <B24Button
+                  v-if="file.status === 'pending'"
+                  color="air-secondary"
+                  size="xs"
+                  :disabled="!!removingFiles[file.name]"
+                  title="Убрать файл из очереди"
+                  @click="cancelFile(file.name)"
+                >
+                  {{ removingFiles[file.name] ? '…' : 'Убрать' }}
+                </B24Button>
+              </div>
             </div>
 
             <!-- Прогресс-бар + таймер — только у реально обрабатываемого файла. Файл в очереди
@@ -686,6 +698,38 @@ async function cancelJob() {
       color: 'air-primary-alert',
       duration: 5000
     })
+  }
+}
+
+// #282: убрать ОДИН ещё не начатый (pending) файл из очереди. Оптимистично помечаем 'cancelled'
+// локально; следующий poll подтвердит (бэкенд показывает overlay 'cancelled' сразу). Множество
+// нажатий по разным файлам параллельно безопасно.
+const removingFiles = ref<Record<string, boolean>>({})
+async function cancelFile(fileName: string) {
+  if (!job.value || removingFiles.value[fileName]) return
+  removingFiles.value = { ...removingFiles.value, [fileName]: true }
+  try {
+    await apiFetch(`/job/${job.value.jobId}/file-cancel`, { method: 'POST', body: { fileName } })
+    // оптимистично: статус файла → 'cancelled' (если он ещё pending)
+    if (job.value) {
+      job.value = {
+        ...job.value,
+        files: job.value.files.map(f =>
+          f.name === fileName && f.status === 'pending' ? { ...f, status: 'cancelled' } : f
+        )
+      }
+    }
+  } catch (e: unknown) {
+    toast.add({
+      title: 'Не удалось убрать файл',
+      description: extractErrorMessage(e),
+      color: 'air-primary-alert',
+      duration: 5000
+    })
+  } finally {
+    removingFiles.value = Object.fromEntries(
+      Object.entries(removingFiles.value).filter(([k]) => k !== fileName)
+    )
   }
 }
 
