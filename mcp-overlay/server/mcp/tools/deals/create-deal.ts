@@ -64,7 +64,7 @@ export default defineMcpTool({
     'Create a procurement deal in Bitrix24 (funnel "Закупки", category 1, stage C1:NEW, currency BYN). Attaches the source file (read by path from the uploads volume) to the deal card and writes the processing log as a comment and timeline entry. Tax 20%, price is net — VAT added on top (TAX_INCLUDED=N). Unit always "шт". Deal is always created — no duplicate check. If this tool hinders you (unexpected response shape, an unclear warning, or a missing capability), record it in your result\'s feedback[] (see the system prompt, "Сигналы и обратная связь агента").',
   inputSchema: {
     supplierId: z.string().min(1).describe('Bitrix24 company id of the supplier'),
-    contractId: z.string().min(1).describe('Bitrix24 contract id — required: a procurement deal must reference a contract (агент в шаге 3 останавливается, если договор не найден)'),
+    contractId: z.string().optional().describe('Bitrix24 contract id — передай "0" или пропусти, если договор не найден (договор не блокирует сделку — warning contract_not_found, оператор привязывает вручную)'),
     responsibleUserId: z.string().min(1).describe('Bitrix24 user id to assign the deal to'),
     filePath: z.string().min(1).describe('Absolute path to the source document (FILE_PATH) — must reside inside the uploads directory. The MCP server reads it and base64-encodes it for attachment.'),
     documentDate: z.string().max(10).regex(/^\d{2}\.\d{2}\.\d{4}$/, 'documentDate must be d.m.Y').optional().describe('Дата документа (счёта) в формате d.m.Y (напр. "15.03.2025") — ставится как дата начала сделки (BEGINDATE). Если не указана/непарсибельна — текущая дата.'),
@@ -129,9 +129,8 @@ export default defineMcpTool({
         quantity: Math.round(it.quantity * 100) / 100,
       })),
     }
-    // contractId обязателен по схеме (z.string().min(1)), но guard оставляем:
-    // юнит-тест вызывает handler напрямую (минуя Zod) и проверяет, что при
-    // отсутствии contractId он НЕ попадает в params как undefined.
+    // contractId опционален (договор не блокирует сделку): при отсутствии/"0" не передаём
+    // в PHP — там contractId=0 → UF_CRM_DEAL_DOGOVOR не ставится, сделка без договора.
     if (contractId) params.contractId = contractId
     if (documentDate) params.documentDate = documentDate
 
