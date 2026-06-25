@@ -179,11 +179,13 @@ postdeploy_health() {
     echo "    WARN $1 → ждали \"$3\", иной ответ (контроллер жив, проверьте): ${safe}"
     [ "${GITHUB_ACTIONS:-}" = "true" ] && echo "::warning title=health WARN::$1 не вернул \"$3\" — проверьте контроллер/БД вручную"
   }
-  # Негативные — регистрация + ранняя валидация (supplierId=0 → deal:010 ДО Add):
+  # Негативные — регистрация + ранняя валидация (deal:010 ДО Add, данных НЕ создают).
+  # NB: для create_deal негатив держим на responsibleUserId=0 — supplierId=0 больше НЕ ошибка
+  # (#supplier-not-found: сделка без компании), иначе health-чек завёл бы реальную сделку.
   _hc "shef:purchase.api.procuresupplier.findbyunp"       '{"unp":""}'        'sup:010'
   _hc "shef:purchase.api.procurecontract.find"            '{"supplierId":0}'  'con:010'
   _hc "shef:purchase.api.procureproduct.findbyvendorcode" '{"vendorCode":""}' 'prd:010'
-  _hc "shef:purchase.api.procuredeal.create"              '{"supplierId":0,"responsibleUserId":1,"fileName":"x","fileContent":"","processingLog":"","items":[{"name":"x","priceExclVat":1,"quantity":1}]}' 'deal:010'
+  _hc "shef:purchase.api.procuredeal.create"              '{"supplierId":1,"responsibleUserId":0,"fileName":"x","fileContent":"","processingLog":"","items":[{"name":"x","priceExclVat":1,"quantity":1}]}' 'deal:010'
   # Позитивный read-only — валидный (9 цифр) несуществующий УНП проходит ВАЛИДАЦИЮ
   # и идёт в БД. Ключ "result" (даже с id:null) подтверждает, что маршрут жив и БД
   # ответила. Если CRM-модуль не подключился → ответ без "result" → уйдёт в WARN

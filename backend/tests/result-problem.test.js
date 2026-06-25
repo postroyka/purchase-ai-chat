@@ -156,13 +156,13 @@ describe('result surfacing — file without a deal (#192)', () => {
   it('mixed batch: per-file problem/null, job stays done, both deals + reasons surfaced', async () => {
     const body = await runWith(spawnSequence([
       { supplier: {}, deal: { dealId: '7' } }, // success
-      { error: 'supplier_not_found' },          // no deal
+      { error: 'unsupported_currency' },        // no deal (терминальная ошибка; supplier_not_found теперь не блокирует)
     ]), 2);
     expect(body.status).toBe('done');
     const [a, b] = body.files;
     expect(a.problem == null).toBe(true);
     expect(a.result.deal.dealId).toBe('7');
-    expect(b.problem).toBe(PROBLEM_MESSAGES.supplier_not_found);
+    expect(b.problem).toBe(PROBLEM_MESSAGES.unsupported_currency);
   });
 
   it('the /job/:id/status route exposes the problem field', async () => {

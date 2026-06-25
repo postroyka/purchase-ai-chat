@@ -63,8 +63,9 @@ export default defineMcpTool({
   description:
     'Create a procurement deal in Bitrix24 (funnel "Закупки", category 1, stage C1:NEW, currency BYN). Attaches the source file (read by path from the uploads volume) to the deal card and writes the processing log as a comment and timeline entry. Tax 20%, VAT included in price (Y). Unit always "шт". Deal is always created — no duplicate check. If this tool hinders you (unexpected response shape, an unclear warning, or a missing capability), record it in your result\'s feedback[] (see the system prompt, "Сигналы и обратная связь агента").',
   inputSchema: {
-    supplierId: z.string().min(1).describe('Bitrix24 company id of the supplier'),
-    contractId: z.string().min(1).describe('Bitrix24 contract id — required: a procurement deal must reference a contract (агент в шаге 3 останавливается, если договор не найден)'),
+    supplierId: z.string().min(1).optional().describe('Bitrix24 company id of the supplier — пропусти/«0», если поставщик по УНП не найден (сделка создаётся БЕЗ компании, warning supplier_not_found, оператор привяжет вручную; передай supplierUnp для заголовка)'),
+    supplierUnp: z.string().max(32).optional().describe('УНП/ИНН поставщика из документа — идёт в заголовок сделки, КОГДА компания не найдена (supplierId пуст). Иначе не нужен.'),
+    contractId: z.string().min(1).describe('Bitrix24 contract id — передай "0", если договор не найден или не искался (напр. поставщик не найден → Шаг 3 пропущен). Договор не обязателен для создания сделки.'),
     responsibleUserId: z.string().min(1).describe('Bitrix24 user id to assign the deal to'),
     filePath: z.string().min(1).describe('Absolute path to the source document (FILE_PATH) — must reside inside the uploads directory. The MCP server reads it and base64-encodes it for attachment.'),
     documentDate: z.string().max(10).regex(/^\d{2}\.\d{2}\.\d{4}$/, 'documentDate must be d.m.Y').optional().describe('Дата документа (счёта) в формате d.m.Y (напр. "15.03.2025") — ставится как дата начала сделки (BEGINDATE). Если не указана/непарсибельна — текущая дата.'),
@@ -87,7 +88,7 @@ export default defineMcpTool({
       quantity: z.number().positive().max(1_000_000_000).describe('Quantity from document — may be fractional (e.g. 224.8 for m/kg/m³); rounded to 2 decimals at this boundary'),
     })).describe('Line items. Unit is always шт. Может быть пустым: если ни одна позиция не сопоставлена с каталогом (все артикулы не найдены), сделка создаётся без позиций с warning no_items_matched, а позиции уходят в processingLog.'),
   },
-  handler: async ({ supplierId, contractId, responsibleUserId, filePath, documentDate, processingLog, items }) => {
+  handler: async ({ supplierId, supplierUnp, contractId, responsibleUserId, filePath, documentDate, processingLog, items }) => {
     let fileContent: string
     try {
       const safePath = await resolveWithinUploads(filePath)
@@ -115,7 +116,9 @@ export default defineMcpTool({
 
     const b24 = useBitrix24Tenant()
     const params: Record<string, unknown> = {
-      supplierId,
+      // Поставщик не найден (#supplier-not-found): передаём "0" — PHP создаёт сделку без COMPANY_ID,
+      // заголовок берёт из supplierUnp. Найден — обычный id компании.
+      supplierId: supplierId || '0',
       responsibleUserId,
       fileName: basename(filePath),
       fileContent,
@@ -133,6 +136,7 @@ export default defineMcpTool({
     // юнит-тест вызывает handler напрямую (минуя Zod) и проверяет, что при
     // отсутствии contractId он НЕ попадает в params как undefined.
     if (contractId) params.contractId = contractId
+    if (supplierUnp) params.supplierUnp = supplierUnp
     if (documentDate) params.documentDate = documentDate
 
     const result = await timedCallV2<DealResult>(

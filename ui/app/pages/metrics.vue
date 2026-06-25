@@ -79,6 +79,7 @@ const WARNING_LABELS: Record<string, string> = {
   invalid_base64_file: 'Файл не прикреплён (кодировка)',
   document_date_unparsed: 'Дата документа не распознана',
   timeline_comment_failed: 'Комментарий в таймлайн не добавлен',
+  supplier_not_found: 'Поставщик не найден (сделка без компании)',
   other: 'Прочее'
 }
 
