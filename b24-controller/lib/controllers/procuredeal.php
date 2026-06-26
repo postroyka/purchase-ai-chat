@@ -377,7 +377,11 @@ class ProcureDeal
 			// у заказчика их уважает) — иначе колонки «НДС»/«Итого» опустеют. Правку нужно сохранять при
 				// обновлениях Bitrix (обработчик/ре-патч). См. b24-controller/IMPLEMENTATION_NOTES.md.
 			$sum    = round($price * $quantity, 2);
+				// is_finite: цена/кол-во зажаты по отдельности, но их произведение на прямом REST (в обход
+				// MCP-лимита .max(1e9)) может дать INF (1e308×2) → INF/NaN в сумму сделки. Зажимаем.
+				if(!is_finite($sum)) { $sum = 0.0; }
 			$taxSum = round($sum * 20.0 / 120.0, 2);
+				if(!is_finite($taxSum)) { $taxSum = 0.0; }
 			$productRows[] = [
 				'PRODUCT_ID'   => $pid, // всегда задан: позиции без productId отсеяны выше (#258)
 				'PRODUCT_NAME' => $productName,

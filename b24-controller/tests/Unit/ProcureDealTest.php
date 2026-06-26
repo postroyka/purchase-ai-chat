@@ -107,7 +107,7 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame(321, $res['dealId']);
 		$this->assertArrayNotHasKey('warnings', $res);
 
-		// Бизнес-правила позиции: TAX_RATE=20, TAX_INCLUDED=Y (откат #326 на перепроверку), «шт», цена как есть.
+		// Бизнес-правила позиции (#326 финал): цена в PRICE_BRUTTO 1-в-1, TAX_RATE=20, TAX_INCLUDED=Y, «шт».
 		$row = \CCrmDeal::$lastProductRows[0];
 		$this->assertSame(20, $row['TAX_RATE']);
 		$this->assertSame('Y', $row['TAX_INCLUDED']);
@@ -200,9 +200,8 @@ final class ProcureDealTest extends TestCase
 
 	public function testPriceWrittenOneToOneWithTaxIncludedY(): void
 	{
-		// Откат #326: TAX_INCLUDED='Y' (перепроверка НДС-модели на боевом портале). PRICE
-		// по-прежнему пишется 1-в-1 из priceExclVat (контроллер НЕ домножает на 1.2) — меняется
-		// только флаг включённости НДС. Финальная модель — по итогам теста.
+		// #326 финал: цена 1-в-1 в PRICE_BRUTTO, TAX_INCLUDED='Y'; Итого/НДС прибиты через SUM/TAX_SUM
+		// (НДС включён). 0.51 × 50 = 25.50; НДС включён = round(25.50×20/120, 2) = 4.25.
 		$items = [
 			['name' => 'Круг отрезной', 'priceExclVat' => 0.51, 'quantity' => 50, 'productId' => '7'],
 		];
@@ -210,9 +209,35 @@ final class ProcureDealTest extends TestCase
 		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
 
 		$row = \CCrmDeal::$lastProductRows[0];
-		$this->assertSame('Y', $row['TAX_INCLUDED']); // откат #326
-		$this->assertSame(0.51, $row['PRICE_BRUTTO']);       // PRICE 1-в-1 из priceExclVat
+		$this->assertSame('Y', $row['TAX_INCLUDED']);
+		$this->assertSame(0.51, $row['PRICE_BRUTTO']); // цена 1-в-1
 		$this->assertSame(20, $row['TAX_RATE']);
+		$this->assertSame(25.50, $row['SUM']);         // Итого = 0.51 × 50
+		$this->assertSame(4.25, $row['TAX_SUM']);      // НДС включён = round(25.50×20/120, 2)
+	}
+
+	public function testVatProdReconciliationTuplesAndInfinityClamp(): void
+	{
+		// #326 финал: прод-сверка (точные кортежи из брифа) + анти-INF на прямом REST.
+		// 0.19 × 200 = 38.00; НДС включён = round(38.00/6, 2) = 6.33 (округление копеек).
+		\CCrmDeal::$addReturn = 1;
+		$items = [
+			['name' => 'Удлинитель', 'priceExclVat' => 0.19, 'quantity' => 200, 'productId' => '7'],
+			// Прямой REST в обход MCP-лимита: огромная цена → price×qty = INF. SUM/TAX_SUM должны
+			// зажаться в 0.0 (is_finite-страховка), а не утечь INF/NaN в сумму сделки.
+			['name' => 'Overflow', 'priceExclVat' => 1e308, 'quantity' => 2, 'productId' => '8'],
+		];
+		$c = new ProcureDeal();
+		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
+
+		$r0 = \CCrmDeal::$lastProductRows[0];
+		$this->assertSame(0.19, $r0['PRICE_BRUTTO']);
+		$this->assertSame(38.00, $r0['SUM']);
+		$this->assertSame(6.33, $r0['TAX_SUM']);
+
+		$r1 = \CCrmDeal::$lastProductRows[1];
+		$this->assertSame(0.0, $r1['SUM']);     // INF зажат
+		$this->assertSame(0.0, $r1['TAX_SUM']);
 	}
 
 	public function testHalfKopeckRoundsHalfUpAndFractionalQuantityKeptToTwoDecimals(): void

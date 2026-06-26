@@ -78,9 +78,9 @@ export default defineMcpTool({
       vendorCode: z.string().nullish().describe('Артикул поставщика из документа. Может быть null/опущен.'),
       name: z.string().describe('Product name from document'),
       // The document price is per-unit and EXCLUDING VAT (нетто) — the agent always passes the net
-      // price from the paper invoice. How Bitrix treats VAT (TAX_INCLUDED flag) lives in the PHP
-      // controller and is under re-evaluation (#326-re: на боевом портале «цены с НДС» вариант N
-      // занижал итог; временно откатили на TAX_INCLUDED=Y). Этот аргумент от модели НДС не зависит.
+      // price from the paper invoice. НДС-модель живёт в PHP-контроллере (#326 финал, портал «цены
+      // содержат НДС»): цена → PRICE_BRUTTO 1-в-1, TAX_INCLUDED=Y, «Итого»/«НДС» прибиваются через
+      // SUM/TAX_SUM (НДС включён). Этот аргумент (нетто-цена) от модели НДС не зависит и не меняется.
       // .max guards against an astronomically large float (overflow → Infinity →
       // JSON.stringify "null" → price silently 0 in the deal). 1e9/unit is far beyond
       // any real procurement unit price; rounded to 2 decimals in the handler (#101).
