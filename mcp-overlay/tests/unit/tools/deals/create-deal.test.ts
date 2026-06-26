@@ -216,9 +216,10 @@ describe('b24_pst_crm_create_deal', () => {
     expect((tool as any).inputSchema.responsibleUserId.safeParse('').success).toBe(false)
   })
 
-  it('rejects missing/empty contractId via Zod schema (contract is mandatory — see prompt step 3)', () => {
-    expect((tool as any).inputSchema.contractId.safeParse(undefined).success).toBe(false)
-    expect((tool as any).inputSchema.contractId.safeParse('').success).toBe(false)
+  it('contractId опционален (#324 — договор не блокирует), но пустая строка отклоняется', () => {
+    expect((tool as any).inputSchema.contractId.safeParse(undefined).success).toBe(true) // можно опустить
+    expect((tool as any).inputSchema.contractId.safeParse('').success).toBe(false)        // пустая строка — нет
+    expect((tool as any).inputSchema.contractId.safeParse('0').success).toBe(true)         // "0" = договор не найден
   })
 
   it('rejects empty filePath via Zod schema', () => {
