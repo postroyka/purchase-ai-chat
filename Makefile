@@ -1,7 +1,7 @@
 .PHONY: dev logs shell-app shell-mcp \
 	prod-up prod-down prod-redeploy prod-pull metrics-reset \
 	init-network init-nginxproxy \
-	deploy-b24 deploy-images ui-smoke check-agent-stdin eval eval-baseline eval-test
+	deploy-b24 deploy-images ui-smoke check-agent-stdin eval eval-baseline eval-test test-overlay
 
 # Shared reverse-proxy network name on the server (грабли #1).
 PROXY_NET ?= proxy-net
@@ -28,6 +28,13 @@ deploy-b24:
 # Actions недоступны). Нужен Docker + PAT: GHCR_TOKEN=ghp_xxx make deploy-images
 deploy-images:
 	bash ./scripts/deploy-images.sh
+
+# ---- Overlay-тесты как в CI (#337) ----
+# Локальный `pnpm test` в mcp/ НЕ гоняет overlay-тесты — джоб «Test mcp-overlay deals tools»
+# в CI отдельно копирует overlay в mcp/ и запускает vitest tests/overlay. Эта цель повторяет
+# его 1-в-1 (с очисткой до и после), чтобы ловить регрессы ДО мержа PR, трогающих mcp-overlay/.
+test-overlay:
+	bash ./scripts/test-overlay.sh
 
 # ---- UI-смоук: ESLint + nuxt typecheck без полной сборки ----
 ui-smoke:
