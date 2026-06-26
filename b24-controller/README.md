@@ -314,7 +314,7 @@ PHP — полуручным `make deploy-b24 APPLY=1`, а Docker-образ MCP
 - guard-коды контроллеров (`sup/con/prd:010-011`, `deal:010-030`);
 - PHP-фильтрацию договора по номеру (устойчиво к раскладке) и дате, выбор min-ID;
 - нормализацию УНП и краевой trim артикула (#102/#68);
-- бизнес-правила позиций сделки (`TAX_RATE=20`, `TAX_INCLUDED=Y` — откат #326 на перепроверку НДС-модели, «шт»);
+- бизнес-правила позиций сделки (цена в `PRICE_BRUTTO` 1-в-1, `TAX_RATE=20`, `TAX_INCLUDED=Y`, «шт»; «Итого»/«НДС» через `SUM`/`TAX_SUM`, НДС включён — #326, см. IMPLEMENTATION_NOTES);
 - все `warnings` (`product_rows_failed`, `invalid_base64_file`,
   `file_attach_failed`, `timeline_comment_failed`, `document_date_unparsed`);
 - **регрессии:** by-ref в `CCrmDeal::Update`/`CommentController::onCreate` (#99,
