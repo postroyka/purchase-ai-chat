@@ -115,6 +115,9 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame(100.0, $row['PRICE_BRUTTO']);
 		$this->assertSame(2.0, $row['QUANTITY']); // целое значение, тип float (Bitrix QUANTITY = double)
 		$this->assertSame(7, $row['PRODUCT_ID']);
+		// Тест 3.1 (#326-re): SUM = цена×кол-во (Итого), TAX_SUM = SUM×20/120 (НДС включён).
+		$this->assertSame(200.0, $row['SUM']);     // 100 × 2
+		$this->assertSame(33.33, $row['TAX_SUM']); // round(200×20/120, 2)
 
 		// Базовые поля сделки.
 		$this->assertSame('BYN', \CCrmDeal::$lastAddFields['CURRENCY_ID']);
