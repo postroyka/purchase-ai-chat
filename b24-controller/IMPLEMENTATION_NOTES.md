@@ -128,7 +128,7 @@ $clientField = $entity->getField('CLIENT'); // getPropertyId()
 
 - **B8 подтверждено:** `CATEGORY_ID = 1` («Закупки»), `STAGE_ID = C1:NEW`,
   `RESPONSIBLE_ID` = `b_user.ID` (целое). `CURRENCY_ID = BYN`.
-- Позиции: `TAX_RATE = 20`, `TAX_INCLUDED = N` (цена нетто, НДС сверху, #325), единица = шт, цена = `priceExclVat`.
+- Позиции: `TAX_RATE = 20`, `TAX_INCLUDED = Y` (откат #326 на перепроверку НДС-модели), единица = шт, цена = `priceExclVat`.
 - Сделка создаётся всегда (дублей не проверяем).
 - **`BEGINDATE` («Дата начала») — обязательное поле воронки «Закупки».**
   Заполняется: если передан `documentDate` (дата счёта, формат d.m.Y) — это дата
