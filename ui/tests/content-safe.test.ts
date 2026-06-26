@@ -16,6 +16,11 @@ describe('stripHostileChars (#320 follow-up — Trojan Source санитизац
     expect(stripHostileChars('строка1\nстрока2\tтаб')).toBe('строка1\nстрока2\tтаб')
   })
 
+  it('вырезает ALM (U+061C) и line/para-separators (U+2028/U+2029) — #341 ИБ-ревью', () => {
+    expect(stripHostileChars('a\u061cb')).toBe('ab')
+    expect(stripHostileChars('a\u2028b\u2029c')).toBe('abc')
+  })
+
   it('обычный текст не меняется; не-строка → пустая строка', () => {
     expect(stripHostileChars('Распознан поставщик X, 3 позиции')).toBe('Распознан поставщик X, 3 позиции')
     expect(stripHostileChars(null)).toBe('')

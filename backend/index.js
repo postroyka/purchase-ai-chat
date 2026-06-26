@@ -1115,9 +1115,15 @@ export function classifySpeed(durationMs, fastMs, slowMs) {
 // после прогона агента НЕ читает (его потребляет MCP create_deal из вывода агента, не из ответа API),
 // поэтому вырезать его из ОТВЕТА безопасно — хранимый `fileEntry.result` не трогаем. Денилист, а не
 // аллоулист: UI читает feedback/processingLog/error/items — их сохраняем, удаляем лишь чувствительное.
+// ⚠️ При добавлении в `prompts/main.md` нового серверо-внутреннего поля результата — занеси его сюда.
+// (Денилист хрупок при росте схемы; при втором таком поле — пересмотреть в сторону аллоулиста, #320 review.)
 const RESULT_CLIENT_DENYLIST = ['filePath'];
 
-/** Поверхностная копия `result` без серверо-внутренних полей (см. RESULT_CLIENT_DENYLIST). */
+/**
+ * Поверхностная копия `result` без серверо-внутренних полей (см. RESULT_CLIENT_DENYLIST).
+ * SHALLOW: вложенные объекты (`result.deal` и т.п.) разделяются с оригиналом — не мутируй их у вызывающего.
+ * По схеме агента `filePath` встречается только на верхнем уровне, поэтому глубокий обход не нужен.
+ */
 export function stripSensitiveResult(result) {
   if (!result || typeof result !== 'object') return result; // null/строка/число — как есть
   const clean = { ...result };

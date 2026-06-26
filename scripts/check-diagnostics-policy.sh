@@ -11,6 +11,9 @@ set -euo pipefail
 BASE_REF="${BASE_REF:-main}"
 POLICY="docs/DIAGNOSTICS_POLICY.md"
 FLAGS='SHOW_TIMINGS|HIDE_PERF_NOTE|TIMING_FAST_MS|TIMING_SLOW_MS|AGENT_FORCE_FEEDBACK'
+# TODO: при создании нового env-примера с дефолтами диагностики — добавь его сюда, иначе гейт промолчит.
+# Граница (намеренно): гейт НЕ ловит смену дефолта прямо в коде (backend/index.js `?? false`) — это
+# остаётся на ревьюере (правило в CLAUDE.md). См. docs/DIAGNOSTICS_POLICY.md «Граница гейта».
 ENV_FILES=(backend/.env.example .env.prod.example)
 base="origin/${BASE_REF}"
 
