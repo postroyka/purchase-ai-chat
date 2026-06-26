@@ -86,10 +86,10 @@ export class GithubFeedbackError extends Error {
 // verify what is stripped without trusting invisible code points in the source (embedding the
 // literal characters here would itself be a Trojan Source vector against the reviewer):
 //   - C0 controls except tab (0x09), LF (0x0A), CR (0x0D)
-//   - bidi overrides (U+202A..U+202E, U+2066..U+2069)
-//   - zero-width / BOM (U+200B..U+200D, U+FEFF)
+//   - bidi overrides (U+202A..U+202E, U+2066..U+2069), ALM (U+061C)
+//   - zero-width / BOM (U+200B..U+200D, U+FEFF), line/paragraph separators (U+2028/U+2029)
 // eslint-disable-next-line no-control-regex
-const HOSTILE_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\u202a-\u202e\u2066-\u2069\u200b-\u200d\ufeff]/g;
+const HOSTILE_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\u061c\u200b-\u200d\u2028-\u2029\u202a-\u202e\u2066-\u2069\ufeff]/g;
 
 /** Remove C0 controls, bidi overrides, zero-widths and BOM from arbitrary user-supplied text. */
 export function stripHostileChars(input) {

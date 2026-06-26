@@ -718,7 +718,7 @@ export function createApp(config = {}) {
       files: job.files.map((f) => ({
         name: f.name,
         status: (f.status === 'pending' && cancelSet.has(f.name)) ? 'cancelled' : f.status,
-        result: f.result, error: f.error, problem: f.problem,
+        result: stripSensitiveResult(f.result), error: f.error, problem: f.problem,
         // Тайминги отдаём только при SHOW_TIMINGS (#замеры) — иначе ответ без изменений.
         ...(showTimings ? { startedAt: f.startedAt ?? null, agentMs: f.agentMs ?? null, agentTurns: f.agentTurns ?? null, toolMs: f.toolMs ?? null, durationMs: f.durationMs ?? null, extractMethod: f.extractMethod ?? null, extractMs: f.extractMs ?? null, speed: classifySpeed(f.durationMs, timingFastMs, timingSlowMs) } : {}),
       })),
@@ -1107,6 +1107,28 @@ export function classifySpeed(durationMs, fastMs, slowMs) {
   if (durationMs <= fastMs) return 'fast';
   if (durationMs >= slowMs) return 'slow';
   return 'normal';
+}
+
+// Поля результата агента, которые НЕ должны утекать в браузер сотрудника через ответ /job/:id/status
+// (#320 follow-up). `filePath` — серверный путь к загруженному файлу (`/app/uploads/<uuid>/…`): UI его
+// не рендерит, но браузер получал его в сыром `result` и видел в DevTools → Network. Бэкенд этот путь
+// после прогона агента НЕ читает (его потребляет MCP create_deal из вывода агента, не из ответа API),
+// поэтому вырезать его из ОТВЕТА безопасно — хранимый `fileEntry.result` не трогаем. Денилист, а не
+// аллоулист: UI читает feedback/processingLog/error/items — их сохраняем, удаляем лишь чувствительное.
+// ⚠️ При добавлении в `prompts/main.md` нового серверо-внутреннего поля результата — занеси его сюда.
+// (Денилист хрупок при росте схемы; при втором таком поле — пересмотреть в сторону аллоулиста, #320 review.)
+const RESULT_CLIENT_DENYLIST = ['filePath'];
+
+/**
+ * Поверхностная копия `result` без серверо-внутренних полей (см. RESULT_CLIENT_DENYLIST).
+ * SHALLOW: вложенные объекты (`result.deal` и т.п.) разделяются с оригиналом — не мутируй их у вызывающего.
+ * По схеме агента `filePath` встречается только на верхнем уровне, поэтому глубокий обход не нужен.
+ */
+export function stripSensitiveResult(result) {
+  if (!result || typeof result !== 'object') return result; // null/строка/число — как есть
+  const clean = { ...result };
+  for (const key of RESULT_CLIENT_DENYLIST) delete clean[key];
+  return clean;
 }
 
 // #44 (P2): структурная сводка задания для JSON-лога. Один машиночитаемый объект на завершённое

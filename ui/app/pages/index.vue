@@ -342,6 +342,7 @@ import { fileBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
 import { mmss, timingLine, plural } from '~/utils/format-duration'
 import { failActiveFiles } from '~/utils/job-status'
 import { perfDiagNotes } from '~/utils/perf-diag'
+import { stripHostileChars } from '~/utils/content-safe'
 
 // Под общим dashboard-каркасом (сайдбар с навигацией) из layouts/default.vue.
 definePageMeta({ layout: 'default' })
@@ -794,7 +795,9 @@ watch(() => [job.value?.status, ...(job.value?.files ?? []).map(f => `${f.name}:
 function processingLogOf(file: FileEntry): string {
   const r = file.result as { processingLog?: unknown } | null | undefined
   if (!r || typeof r !== 'object' || typeof r.processingLog !== 'string') return ''
-  return r.processingLog.trim().slice(0, 10000) // cap: защита DOM от гигантского лога
+  // Лог пишет агент по НЕДОВЕРЕННОМУ документу → вырезаем bidi/zero-width (Trojan Source, #320 follow-up)
+  // тем же stripHostileChars, что и perf-заметки/серверный путь; затем trim + cap (защита DOM).
+  return stripHostileChars(r.processingLog).trim().slice(0, 10000)
 }
 
 // Само-диагностика скорости агента (#279): записи feedback[] с kind:'perf' — что замедлило разбор.
