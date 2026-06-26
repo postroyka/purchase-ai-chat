@@ -16,6 +16,7 @@ import { createSessionAuth, parseCookies, domainAllowed, normalizeDomain, defaul
 import { createGithubIssue, buildIssue, normalizeKind, GithubFeedbackError, checkRepoPrivacy, sanitizeComment } from './feedback.js';
 import { createAgentFeedbackReporter } from './agent-feedback.js';
 import { createFeedbackOutbox } from './feedback-outbox.js';
+import { uploadFeedbackFile } from './feedback-file-store.js';
 import { parseBotEvent, parseAppEvent, handleBotEvent } from './b24-bot.js';
 import { makeBotApi } from './b24-bot-api.js';
 import { createAppStore } from './app-store.js';
@@ -525,7 +526,7 @@ export function createApp(config = {}) {
     await jobs.set(jobId, job); // бросает → caller чистит jobDir и отвечает 503
     activeJobs++;
     metrics.recordUpload({ fileCount: fileEntries.length }).catch(() => {}); // best-effort
-    processJob(jobId, jobs, agentConfig, metrics, agentFeedback, { fastMs: timingFastMs, slowMs: timingSlowMs })
+    processJob(jobId, jobs, agentConfig, metrics, agentFeedback, { fastMs: timingFastMs, slowMs: timingSlowMs }, feedbackFiles)
       .then(async () => {
         if (!onDone) return;
         try { await onDone(await jobs.get(jobId)); }
@@ -536,21 +537,39 @@ export function createApp(config = {}) {
     return job;
   }
 
+  // #332: durable source-file store. На проблемных исходах (сделка НЕ создана/ошибка) грузим исходный
+  // файл в ПРИВАТНЫЙ feedback-репо, пока он ещё на диске (processJob чистит папку задания в конце; в Б24
+  // файл попадает только при успехе через create_deal — поэтому пробел ровно в no-deal-кейсах, #332).
+  // Приватность fail-closed: грузим ТОЛЬКО при подтверждённо приватном репо — флаг ставит startup-проба в
+  // main() через app.setFeedbackRepoPrivate. Пока флаг не подтверждён (null) — uploadFeedbackFile откажет.
+  let feedbackRepoPrivate = null;
+  app.setFeedbackRepoPrivate = (v) => { feedbackRepoPrivate = (v === true); };
+  const feedbackFiles = config.feedbackFiles ?? {
+    enabled: !!githubFeedbackToken,
+    repo: githubFeedbackRepo,
+    token: githubFeedbackToken,
+    getRepoPrivate: () => feedbackRepoPrivate,
+    maxUploadMb: (() => { const n = parseInt(process.env.FEEDBACK_FILE_MAX_MB ?? '20', 10); return Number.isFinite(n) && n > 0 ? n : 20; })(),
+    upload: uploadFeedbackFile,
+  };
+
   // Достать лог обработки + время файла из журнала заданий, чтобы вложить их в issue отзыва (#237).
   // Источник истины — сервер: бэкенд всегда хранит fileEntry.durationMs и result.processingLog (флаг
   // SHOW_TIMINGS гейтит только ответ /job/:id/status, не само хранение). Best-effort: нет jobId/файла,
   // журнал недоступен или задание истекло → пусто, issue заводится без этой секции.
   async function lookupFileTelemetry(jobId, fileName) {
-    if (!jobId || !fileName) return { processingLog: '', processingMs: null };
+    if (!jobId || !fileName) return { processingLog: '', processingMs: null, sourceFileUrl: '' };
     try {
       const j = await jobs.get(jobId);
       const f = j?.files?.find((x) => x && x.name === fileName);
-      if (!f) return { processingLog: '', processingMs: null };
+      if (!f) return { processingLog: '', processingMs: null, sourceFileUrl: '' };
       const log = (f.result && typeof f.result.processingLog === 'string') ? f.result.processingLog : '';
       const ms = Number.isFinite(f.durationMs) ? f.durationMs : null;
-      return { processingLog: log, processingMs: ms };
+      // #332: durable-ссылка на исходный файл (если processJob успел его залить на проблемном исходе).
+      const sourceFileUrl = typeof f.sourceFileUrl === 'string' ? f.sourceFileUrl : '';
+      return { processingLog: log, processingMs: ms, sourceFileUrl };
     } catch {
-      return { processingLog: '', processingMs: null };
+      return { processingLog: '', processingMs: null, sourceFileUrl: '' };
     }
   }
 
@@ -875,7 +894,9 @@ export function createApp(config = {}) {
 
     // #237: подложить в issue лог обработки + время файла (как на странице результата). Берём из
     // журнала заданий по jobId+файлу (источник истины — не доверяем клиенту). Best-effort.
-    const { processingLog, processingMs } = await lookupFileTelemetry(context.jobId, context.fileName);
+    // #332: оттуда же — durable-ссылка на исходный файл (если он был сохранён на проблемном исходе).
+    const { processingLog, processingMs, sourceFileUrl } = await lookupFileTelemetry(context.jobId, context.fileName);
+    if (sourceFileUrl) context.sourceFileUrl = sourceFileUrl;
 
     try {
       const result = await createFeedbackIssue({ kind, comment, context, processingLog, processingMs });
@@ -1153,7 +1174,7 @@ export function summarizeJob(job) {
   };
 }
 
-async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null, timing = {}) {
+async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFeedback = null, timing = {}, feedbackFiles = null) {
   const job = await jobs.get(jobId);
   if (!job) return;
 
@@ -1217,6 +1238,30 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       // success-rate agrees with the UI ("успех = создана сделка", issue #192).
       const errCode = result && typeof result === 'object' && typeof result.error === 'string' ? result.error : null;
       const outcome = errCode ? errCode : (hasDeal ? 'ok' : 'no_deal');
+      // #332: на проблемном исходе (сделка НЕ создана/ошибка) сохраняем исходный файл в приватный
+      // feedback-репо, ПОКА он ещё на диске (папку задания processJob удалит в конце). URL кладём в
+      // fileEntry — он доживёт в журнале до отзыва сотрудника — и в контекст agent-issue ниже. При успехе
+      // не грузим: файл уже приложен к сделке в Б24 через create_deal. Best-effort: НИКОГДА не валит файл,
+      // приватность fail-closed внутри uploadFeedbackFile (грузит только в подтверждённо приватный репо).
+      if (!hasDeal && feedbackFiles?.enabled) {
+        try {
+          const buf = await fs.promises.readFile(fileEntry.path);
+          const up = await (feedbackFiles.upload ?? uploadFeedbackFile)({
+            repo: feedbackFiles.repo,
+            token: feedbackFiles.token,
+            repoPrivate: feedbackFiles.getRepoPrivate ? feedbackFiles.getRepoPrivate() : null,
+            jobId,
+            fileName: fileEntry.name,
+            content: buf,
+            maxUploadMb: feedbackFiles.maxUploadMb,
+          });
+          if (up?.url) fileEntry.sourceFileUrl = up.url;
+        } catch (e) {
+          // NOT_PRIVATE / TOO_LARGE / upstream / ошибка чтения — логируем КОД (без токена), файл идёт дальше.
+          const code = (e && e.code) ? e.code : 'UNKNOWN';
+          console.warn(`[feedback-file] job=${jobId} file=${fileEntry.name}: исходник не сохранён (code: ${code})`);
+        }
+      }
       // issue #192: surface a human-readable reason when no deal was created, so the result page shows
       // WHY instead of a bare green "Готово". Status stays 'done' — it was processed.
       fileEntry.problem = hasDeal ? null : problemMessage(result).slice(0, MAX_ERROR_CHARS);
@@ -1276,6 +1321,7 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
         fileName: fileEntry.name,
         dealId: hasDeal ? String(dealId) : undefined,
         outcome,
+        sourceFileUrl: fileEntry.sourceFileUrl, // #332: durable-ссылка в agent-issue (если сохранён)
       }).catch(() => {});
     } catch (err) {
       // Redact any Bearer token before the message is logged, persisted, or returned.
@@ -1368,14 +1414,17 @@ if (process.argv[1] === __filename) {
     if (fbToken) {
       checkRepoPrivacy({ repo: fbRepo, token: fbToken })
         .then((r) => {
+          // #332: фиксируем подтверждённую приватность — uploadFeedbackFile грузит исходники ТОЛЬКО при
+          // private===true (fail-closed). public/неизвестно → загрузка исходных файлов отключена.
+          app.setFeedbackRepoPrivate?.(r.private === true);
           if (r.private === false) {
-            console.warn(`[backend] WARNING: feedback repo "${fbRepo}" is PUBLIC — feedback issues contain job context and employee comments. Make it private or point GITHUB_FEEDBACK_REPO at a private repo.`);
+            console.warn(`[backend] WARNING: feedback repo "${fbRepo}" is PUBLIC — feedback issues contain job context and employee comments. Make it private or point GITHUB_FEEDBACK_REPO at a private repo. Загрузка исходных файлов (#332) ОТКЛЮЧЕНА.`);
           } else if (r.private == null) {
-            console.warn(`[backend] could not verify feedback repo privacy (status: ${r.status || 'network'}); ensure "${fbRepo}" is private.`);
+            console.warn(`[backend] could not verify feedback repo privacy (status: ${r.status || 'network'}); ensure "${fbRepo}" is private. Загрузка исходных файлов (#332) отключена до подтверждения.`);
           }
           // r.private === true → repo is private as intended → no log
         })
-        .catch(() => {});
+        .catch(() => { app.setFeedbackRepoPrivate?.(false); });
     }
   }
 

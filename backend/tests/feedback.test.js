@@ -139,6 +139,16 @@ describe('buildIssue / formatIssueBody', () => {
     expect(body).not.toContain('User-Agent'); // not provided → no blank row
   });
 
+  it('#332: показывает строку «Исходный файл» только когда sourceFileUrl передан', () => {
+    const withUrl = formatIssueBody({
+      kind: 'problem', comment: 'x',
+      context: { jobId: 'job-1', sourceFileUrl: 'https://github.com/acme/feedback/blob/main/feedback-files/job-1/invoice.pdf' },
+    });
+    expect(withUrl).toContain('Исходный файл:** https://github.com/acme/feedback/blob/main/feedback-files/job-1/invoice.pdf');
+    const noUrl = formatIssueBody({ kind: 'problem', comment: 'x', context: { jobId: 'job-1' } });
+    expect(noUrl).not.toContain('Исходный файл');
+  });
+
   it('strips hostile chars from the title too (Trojan Source defence)', () => {
     const { title } = buildIssue({ kind: 'problem', comment: `a${RLO}b` });
     expect(title).toContain('ab');
