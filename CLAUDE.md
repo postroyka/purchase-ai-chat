@@ -5,6 +5,13 @@
 - **Never push directly to `main`** — all changes go via Pull Requests.
 - Before pushing, create a PR and request a code review.
 - Merges to `main` are done manually by the repo owner.
+- **Дефолты диагностики (#320/#338).** PR, меняющий env-дефолт видимости диагностики
+  (`SHOW_TIMINGS`, `HIDE_PERF_NOTE`, `TIMING_FAST_MS`/`TIMING_SLOW_MS`, `AGENT_FORCE_FEEDBACK` —
+  и любой будущий флаг диагностики) **без** сопутствующей правки
+  [`docs/DIAGNOSTICS_POLICY.md`](docs/DIAGNOSTICS_POLICY.md) — ревьюер **отклоняет**. Изменение
+  самой политики требует апрува владельца (CTO). Канонический текст процедуры и актуальный
+  перечень флагов — в `docs/DIAGNOSTICS_POLICY.md` (раздел «Дефолты и роль env-флагов»); здесь —
+  короткое напоминание. Это защита от ad-hoc-метаний дефолтов (#302 → #314 → #317).
 
 ## Branch Strategy
 
