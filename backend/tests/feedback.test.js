@@ -440,6 +440,20 @@ describe('buildAgentFeedbackIssue', () => {
     });
     expect(unknown.body).toContain('**Исход:** weird_code');
   });
+
+  it('#332: строка «Исходный файл» в agent-issue только при sourceFileUrl (через contextLine — экранируется)', () => {
+    const url = 'https://github.com/acme/fb/blob/main/feedback-files/job-2/ab12cd34-scan.pdf';
+    const withUrl = buildAgentFeedbackIssue({
+      kind: 'problem', tool: 'create_deal', note: 'нет сделки',
+      context: { jobId: 'job-2', fileName: 'scan.pdf', outcome: 'no_deal', sourceFileUrl: url },
+    });
+    expect(withUrl.body).toContain(`**Исходный файл:** ${url}`);
+    const noUrl = buildAgentFeedbackIssue({
+      kind: 'problem', tool: 'create_deal', note: 'x',
+      context: { jobId: 'job-2', fileName: 'scan.pdf', outcome: 'no_deal' },
+    });
+    expect(noUrl.body).not.toContain('Исходный файл');
+  });
 });
 
 // ── Route: GET /feedback/config ───────────────────────────────────────────────

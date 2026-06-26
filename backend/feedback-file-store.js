@@ -14,11 +14,14 @@
 // Security carried over from feedback.js verbatim: токен никогда не попадает в логи/сообщения об
 // ошибке; slug владельца/репо валидируется до попадания в путь запроса; AbortSignal + redirect:error.
 
+import { createHash } from 'node:crypto';
+
 const GITHUB_API = 'https://api.github.com';
 
-// Кап размера загружаемого файла. contents API лимитирует ~файл, но base64 раздувает на ~33%, плюс
-// это клиентские данные — держим консервативно. По умолчанию совпадает с MAX_FILE_SIZE_MB приложения.
-const DEFAULT_MAX_UPLOAD_MB = 20;
+// Кап размера. ВНИМАНИЕ: contents API принимает base64-тело (+~33%: 15 МБ → ~20 МБ JSON) и может
+// отклонить большие файлы. Держим НИЖЕ ingest-лимита (MAX_FILE_SIZE_MB=20), эффективный размер тела
+// ≈ cap × 1.33. Переопределяется FEEDBACK_FILE_MAX_MB. Загрузка best-effort — отказ не валит отзыв.
+const DEFAULT_MAX_UPLOAD_MB = 15;
 
 export class FeedbackFileStoreError extends Error {
   constructor(message, code, { retryable = false } = {}) {
@@ -51,11 +54,15 @@ export function sanitizePathSegment(name, fallback = 'file') {
 }
 
 /**
- * Построить путь в репозитории для исходного файла отзыва: feedback-files/<jobId>/<fileName>.
- * Оба сегмента санитизируются (jobId — uuid, но не доверяем слепо).
+ * Построить путь в репозитории для исходного файла отзыва: feedback-files/<jobId>/<hash8>-<fileName>.
+ * Оба сегмента санитизируются (jobId — uuid, но не доверяем слепо). hash8 (первые 8 hex от sha256
+ * содержимого) РАЗВОДИТ разные файлы с одинаковым job+именем (#332-review #15): без него два разных
+ * файла с одним именем в одном задании дали бы коллизию пути → 422 вернул бы ссылку на ЧУЖОЙ файл.
+ * Одинаковое содержимое → одинаковый путь → идемпотентный повтор.
  */
-export function buildFeedbackFilePath(jobId, fileName) {
-  return `feedback-files/${sanitizePathSegment(jobId, 'job')}/${sanitizePathSegment(fileName)}`;
+export function buildFeedbackFilePath(jobId, fileName, contentHash = '') {
+  const prefix = /^[0-9a-f]{4,}$/i.test(contentHash) ? `${contentHash.slice(0, 8)}-` : '';
+  return `feedback-files/${sanitizePathSegment(jobId, 'job')}/${prefix}${sanitizePathSegment(fileName)}`;
 }
 
 /**
@@ -91,7 +98,8 @@ export async function uploadFeedbackFile({
     throw new FeedbackFileStoreError(`Source file exceeds the ${maxUploadMb}MB feedback-store limit.`, 'TOO_LARGE');
   }
 
-  const path = buildFeedbackFilePath(jobId, fileName);
+  const contentHash = createHash('sha256').update(content).digest('hex');
+  const path = buildFeedbackFilePath(jobId, fileName, contentHash);
   const url = `${GITHUB_API}/repos/${slug}/contents/${path}`;
   const payload = {
     message: `chore(feedback): исходный файл для разбора отзыва (job ${sanitizePathSegment(jobId, 'job')}) (#332)`,
@@ -123,7 +131,8 @@ export async function uploadFeedbackFile({
   if (response.status === 422) {
     const existing = await getExistingFileUrl({ slug, path, token, fetchImpl, timeoutMs }).catch(() => null);
     if (existing) return { url: existing, path };
-    throw new FeedbackFileStoreError('File already exists at path and its URL could not be resolved.', 'UPSTREAM');
+    // GET не дал ссылку (сеть/доступ) — позже ретрай может восстановить (#332-review #19).
+    throw new FeedbackFileStoreError('File already exists at path and its URL could not be resolved.', 'UPSTREAM', { retryable: true });
   }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
@@ -145,6 +154,11 @@ export async function uploadFeedbackFile({
   const htmlUrl = data?.content?.html_url;
   if (typeof htmlUrl !== 'string' || !htmlUrl) {
     throw new FeedbackFileStoreError('GitHub returned a malformed contents payload.', 'UPSTREAM');
+  }
+  // Defence-in-depth (#332-review #18): URL идёт в тело issue — принимаем только github.com-хост,
+  // чтобы подменённый ответ не увёл ссылку на чужой адрес (issue его и так HTML-экранирует).
+  if (!/^https:\/\/github\.com\//.test(htmlUrl)) {
+    throw new FeedbackFileStoreError('GitHub returned an unexpected html_url host.', 'UPSTREAM');
   }
   return { url: htmlUrl, path };
 }

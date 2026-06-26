@@ -41,15 +41,30 @@ describe('feedback-file-store (#332)', () => {
     });
   });
 
-  it('успешная загрузка приватного репо → { url }, PUT на contents API', async () => {
+  it('успешная загрузка приватного репо → { url }, PUT на contents API (путь с hash-префиксом)', async () => {
     const fetchImpl = okFetch();
     const r = await uploadFeedbackFile({ ...base, fetchImpl });
     expect(r.url).toContain('invoice.pdf');
-    expect(r.path).toBe('feedback-files/job-1/invoice.pdf');
+    // #332-review #15: путь = feedback-files/<jobId>/<hash8>-<имя> (развод коллизий по содержимому).
+    expect(r.path).toMatch(/^feedback-files\/job-1\/[0-9a-f]{8}-invoice\.pdf$/);
     const [url, opts] = fetchImpl.mock.calls[0];
-    expect(url).toBe('https://api.github.com/repos/acme/fb/contents/feedback-files/job-1/invoice.pdf');
+    expect(url).toMatch(/^https:\/\/api\.github\.com\/repos\/acme\/fb\/contents\/feedback-files\/job-1\/[0-9a-f]{8}-invoice\.pdf$/);
     expect(opts.method).toBe('PUT');
     expect(JSON.parse(opts.body).content).toBe(Buffer.from('PDFDATA').toString('base64'));
+  });
+
+  it('#332-review #15: разное содержимое с тем же именем → разные пути; то же содержимое → тот же путь', async () => {
+    const f1 = okFetch(), f2 = okFetch(), f3 = okFetch();
+    const p1 = (await uploadFeedbackFile({ ...base, content: Buffer.from('AAA'), fetchImpl: f1 })).path;
+    const p2 = (await uploadFeedbackFile({ ...base, content: Buffer.from('BBB'), fetchImpl: f2 })).path;
+    const p1again = (await uploadFeedbackFile({ ...base, content: Buffer.from('AAA'), fetchImpl: f3 })).path;
+    expect(p1).not.toBe(p2);
+    expect(p1).toBe(p1again);
+  });
+
+  it('#332-review #18: html_url не с github.com → UPSTREAM (защита тела issue)', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 201, json: async () => ({ content: { html_url: 'https://evil.example/x' } }) }));
+    await expect(uploadFeedbackFile({ ...base, fetchImpl })).rejects.toMatchObject({ code: 'UPSTREAM' });
   });
 
   it('нет токена/репо → NOT_CONFIGURED', async () => {
@@ -105,5 +120,38 @@ describe('feedback-file-store (#332)', () => {
     const r = await uploadFeedbackFile({ ...base, fetchImpl });
     expect(r.url).toContain('invoice.pdf');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('#332-review #11: 422 + GET без url → UPSTREAM retryable; 422 + GET бросает → тоже UPSTREAM', async () => {
+    const noUrl = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 422, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) }); // GET не дал url
+    await expect(uploadFeedbackFile({ ...base, fetchImpl: noUrl }))
+      .rejects.toMatchObject({ code: 'UPSTREAM', retryable: true });
+    const getThrows = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 422, json: async () => ({}) })
+      .mockRejectedValueOnce(new Error('boom token=secret'));
+    const err = await uploadFeedbackFile({ ...base, fetchImpl: getThrows }).catch((e) => e);
+    expect(err.code).toBe('UPSTREAM');
+    expect(err.message).not.toContain('secret');
+  });
+
+  it('#332-review #12: сообщения об ошибке не содержат ЗНАЧЕНИЕ токена/URL', async () => {
+    const SECRET = 'ghp_SUPERSECRETVALUE123';
+    for (const status of [403, 404, 500]) {
+      const fetchImpl = vi.fn(async () => ({ ok: false, status, json: async () => ({}) }));
+      const err = await uploadFeedbackFile({ ...base, token: SECRET, fetchImpl }).catch((e) => e);
+      expect(err.message).not.toContain(SECRET);       // значение токена не утекает
+      expect(err.message).not.toContain('api.github'); // URL запроса не светится
+    }
+  });
+
+  it('#332-review #13: sanitizePathSegment режет длину ≤100 и не оставляет traversal', () => {
+    const long = 'a'.repeat(500) + '.pdf';
+    expect(sanitizePathSegment(long).length).toBeLessThanOrEqual(100);
+    expect(buildFeedbackFilePath('../../x', 'y')).toMatch(/^feedback-files\//);
+    expect(buildFeedbackFilePath('../../x', 'y')).not.toContain('..');
+    // zero-width / управляющие символы → схлопнуты в безопасные
+    expect(sanitizePathSegment('a​b c')).not.toMatch(/[​ ]/);
   });
 });

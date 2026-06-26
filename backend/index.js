@@ -544,12 +544,17 @@ export function createApp(config = {}) {
   // main() через app.setFeedbackRepoPrivate. Пока флаг не подтверждён (null) — uploadFeedbackFile откажет.
   let feedbackRepoPrivate = null;
   app.setFeedbackRepoPrivate = (v) => { feedbackRepoPrivate = (v === true); };
+  // #332-review #3: единый источник правды для слага feedback-репо. Стартовая проба приватности
+  // (main()) ДОЛЖНА проверять ТОТ ЖЕ репо, в который грузит uploadFeedbackFile — иначе приватность
+  // подтверждается на одном репо, а байты уходят в другой (обход fail-closed). main() берёт слаг
+  // отсюда, а не перечитывает env.
+  app.getFeedbackRepo = () => githubFeedbackRepo;
   const feedbackFiles = config.feedbackFiles ?? {
     enabled: !!githubFeedbackToken,
     repo: githubFeedbackRepo,
     token: githubFeedbackToken,
     getRepoPrivate: () => feedbackRepoPrivate,
-    maxUploadMb: (() => { const n = parseInt(process.env.FEEDBACK_FILE_MAX_MB ?? '20', 10); return Number.isFinite(n) && n > 0 ? n : 20; })(),
+    maxUploadMb: (() => { const n = parseInt(process.env.FEEDBACK_FILE_MAX_MB ?? '15', 10); return Number.isFinite(n) && n > 0 ? n : 15; })(),
     upload: uploadFeedbackFile,
   };
 
@@ -1238,24 +1243,35 @@ async function processJob(jobId, jobs, agentConfig = {}, metrics = null, agentFe
       // success-rate agrees with the UI ("успех = создана сделка", issue #192).
       const errCode = result && typeof result === 'object' && typeof result.error === 'string' ? result.error : null;
       const outcome = errCode ? errCode : (hasDeal ? 'ok' : 'no_deal');
-      // #332: на проблемном исходе (сделка НЕ создана/ошибка) сохраняем исходный файл в приватный
-      // feedback-репо, ПОКА он ещё на диске (папку задания processJob удалит в конце). URL кладём в
-      // fileEntry — он доживёт в журнале до отзыва сотрудника — и в контекст agent-issue ниже. При успехе
-      // не грузим: файл уже приложен к сделке в Б24 через create_deal. Best-effort: НИКОГДА не валит файл,
-      // приватность fail-closed внутри uploadFeedbackFile (грузит только в подтверждённо приватный репо).
+      // #332: когда сделка НЕ создана (!hasDeal — бизнес-исход без сделки: result вернулся с ошибкой
+      // или без deal) сохраняем исходный файл в приватный feedback-репо, ПОКА он ещё на диске (папку
+      // задания processJob удалит в конце). URL кладём в fileEntry — он доживёт в журнале до отзыва
+      // сотрудника — и в контекст agent-issue ниже. При созданной сделке НЕ грузим: файл уже приложен к
+      // сделке в Б24 через create_deal (даже если агент при этом вернул warning-код). NB: брошенные
+      // ошибки (timeout/краш агента, ветка catch ниже) сюда НЕ доходят — для них исходник пока не
+      // сохраняется (отдельная задача, если понадобится). Best-effort: НИКОГДА не валит файл; приватность
+      // fail-closed внутри uploadFeedbackFile (грузит только в подтверждённо приватный репо).
       if (!hasDeal && feedbackFiles?.enabled) {
         try {
-          const buf = await fs.promises.readFile(fileEntry.path);
-          const up = await (feedbackFiles.upload ?? uploadFeedbackFile)({
-            repo: feedbackFiles.repo,
-            token: feedbackFiles.token,
-            repoPrivate: feedbackFiles.getRepoPrivate ? feedbackFiles.getRepoPrivate() : null,
-            jobId,
-            fileName: fileEntry.name,
-            content: buf,
-            maxUploadMb: feedbackFiles.maxUploadMb,
-          });
-          if (up?.url) fileEntry.sourceFileUrl = up.url;
+          // #332-review #5: проверяем размер ДО чтения файла в память (readFile + base64 = ~2.3× копий),
+          // чтобы заведомо крупный файл не вызывал всплеск памяти ради последующего отказа TOO_LARGE.
+          const maxMb = feedbackFiles.maxUploadMb || 15;
+          const { size } = await fs.promises.stat(fileEntry.path);
+          if (size > maxMb * 1024 * 1024) {
+            console.warn(`[feedback-file] job=${jobId} file=${fileEntry.name}: исходник не сохранён (code: TOO_LARGE)`);
+          } else {
+            const buf = await fs.promises.readFile(fileEntry.path);
+            const up = await (feedbackFiles.upload ?? uploadFeedbackFile)({
+              repo: feedbackFiles.repo,
+              token: feedbackFiles.token,
+              repoPrivate: feedbackFiles.getRepoPrivate ? feedbackFiles.getRepoPrivate() : null,
+              jobId,
+              fileName: fileEntry.name,
+              content: buf,
+              maxUploadMb: maxMb,
+            });
+            if (up?.url) fileEntry.sourceFileUrl = up.url;
+          }
         } catch (e) {
           // NOT_PRIVATE / TOO_LARGE / upstream / ошибка чтения — логируем КОД (без токена), файл идёт дальше.
           const code = (e && e.code) ? e.code : 'UNKNOWN';
@@ -1410,7 +1426,10 @@ if (process.argv[1] === __filename) {
   // Best-effort, non-blocking; a network/permission failure just logs that it couldn't verify.
   {
     const fbToken = process.env.GITHUB_FEEDBACK_TOKEN ?? '';
-    const fbRepo = process.env.GITHUB_FEEDBACK_REPO ?? 'postroyka/purchase-ai-chat';
+    // #332-review #3: проверяем приватность ИМЕННО того репо, в который грузит uploadFeedbackFile —
+    // берём слаг из app.getFeedbackRepo() (единый источник), а не перечитываем env (мог разойтись с
+    // config.githubFeedbackRepo). Иначе fail-closed гарантия привязана к другому репо.
+    const fbRepo = app.getFeedbackRepo?.() ?? process.env.GITHUB_FEEDBACK_REPO ?? 'postroyka/purchase-ai-chat';
     if (fbToken) {
       checkRepoPrivacy({ repo: fbRepo, token: fbToken })
         .then((r) => {
