@@ -32,6 +32,27 @@ def _fmt(value):
 # который используют openpyxl/python-docx и в который нельзя надёжно внедрить безопасный парсер (#57).
 _XXE_MARKERS = (b"<!doctype", b"<!entity")
 
+# Сигнатуры контейнеров: Office Open XML (xlsx/docx) — это ZIP (`PK\x03\x04`), а старый .xls —
+# OLE2 compound file (`\xd0\xcf\x11\xe0…`). Расширение часто врёт: ERP/1С отдают xlsx под именем
+# `.xls` (и наоборот). Если выбрать парсер только по расширению, xlrd падает на zip-«.xls» →
+# извлечение возвращает пусто → агент уходит в `unreadable_document` и теряет ВСЕ листы (#334).
+_ZIP_MAGIC = b"PK\x03\x04"
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _sniff(path):
+    """Определить реальный контейнер по первым байтам: 'zip' | 'ole2' | None."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8)
+    except OSError:
+        return None
+    if head.startswith(_ZIP_MAGIC):
+        return "zip"
+    if head.startswith(_OLE2_MAGIC):
+        return "ole2"
+    return None
+
 
 def _reject_xxe_in_zip(path):
     """Просканировать XML-части офисного ZIP на DTD/ENTITY и отклонить файл при их наличии.
@@ -131,6 +152,15 @@ def main():
     if handler is None:
         print("unsupported extension: {}".format(ext), file=sys.stderr)
         return 1
+    # #334: для таблиц (.xls/.xlsx) выбираем парсер по СИГНАТУРЕ, а не по расширению — оно врёт.
+    # ZIP → openpyxl (xlsx, все листы), OLE2 → xlrd (старый xls, все листы). .docx тоже ZIP, но по
+    # расширению однозначен — его не переопределяем. Неизвестная сигнатура → доверяем расширению.
+    if ext in (".xls", ".xlsx"):
+        magic = _sniff(path)
+        if magic == "zip":
+            handler = xlsx_text
+        elif magic == "ole2":
+            handler = xls_text
     try:
         sys.stdout.write(handler(path))
         return 0

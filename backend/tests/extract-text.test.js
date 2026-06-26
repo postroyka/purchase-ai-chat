@@ -60,6 +60,32 @@ describe('extractDocumentText', () => {
     expect(r.text).toContain('УНП 123456789');
   });
 
+  it('#334 office: многостраничная книга — ВСЕ листы доходят до агента целиком', async () => {
+    // doc_to_text.py выводит листы подряд: реквизиты на одном листе, позиции — на другом.
+    h.outputs.python3 = [
+      '# Лист: Реквизиты',
+      'Поставщик\tООО Тест\tУНП 123456789',
+      '# Лист: Спецификация',
+      'Цемент М500\t10\t12.50',
+    ].join('\n');
+    const r = await extractDocumentText('/x/multi.xls');
+    expect(r.method).toBe('office');
+    expect(r.text).toContain('# Лист: Реквизиты');
+    expect(r.text).toContain('УНП 123456789');     // первый лист не потерян
+    expect(r.text).toContain('# Лист: Спецификация');
+    expect(r.text).toContain('Цемент М500');        // второй лист тоже на месте
+  });
+
+  it('#334 office: текст больше лимита → обрезан до MAX_TEXT_CHARS с ВИДИМЫМ маркером', async () => {
+    // Имитируем огромную книгу: первый лист заполняет весь бюджет, дальше — лист с позициями.
+    h.outputs.python3 = '# Лист: Реквизиты\n' + 'A'.repeat(200_000) + '\n# Лист: Позиции\nЦемент';
+    const r = await extractDocumentText('/x/huge.xlsx');
+    expect(r.method).toBe('office');
+    expect(r.text.length).toBeLessThanOrEqual(100_000);   // в пределах лимита (с учётом маркера)
+    expect(r.text).toContain('обрезан');                  // потеря листов сделана видимой
+    expect(r.text.trimEnd().endsWith(']')).toBe(true);    // маркер — в самом конце
+  });
+
   it('truncates extracted text to MAX_TEXT_CHARS (100000)', async () => {
     h.outputs.pdftotext = 'A'.repeat(200_000);
     const r = await extractDocumentText('/x/big.pdf');
