@@ -265,7 +265,15 @@ cd ui      && pnpm install && pnpm dev               # :3001 (проксируе
 cd backend && pnpm test           # vitest — upload, auth, jobs-store
 cd mcp     && pnpm test           # vitest — инструменты, mcp-auth, naming
 cd ui      && pnpm lint && pnpm build
+make test-overlay                 # overlay-тесты deal-инструментов КАК В CI (см. ниже)
 ```
+
+> ⚠️ **Overlay-тесты не входят в `cd mcp && pnpm test`.** PST-инструменты (`mcp-overlay/`) и их тесты
+> накладываются поверх vendored `mcp/` только при сборке/в CI, поэтому `pnpm test` в `mcp/` их **не
+> запускает**. CI гоняет их отдельным джобом «Test mcp-overlay deals tools» (копирует overlay в `mcp/`,
+> затем `vitest run tests/overlay`). **Перед мержем любого PR, трогающего `mcp-overlay/`, прогоняйте
+> `make test-overlay`** — иначе регресс (как #337: `contractId` стал optional) пройдёт мимо локальной
+> проверки и покраснит `main`.
 
 ## Деплой
 
