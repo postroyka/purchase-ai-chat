@@ -4,7 +4,7 @@ import request from 'supertest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createApp, classifyAgentError, classifySpeed, reportAgentFeedback } from '../index.js';
+import { createApp, classifyAgentError, classifySpeed, reportAgentFeedback, stripSensitiveResult } from '../index.js';
 import { createMetrics } from '../metrics.js';
 
 vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -488,5 +488,70 @@ describe('classifyAgentError', () => {
     ['Something completely unexpected', 'other_error'],
   ])('classifies %j → %s', (msg, expected) => {
     expect(classifyAgentError(msg)).toBe(expected);
+  });
+});
+
+describe('stripSensitiveResult (#320 follow-up — серверный strip чувствительных полей)', () => {
+  it('вырезает filePath, остальное сохраняет; не-объекты пропускает как есть', () => {
+    expect(stripSensitiveResult({ filePath: '/app/uploads/x/secret.pdf', deal: { dealId: '1' }, feedback: [] }))
+      .toEqual({ deal: { dealId: '1' }, feedback: [] });
+    expect(stripSensitiveResult(null)).toBeNull();
+    expect(stripSensitiveResult('str')).toBe('str');
+    expect(stripSensitiveResult(undefined)).toBeUndefined();
+  });
+
+  it('не мутирует входной объект (отдаёт копию)', () => {
+    const input = { filePath: '/app/uploads/x/secret.pdf', a: 1 };
+    const out = stripSensitiveResult(input);
+    expect(input.filePath).toBe('/app/uploads/x/secret.pdf'); // оригинал цел
+    expect(out).not.toBe(input);
+    expect('filePath' in out).toBe(false);
+  });
+});
+
+describe('GET /job/:id/status — strip filePath + perf остаётся в API (#320 follow-up)', () => {
+  const extract = async () => ({ text: 'СЧЁТ', method: 'pdftotext' });
+  const resultWithSecrets = () => ({
+    deal: { dealId: '5' },
+    filePath: '/app/uploads/abc-123/secret-invoice.pdf', // серверный путь — не должен утечь в браузер
+    processingLog: 'Распознан поставщик X, 3 позиции',
+    feedback: [{ kind: 'perf', note: 'Долго на таблице 25 позиций' }],
+  });
+
+  it('result.filePath вырезан из ответа, но feedback/processingLog сохранены', async () => {
+    const app = appWith({ agentConfig: { spawnFn: makeAgentSpawn({ result: resultWithSecrets() }), extractFn: extract } });
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`).attach('files[]', validPdf(), 'a.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+    const res = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    const r = res.body.files[0].result;
+    expect(r.filePath).toBeUndefined();                        // путь к файлу на сервере не утёк
+    expect(r.processingLog).toBe('Распознан поставщик X, 3 позиции');
+    expect(r.feedback).toEqual([{ kind: 'perf', note: 'Долго на таблице 25 позиций' }]);
+  });
+
+  it('HIDE_PERF_NOTE=true прячет блок в UI, но perf-данные ОСТАЮТСЯ в API (главный инвариант #320)', async () => {
+    const app = appWith({ hidePerfNote: true, agentConfig: { spawnFn: makeAgentSpawn({ result: resultWithSecrets() }), extractFn: extract } });
+    const up = await request(app).post('/upload').set('Authorization', `Bearer ${TOKEN}`).attach('files[]', validPdf(), 'a.pdf');
+    expect(await waitJob(app, up.body.jobId)).toBe('done');
+    const res = await request(app).get(`/job/${up.body.jobId}/status`).set('Authorization', `Bearer ${TOKEN}`);
+    expect(res.body.hidePerfNote).toBe(true);                  // флаг для UI выставлен (блок скрыт)
+    const perf = res.body.files[0].result.feedback.filter(f => f.kind === 'perf');
+    expect(perf).toHaveLength(1);                              // но данные в API флаг НЕ вырезает
+  });
+});
+
+describe('reportAgentFeedback — perf пишет строку [perf-diag] в лог (#279/#320)', () => {
+  it('perf: в лог попадает [perf-diag] + jobId (диагностика для оператора, всегда)', async () => {
+    const metrics = { recordFeedback: vi.fn(() => Promise.resolve()) };
+    const reporter = { report: vi.fn(() => Promise.resolve({ created: true })) };
+    const logSpy = vi.spyOn(console, 'log');
+    logSpy.mockClear();
+    await reportAgentFeedback(
+      { feedback: [{ kind: 'perf', note: 'Долго на таблице 25 позиций' }] },
+      reporter, metrics, { jobId: 'jlog' },
+    );
+    const logged = logSpy.mock.calls.map(c => String(c[0] ?? '')).join('\n');
+    expect(logged).toContain('[perf-diag]');
+    expect(logged).toContain('jlog');
   });
 });

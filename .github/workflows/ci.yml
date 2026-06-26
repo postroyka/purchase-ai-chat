@@ -189,7 +189,7 @@ jobs:
       # bash-логикой (валидация путей, rollback, health-чек) — раньше не линтовались.
       # -S warning: только warning+error (стиль/info не валят CI на мелочах).
       - name: shellcheck
-        run: shellcheck -S warning scripts/deploy-b24-controller.sh scripts/smoke-test-b24.sh
+        run: shellcheck -S warning scripts/deploy-b24-controller.sh scripts/smoke-test-b24.sh scripts/check-diagnostics-policy.sh
 
   changes:
     name: Detect Docker-relevant changes
@@ -376,3 +376,19 @@ jobs:
           else
             echo "Файлы b24-controller не затронуты — ручной деплой не требуется."
           fi
+
+  diagnostics-policy:
+    name: Diagnostics defaults policy gate (#338)
+    runs-on: ubuntu-latest
+    # Только для PR: если изменён ДЕФОЛТ флага диагностики в env-примерах без правки
+    # docs/DIAGNOSTICS_POLICY.md — гейт ПАДАЕТ (правило #338, CLAUDE.md → Workflow Rules).
+    # Триггер точечный (строки `FLAG=value` в env-примерах) → низкий риск ложных срабатываний.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Require DIAGNOSTICS_POLICY.md when a diagnostic default changes
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/check-diagnostics-policy.sh
