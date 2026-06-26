@@ -99,3 +99,57 @@ def test_unsupported_extension_exits_nonzero(tmp_path):
     p.write_text("hi")
     r = _run(p)
     assert r.returncode == 1
+
+
+# --- #334: диспетчер парсера по СИГНАТУРЕ файла, а не по расширению ---
+
+def test_xlsx_under_xls_name_extracts_all_sheets(tmp_path):
+    # #334 (корень №1): ERP/1С часто отдают xlsx под именем .xls. Раньше .xls безусловно шёл в
+    # xlrd → падал на ZIP → извлечение пустое → терялись ВСЕ листы. Теперь формат определяется по
+    # сигнатуре (PK… → openpyxl). Этот тест ОТЛИЧАЕТ исправленное поведение: без override файл
+    # упал бы (returncode 1); с override — извлекаются оба листа книги.
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws1 = wb.active
+    ws1.title = "Реквизиты"
+    ws1.append(["Поставщик", "ООО Тест"])
+    ws1.append(["УНП", 123456789])
+    ws2 = wb.create_sheet("Спецификация")
+    ws2.append(["Краска MAXIMA", 10, 12.5])
+    p = tmp_path / "invoice.xls"  # имя .xls, но содержимое — настоящий xlsx (ZIP)
+    wb.save(p)
+
+    r = _run(p)
+    assert r.returncode == 0, r.stderr
+    assert "# Лист: Реквизиты" in r.stdout
+    assert "123456789" in r.stdout            # первый лист не потерян
+    assert "# Лист: Спецификация" in r.stdout
+    assert "Краска MAXIMA" in r.stdout        # второй лист тоже извлечён
+
+
+def test_xxe_gate_holds_on_zip_named_xls(tmp_path):
+    # #334 + #57: переключение zip-«.xls» → xlsx_text НЕ должно обходить XXE-гейт. Регресс-замок:
+    # если кто-то заинлайнит load_workbook в main мимо xlsx_text, этот тест покраснеет.
+    import zipfile
+    p = tmp_path / "evil.xls"  # zip-сигнатура + имя .xls → override на xlsx_text
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr(
+            "xl/worksheets/sheet1.xml",
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE x [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+            "<root>&xxe;</root>",
+        )
+    r = _run(p)
+    assert r.returncode == 1
+    assert "DTD/ENTITY" in r.stderr
+
+
+def test_unknown_signature_falls_back_to_extension(tmp_path):
+    # #334: неизвестная/пустая сигнатура → доверяем расширению (override не срабатывает).
+    # Пустой .xlsx: _sniff читает 0 байт → None → хендлер остаётся xlsx_text по расширению →
+    # openpyxl падает на пустом файле → returncode 1 (а не тихий неверный успех).
+    p = tmp_path / "empty.xlsx"
+    p.write_bytes(b"")
+    r = _run(p)
+    assert r.returncode == 1

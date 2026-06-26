@@ -37,6 +37,11 @@ _XXE_MARKERS = (b"<!doctype", b"<!entity")
 # `.xls` (и наоборот). Если выбрать парсер только по расширению, xlrd падает на zip-«.xls» →
 # извлечение возвращает пусто → агент уходит в `unreadable_document` и теряет ВСЕ листы (#334).
 _ZIP_MAGIC = b"PK\x03\x04"
+# NB (#334-review): OLE2/CDF — это не только старый .xls. Зашифрованный xlsx (ECMA-376 agile
+# encryption) и .xlsb тоже OLE2. Они уйдут в xls_text → xlrd их не прочитает → returncode 1 →
+# извлечение пустое → агент честно отдаст unreadable_document (мы и не поддерживаем шифрованные/
+# .xlsb счёта). Поведение не хуже прежнего (openpyxl на них тоже падал). Распознавание шифрования
+# с понятной ошибкой — при необходимости отдельной задачей.
 _OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
@@ -77,15 +82,23 @@ def xlsx_text(path):
     """Читаем .xlsx через openpyxl (data_only — значения, а не формулы; read_only — потоково)."""
     _reject_xxe_in_zip(path)  # #57: отсечь DTD/ENTITY до парсера
     from openpyxl import load_workbook
-    wb = load_workbook(path, data_only=True, read_only=True)
-    out = []
-    for ws in wb.worksheets:
-        out.append("# Лист: {}".format(ws.title))
-        for row in ws.iter_rows(values_only=True):
-            cells = [_fmt(c) for c in row if c is not None and str(c).strip() != ""]
-            if cells:
-                out.append("\t".join(cells))
-    return "\n".join(out)
+    # #334: openpyxl ОТКАЗЫВАЕТСЯ грузить файл, чьё ИМЯ оканчивается на .xls (проверка по
+    # расширению, а не по содержимому). А сюда по сигнатуре как раз приходит zip-«.xls» (xlsx под
+    # именем .xls). Передаём файловый ОБЪЕКТ, а не путь — тогда openpyxl смотрит на содержимое и
+    # extension-гейт не срабатывает. Держим хэндл открытым на всё время потокового чтения.
+    with open(path, "rb") as fh:
+        wb = load_workbook(fh, data_only=True, read_only=True)
+        try:
+            out = []
+            for ws in wb.worksheets:
+                out.append("# Лист: {}".format(ws.title))
+                for row in ws.iter_rows(values_only=True):
+                    cells = [_fmt(c) for c in row if c is not None and str(c).strip() != ""]
+                    if cells:
+                        out.append("\t".join(cells))
+            return "\n".join(out)
+        finally:
+            wb.close()  # read_only держит zip открытым — закрываем явно
 
 
 def xls_text(path):
