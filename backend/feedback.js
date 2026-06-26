@@ -157,6 +157,9 @@ export function formatIssueBody({ kind, comment, context = {}, processingLog = '
     contextLine('Задача (jobId)', context.jobId),
     contextLine('Файл', context.fileName),
     contextLine('Сделка', context.dealId ? `#${context.dealId}` : ''),
+    // #332: durable-ссылка на исходный файл в приватном feedback-репо (когда сделка не создана и
+    // файла нет ни в uploads, ни в Б24). Пусто → строка не показывается.
+    contextLine('Исходный файл', context.sourceFileUrl),
     contextLine('Время обработки', formatProcessingMs(processingMs)),
     contextLine('Кто сообщил', context.reporter),
     contextLine('Версия сборки', context.appVersion),
@@ -223,6 +226,8 @@ export function formatAgentFeedbackBody({ tool, note, context = {} }) {
     contextLine('Файл', context.fileName),
     contextLine('Сделка', context.dealId ? `#${context.dealId}` : ''),
     contextLine('Исход', outcomeText(context.outcome)),
+    // #332: durable-ссылка на исходный файл (особенно ценно для исходов без сделки — repro-кейсы).
+    contextLine('Исходный файл', context.sourceFileUrl),
   ].filter(Boolean);
 
   const safeNote = escapeHtml(stripHostileChars(note)).trim() || '(без описания)';
