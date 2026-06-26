@@ -107,10 +107,10 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame(321, $res['dealId']);
 		$this->assertArrayNotHasKey('warnings', $res);
 
-		// Бизнес-правила позиции: TAX_RATE=20, TAX_INCLUDED=N (нетто, НДС сверху, #325), «шт», цена как есть.
+		// Бизнес-правила позиции: TAX_RATE=20, TAX_INCLUDED=Y (откат #326 на перепроверку), «шт», цена как есть.
 		$row = \CCrmDeal::$lastProductRows[0];
 		$this->assertSame(20, $row['TAX_RATE']);
-		$this->assertSame('N', $row['TAX_INCLUDED']);
+		$this->assertSame('Y', $row['TAX_INCLUDED']);
 		$this->assertSame('шт', $row['MEASURE_NAME']);
 		$this->assertSame(100.0, $row['PRICE']);
 		$this->assertSame(2.0, $row['QUANTITY']); // целое значение, тип float (Bitrix QUANTITY = double)
@@ -195,11 +195,11 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame(1.5, $row['QUANTITY']);  // #286 — дробное кол-во сохраняется
 	}
 
-	public function testNetPriceWrittenOneToOneWithTaxNotIncluded(): void
+	public function testPriceWrittenOneToOneWithTaxIncludedY(): void
 	{
-		// #325: цена нетто пишется 1-в-1 (без деления на 1.2), TAX_INCLUDED='N' → B24 добавит
-		// 20% сверху. Берём цену, на которой старый путь (='Y') давал расхождение в копейку
-		// (0.51/1.2 = 0.425 → округлялось до 0.43). Теперь PRICE = 0.51 как в счёте.
+		// Откат #326: TAX_INCLUDED='Y' (перепроверка НДС-модели на боевом портале). PRICE
+		// по-прежнему пишется 1-в-1 из priceExclVat (контроллер НЕ домножает на 1.2) — меняется
+		// только флаг включённости НДС. Финальная модель — по итогам теста.
 		$items = [
 			['name' => 'Круг отрезной', 'priceExclVat' => 0.51, 'quantity' => 50, 'productId' => '7'],
 		];
@@ -207,8 +207,8 @@ final class ProcureDealTest extends TestCase
 		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
 
 		$row = \CCrmDeal::$lastProductRows[0];
-		$this->assertSame('N', $row['TAX_INCLUDED']); // нетто, НДС сверху
-		$this->assertSame(0.51, $row['PRICE']);       // 1-в-1, без деления/округления
+		$this->assertSame('Y', $row['TAX_INCLUDED']); // откат #326
+		$this->assertSame(0.51, $row['PRICE']);       // PRICE 1-в-1 из priceExclVat
 		$this->assertSame(20, $row['TAX_RATE']);
 	}
 
