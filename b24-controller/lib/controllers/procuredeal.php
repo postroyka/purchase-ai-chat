@@ -373,7 +373,10 @@ class ProcureDeal
 			$productRows[] = [
 				'PRODUCT_ID'   => $pid, // всегда задан: позиции без productId отсеяны выше (#258)
 				'PRODUCT_NAME' => $productName,
-				'PRICE'        => $price,
+				// ТЕСТ 3 (#326-re): нашу цену кладём в PRICE_BRUTTO (без скидок, но с налогом); PRICE и
+				// PRICE_NETTO НЕ передаём. На портале «цены с НДС» это поле показывается как «Цена» 1:1
+				// (Тест 1 PRICE→4.36 дрейф; Тест 2 PRICE_NETTO→5.22 брутто). Брутто-итог = цена×кол-во.
+				'PRICE_BRUTTO' => $price,
 				'QUANTITY'     => $quantity,
 				'TAX_RATE'     => 20,
 				// TAX_INCLUDED='Y' — ВОЗВРАТ к прежнему поведению (откат #326 для перепроверки). На боевом

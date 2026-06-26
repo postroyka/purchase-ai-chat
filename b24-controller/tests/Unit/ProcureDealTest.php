@@ -112,7 +112,7 @@ final class ProcureDealTest extends TestCase
 		$this->assertSame(20, $row['TAX_RATE']);
 		$this->assertSame('Y', $row['TAX_INCLUDED']);
 		$this->assertSame('шт', $row['MEASURE_NAME']);
-		$this->assertSame(100.0, $row['PRICE']);
+		$this->assertSame(100.0, $row['PRICE_BRUTTO']);
 		$this->assertSame(2.0, $row['QUANTITY']); // целое значение, тип float (Bitrix QUANTITY = double)
 		$this->assertSame(7, $row['PRODUCT_ID']);
 
@@ -157,7 +157,7 @@ final class ProcureDealTest extends TestCase
 		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
 
 		$row = \CCrmDeal::$lastProductRows[0];
-		$this->assertSame(0.0, $row['PRICE']);   // max(0.0, -5.0) → float 0.0
+		$this->assertSame(0.0, $row['PRICE_BRUTTO']);   // max(0.0, -5.0) → float 0.0
 		// Кол-во <=0 → 1 (контроллер присваивает int-литерал; тип не важен — Bitrix
 		// принимает оба, поэтому сверяем значение, а не тип).
 		$this->assertEquals(1, $row['QUANTITY']);
@@ -191,7 +191,7 @@ final class ProcureDealTest extends TestCase
 		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
 
 		$row = \CCrmDeal::$lastProductRows[0];
-		$this->assertSame(12.99, $row['PRICE']);  // round(12.991, 2)
+		$this->assertSame(12.99, $row['PRICE_BRUTTO']);  // round(12.991, 2)
 		$this->assertSame(1.5, $row['QUANTITY']);  // #286 — дробное кол-во сохраняется
 	}
 
@@ -208,7 +208,7 @@ final class ProcureDealTest extends TestCase
 
 		$row = \CCrmDeal::$lastProductRows[0];
 		$this->assertSame('Y', $row['TAX_INCLUDED']); // откат #326
-		$this->assertSame(0.51, $row['PRICE']);       // PRICE 1-в-1 из priceExclVat
+		$this->assertSame(0.51, $row['PRICE_BRUTTO']);       // PRICE 1-в-1 из priceExclVat
 		$this->assertSame(20, $row['TAX_RATE']);
 	}
 
@@ -224,7 +224,7 @@ final class ProcureDealTest extends TestCase
 		$c->createAction(1, 2, 'f.pdf', '', 'log', $items);
 
 		$row = \CCrmDeal::$lastProductRows[0];
-		$this->assertSame(13.0, $row['PRICE']);   // round(12.995, 2) HALF_UP
+		$this->assertSame(13.0, $row['PRICE_BRUTTO']);   // round(12.995, 2) HALF_UP
 		$this->assertSame(224.81, $row['QUANTITY']);  // #286 — округление кол-ва до 2 знаков
 	}
 
