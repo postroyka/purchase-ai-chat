@@ -65,7 +65,7 @@ export default defineMcpTool({
   inputSchema: {
     supplierId: z.string().min(1).optional().describe('Bitrix24 company id of the supplier — пропусти/«0», если поставщик по УНП не найден (сделка создаётся БЕЗ компании, warning supplier_not_found, оператор привяжет вручную; передай supplierUnp для заголовка)'),
     supplierUnp: z.string().max(32).optional().describe('УНП/ИНН поставщика из документа — идёт в заголовок сделки, КОГДА компания не найдена (supplierId пуст). Иначе не нужен.'),
-    contractId: z.string().optional().describe('Bitrix24 contract id — передай "0" или пропусти, если договор не найден/не искался (договор не блокирует сделку — warning contract_not_found, оператор привязывает вручную)'),
+    contractId: z.string().min(1).optional().describe('Bitrix24 contract id — передай "0" или пропусти, если договор не найден/не искался (договор не блокирует сделку — warning contract_not_found, оператор привязывает вручную)'),
     responsibleUserId: z.string().min(1).describe('Bitrix24 user id to assign the deal to'),
     filePath: z.string().min(1).describe('Absolute path to the source document (FILE_PATH) — must reside inside the uploads directory. The MCP server reads it and base64-encodes it for attachment.'),
     documentDate: z.string().max(10).regex(/^\d{2}\.\d{2}\.\d{4}$/, 'documentDate must be d.m.Y').optional().describe('Дата документа (счёта) в формате d.m.Y (напр. "15.03.2025") — ставится как дата начала сделки (BEGINDATE). Если не указана/непарсибельна — текущая дата.'),
