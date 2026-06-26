@@ -29,8 +29,11 @@ export const FEEDBACK_KINDS = {
   perf: '⏱ Скорость',
 };
 
-// Слова типов БЕЗ эмодзи — для заголовков GitHub-issue (#219). Эмодзи остаётся только в FEEDBACK_KINDS.
-const FEEDBACK_KIND_WORDS = { positive: 'Хорошо', problem: 'Проблема', suggestion: 'Предложение', perf: 'Скорость' };
+// Слова-ДЕЙСТВИЯ для заголовков GitHub-issue (#219 — без эмодзи; #333 — нейтрально-конструктивный тон:
+// `problem` → «Разобрать» вместо демотивирующего «👎 Проблема»). Применяется к обоим каналам (отзыв
+// сотрудника и агент), чтобы заголовок читался как задача на разбор, а не как претензия. Эмодзи-оценка
+// (👍/👎) остаётся только в FEEDBACK_KINDS — это кнопки виджета и поле «Тип» в теле issue, не заголовок.
+const FEEDBACK_KIND_WORDS = { positive: 'Хорошо', problem: 'Разобрать', suggestion: 'Предложение', perf: 'Скорость' };
 
 // Человекочитаемые исходы файла для строки «Исход» в теле agent-issue (#219): мейнтейнеру понятнее,
 // чем машинный код. Коды — из backend/metrics.js KNOWN_OUTCOMES / index.js classifyAgentError. Неизвестный
@@ -186,14 +189,14 @@ export function formatIssueBody({ kind, comment, context = {}, processingLog = '
 
 /**
  * Build the { title, body, labels } for the GitHub issue from already-validated input.
- * Title = "[Обратная связь] <kind> · <first line of the comment>" (hostile-stripped, capped).
+ * Title = "[Отзыв] <слово-действие> · <first line>" (#333: нейтрально-конструктивно, без 👎; #219: без эмодзи).
  */
 export function buildIssue({ kind, comment, context = {}, processingLog = '', processingMs = null }) {
   const safeComment = sanitizeComment(comment);
   const firstLine = stripHostileChars(safeComment.split('\n')[0] ?? '').trim();
-  const kindLabel = FEEDBACK_KINDS[kind] ?? kind;
+  const kindLabel = FEEDBACK_KIND_WORDS[kind] ?? kind;
   const titleText = firstLine ? `${kindLabel} · ${firstLine}` : kindLabel;
-  const title = `[Обратная связь] ${titleText}`.slice(0, MAX_TITLE_LENGTH);
+  const title = `[Отзыв] ${titleText}`.slice(0, MAX_TITLE_LENGTH);
   const labels = ['user-feedback', `feedback:${kind}`];
   const body = formatIssueBody({ kind, comment: safeComment, context, processingLog, processingMs });
   return { title, body, labels };
