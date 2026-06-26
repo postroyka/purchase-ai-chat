@@ -207,6 +207,17 @@
               </B24Button>
             </div>
 
+            <!-- #329 (вариант A): сделка создана, но часть позиций не внесена (нет артикула / не в
+                 каталоге — свободные строки не создаём, #258). Заметный итог, чтобы оператор завёл их
+                 вручную и «пустоватая» сделка не читалась как баг. -->
+            <p
+              v-if="file.status === 'done' && dealOf(file) && notEnteredCount(file) > 0"
+              class="mt-2 text-xs text-amber-600"
+              title="Эти позиции нужно завести в сделку вручную"
+            >
+              ⚠️ Не внесено позиций: {{ notEnteredCount(file) }} (нет артикула / не в каталоге) — завести вручную
+            </p>
+
             <!-- Замеры времени (#замеры, только при SHOW_TIMINGS) — в лог на странице, не в метрики.
                  «медленно» подсвечиваем янтарным (пороги TIMING_FAST_MS/TIMING_SLOW_MS). -->
             <p
@@ -338,7 +349,7 @@
 </template>
 
 <script setup lang="ts">
-import { fileBadge, fileSucceeded, outcomeCodeOf } from '~/utils/result-badges'
+import { fileBadge, fileSucceeded, outcomeCodeOf, notEnteredCount } from '~/utils/result-badges'
 import { mmss, timingLine, plural } from '~/utils/format-duration'
 import { failActiveFiles } from '~/utils/job-status'
 import { perfDiagNotes } from '~/utils/perf-diag'

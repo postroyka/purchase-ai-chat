@@ -54,6 +54,24 @@ export function outcomeCodeOf(file: ResultFile): string {
   return typeof err === 'string' ? err.trim().slice(0, 64) : ''
 }
 
+// #329 (вариант A): сделка создаётся, но позиции БЕЗ артикула или с артикулом не из каталога в неё
+// НЕ попадают (#258 не создаёт «свободные строки»). Чтобы «пустоватая» сделка не читалась как баг,
+// оператору показывают заметный итог «N не внесено». Число берём из СТРУКТУРНОЙ телеметрии агента
+// (matching.itemsWithoutArticle + длина matching.unmatchedArticles), а не из текста лога — без догадок.
+// Невалидные/отрицательные/отсутствующие поля → 0.
+export function notEnteredCount(file: ResultFile): number {
+  const m = (file.result as { matching?: unknown } | undefined)?.matching
+  if (!m || typeof m !== 'object') return 0
+  const noArticleRaw = Number((m as { itemsWithoutArticle?: unknown }).itemsWithoutArticle)
+  const noArticle = Number.isFinite(noArticleRaw) && noArticleRaw > 0 ? Math.trunc(noArticleRaw) : 0
+  const unmatchedList = (m as { unmatchedArticles?: unknown }).unmatchedArticles
+  // .length НАМЕРЕННО (не Set): считаем НЕ внесённые ПОЗИЦИИ (запись на позицию, prompts/main.md),
+  // а не уникальные артикулы. Бэкенд дедуплит unmatchedArticles в Set (metrics.js) для ДРУГОЙ цели —
+  // топ несопоставляемых артикулов на дашборде; здесь дедуп занизил бы счётчик при повторах артикула.
+  const unmatched = Array.isArray(unmatchedList) ? unmatchedList.length : 0
+  return noArticle + unmatched
+}
+
 // 'done' + deal → green "Готово"; 'done' WITHOUT a deal → amber "Без сделки"; otherwise the status default.
 export function fileBadge(file: ResultFile): Badge {
   if (file.status === 'done' && dealIdOf(file) === null) {

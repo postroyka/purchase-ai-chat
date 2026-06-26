@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fileBadge, jobBadge, fileSucceeded, dealIdOf, outcomeCodeOf, type ResultFile } from '../app/utils/result-badges'
+import { fileBadge, jobBadge, fileSucceeded, dealIdOf, outcomeCodeOf, notEnteredCount, type ResultFile } from '../app/utils/result-badges'
 
 const withDeal = (id: string | number = '5', status: ResultFile['status'] = 'done'): ResultFile =>
   ({ status, result: { deal: { dealId: id } } })
@@ -47,5 +47,21 @@ describe('result-badges (#192)', () => {
     expect(outcomeCodeOf({ status: 'done', result: { error: 123 } })).toBe('') // не строка
     expect(outcomeCodeOf({ status: 'done' })).toBe('')
     expect(outcomeCodeOf({ status: 'error', result: { error: 'x'.repeat(100) } })).toHaveLength(64) // cap
+  })
+
+  it('notEnteredCount (#329-A): сумма itemsWithoutArticle + unmatchedArticles.length, мусор → 0', () => {
+    // нет артикула (2) + артикул не в каталоге (2 шт) = 4
+    expect(notEnteredCount({ status: 'done', result: { matching: { itemsWithoutArticle: 2, unmatchedArticles: ['A', 'B'] } } })).toBe(4)
+    // только без артикула
+    expect(notEnteredCount({ status: 'done', result: { matching: { itemsWithoutArticle: 3 } } })).toBe(3)
+    // только не в каталоге
+    expect(notEnteredCount({ status: 'done', result: { matching: { unmatchedArticles: ['X'] } } })).toBe(1)
+    // всё сопоставлено → 0
+    expect(notEnteredCount({ status: 'done', result: { matching: { itemsWithoutArticle: 0, unmatchedArticles: [] } } })).toBe(0)
+    // защита от мусора: отрицательное/нечисло/не-массив/отсутствие matching
+    expect(notEnteredCount({ status: 'done', result: { matching: { itemsWithoutArticle: -5, unmatchedArticles: 'oops' } } })).toBe(0)
+    expect(notEnteredCount({ status: 'done', result: { matching: { itemsWithoutArticle: 1.9 } } })).toBe(1) // trunc
+    expect(notEnteredCount({ status: 'done', result: {} })).toBe(0)
+    expect(notEnteredCount({ status: 'done' })).toBe(0)
   })
 })
