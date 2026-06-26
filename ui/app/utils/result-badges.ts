@@ -65,6 +65,9 @@ export function notEnteredCount(file: ResultFile): number {
   const noArticleRaw = Number((m as { itemsWithoutArticle?: unknown }).itemsWithoutArticle)
   const noArticle = Number.isFinite(noArticleRaw) && noArticleRaw > 0 ? Math.trunc(noArticleRaw) : 0
   const unmatchedList = (m as { unmatchedArticles?: unknown }).unmatchedArticles
+  // .length НАМЕРЕННО (не Set): считаем НЕ внесённые ПОЗИЦИИ (запись на позицию, prompts/main.md),
+  // а не уникальные артикулы. Бэкенд дедуплит unmatchedArticles в Set (metrics.js) для ДРУГОЙ цели —
+  // топ несопоставляемых артикулов на дашборде; здесь дедуп занизил бы счётчик при повторах артикула.
   const unmatched = Array.isArray(unmatchedList) ? unmatchedList.length : 0
   return noArticle + unmatched
 }
