@@ -22,3 +22,7 @@ backend/tests/fixtures/
 backend/tests/fixtures*/
 backend/tests/*/valid.pdf
 /home/
+
+# Python bytecode (backend/doc_to_text.py runs via python3)
+__pycache__/
+*.pyc
