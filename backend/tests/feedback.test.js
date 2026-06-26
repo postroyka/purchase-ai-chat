@@ -99,7 +99,7 @@ describe('buildIssue / formatIssueBody', () => {
   it('produces stable labels and a prefixed, capped title', () => {
     const { title, labels } = buildIssue({ kind: 'problem', comment: 'supplier matched wrong' });
     expect(labels).toEqual(['user-feedback', 'feedback:problem']);
-    expect(title.startsWith('[Обратная связь]')).toBe(true);
+    expect(title.startsWith('[Отзыв]')).toBe(true);
     expect(title).toContain('supplier matched wrong');
     expect(title.length).toBeLessThanOrEqual(120);
   });
@@ -107,7 +107,17 @@ describe('buildIssue / formatIssueBody', () => {
   it('пустой комментарий (#218): тело «(без текста)», заголовок только из типа', () => {
     expect(formatIssueBody({ kind: 'problem', comment: '   ' })).toContain('(без текста)');
     const { title } = buildIssue({ kind: 'problem', comment: '' });
-    expect(title).toBe('[Обратная связь] 👎 Проблема');
+    // #333: нейтрально-конструктивный заголовок — «Разобрать» вместо «👎 Проблема», префикс «[Отзыв]».
+    expect(title).toBe('[Отзыв] Разобрать');
+  });
+
+  it('#333: заголовок отзыва без демотивирующего 👎 (problem → «Разобрать»)', () => {
+    const { title } = buildIssue({ kind: 'problem', comment: 'счёт не распознался' });
+    expect(title).toBe('[Отзыв] Разобрать · счёт не распознался');
+    expect(title).not.toMatch(/[👍👎]/u);
+    expect(title).not.toContain('Проблема');
+    // positive — тоже нейтрально, без эмодзи
+    expect(buildIssue({ kind: 'positive', comment: '' }).title).toBe('[Отзыв] Хорошо');
   });
 
   it('renders the comment inside <pre><code> with HTML escaped (Markdown/HTML inert)', () => {
