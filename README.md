@@ -83,9 +83,9 @@ make prod-up   # pull образов из GHCR + docker compose up -d
 | `ANTHROPIC_API_KEY` | app | ✅² | Ключ Claude API для агента. **В Docker обязателен** — подписка claude в контейнере не работает |
 | `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX` + `AWS_*` / `GOOGLE_*` | app | — | Альтернативные провайдеры Claude (Bedrock/Vertex) — пробрасываются агенту |
 | `NODE_ENV` / `PORT` / `UPLOAD_DIR` | app | — | Стандартные настройки рантайма |
-| `SHOW_TIMINGS` | app | — | **Детальные** замеры в лог результата: «⏱ всего…·агент (N ходов; из них инструменты M с)·извлечение» + класс быстро/норма/медленно (НЕ в метрики). По умолчанию `false` (opt-in). Живой `mm:ss` «обрабатывается N сек» показывается **всегда**, независимо от флага (#203) |
+| `SHOW_TIMINGS` | app | — | **Детальные** замеры в лог результата: «⏱ всего…·агент (N ходов; из них инструменты M с)·извлечение» + класс быстро/норма/медленно (НЕ в метрики). По умолчанию `false` (opt-in). Живой `mm:ss` «обрабатывается N сек» показывается **всегда**, независимо от флага (#203). Политика «кому показываем» — [docs/DIAGNOSTICS_POLICY.md](docs/DIAGNOSTICS_POLICY.md) (#320) |
 | `TIMING_FAST_MS` / `TIMING_SLOW_MS` | app | — | Пороги «быстро/медленно» для лога замеров (оценочные, калибруются; [docs/PARSING_PERFORMANCE.md](docs/PARSING_PERFORMANCE.md)). По умолчанию `45000` / `90000` |
-| `HIDE_PERF_NOTE` | app | — | Скрыть блок «⏱ Диагностика скорости агента» в UI. По умолчанию `false` (блок виден, когда агент прислал perf-данные). Только UI-косметика: perf-данные всё равно приходят в JSON ответа `/job/:id/status` и в лог `[perf-diag]` (#317) |
+| `HIDE_PERF_NOTE` | app | — | Скрыть блок «⏱ Диагностика скорости агента» в UI. По умолчанию `false` (блок виден, когда агент прислал perf-данные). Только UI-косметика: perf-данные всё равно приходят в JSON ответа `/job/:id/status` и в лог `[perf-diag]` (#317). Политика видимости — [docs/DIAGNOSTICS_POLICY.md](docs/DIAGNOSTICS_POLICY.md) (#320) |
 | `AGENT_FORCE_FEEDBACK` | app | — | **Диагностика**: на каждом файле добавляет тестовый отзыв агента, если он сам молчит → питает панель «Обратная связь агента» на `/metrics` (+ GitHub issue при заданном токене). Для проверки канала. По умолчанию `false`. Точечно (без рестарта) — `POST /upload?forceFeedback=1` на один аплоад (#205) |
 | `B24_BOT_APPLICATION_TOKEN` | app | — | Чат-бот Битрикс24 ([docs/B24_BOT.md](docs/B24_BOT.md)) **— ❄️ заморожен (#241), при установке не регистрируется**: **фолбэк** `application_token` для валидации событий бота на `POST /b24/bot/event` (одно-портальная установка). Обычно токен **захватывается автоматически** при установке через `POST /b24/app/event` (#217) и хранится в Redis; env нужен, только если callback-установки не настроен. Пусто И нет захваченного → 403 |
 
@@ -420,6 +420,7 @@ claude
   *(Полное ТЗ — `docs/ТЗ_Закупки_PST.md` v1.10 — хранится в Google Drive проекта)*
 - [docs/PARSING_PERFORMANCE.md](docs/PARSING_PERFORMANCE.md) — «быстро/медленно» при разборе файла + калибровка порогов
 - [docs/FEEDBACK.md](docs/FEEDBACK.md) — каналы обратной связи (сотрудник 👍/👎/💡 и сигналы агента)
+- [docs/DIAGNOSTICS_POLICY.md](docs/DIAGNOSTICS_POLICY.md) — политика видимости диагностики: что из таймингов/perf видит оператор vs сотрудник, дефолты `SHOW_TIMINGS`/`HIDE_PERF_NOTE` (#320)
 - [docs/1C_UT_INTEGRATION.md](docs/1C_UT_INTEGRATION.md) — ТЗ интеграции с «1С: Управление торговлей» через MCP
 - [docs/B24_BOT.md](docs/B24_BOT.md) — дизайн чат-бота Битрикс24 (файл в чат → разбор → результат + 👍/👎); **❄️ заморожен (#241)** — см. [ROADMAP §4.1](docs/ROADMAP.md)
 - [prompts/main.md](prompts/main.md) — системный промпт агента
