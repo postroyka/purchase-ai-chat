@@ -71,6 +71,30 @@ function meaningfulLen(s) {
   return s.replace(/\s+/g, '').length;
 }
 
+// #334: офисная книга (XLS/XLSX) может содержать НЕСКОЛЬКО листов — doc_to_text.py выводит их
+// подряд, каждый с заголовком «# Лист: …». Слепой slice(0, MAX_TEXT_CHARS) может МОЛЧА отрезать
+// поздние листы (напр. лист со спецификацией/позициями), и агент их просто не увидит. Делаем
+// обрезку ВИДИМОЙ: ставим маркер в конце и пишем предупреждение в лог — потеря листов перестаёт
+// быть тихой. Маркер укладываем В лимит (режем под него), чтобы итог не превышал MAX_TEXT_CHARS.
+// Экспортируется для тестов (точная сверка хвоста). NB (безопасность, #334-review): маркер —
+// лишь ПОДСКАЗКА агенту, не доверенный сигнал. Недоверенный документ может вписать такую же
+// строку в ячейку; но наш маркер всегда добавляется ПОСЛЕ всего извлечённого текста (в самом
+// конце), а на корректность сделки он не влияет — поэтому спуф безвреден (агент и так трактует
+// DOCUMENT_TEXT как недоверенные данные). Не строим на нём защитных инвариантов.
+export const OFFICE_TRUNC_NOTICE =
+  '\n\n[⚠ Извлечённый текст обрезан по лимиту: часть листов/строк книги (см. «# Лист: …») могла не попасть. Нужные реквизиты или позиции могут быть на необрезанных листах исходного файла.]';
+
+/**
+ * Обрезать офисный текст до MAX_TEXT_CHARS с видимым маркером, если он не уместился.
+ * @param {string} text
+ * @returns {{ text: string, truncated: boolean }}
+ */
+function capOfficeText(text) {
+  if (text.length <= MAX_TEXT_CHARS) return { text, truncated: false };
+  const room = Math.max(0, MAX_TEXT_CHARS - OFFICE_TRUNC_NOTICE.length);
+  return { text: text.slice(0, room) + OFFICE_TRUNC_NOTICE, truncated: true };
+}
+
 // #267: есть ли в тексте налоговый номер поставщика (РБ УНП = 9 цифр; РФ ИНН = 10/12 цифр).
 // Используется, чтобы понять, попал ли в извлечённый текст ключевой реквизит — без него агент не
 // найдёт поставщика и встанет на шаге 1. Детектор **только по ключевому слову** рядом с числом
@@ -142,8 +166,18 @@ export async function extractDocumentText(filePath) {
   } else if (OFFICE_EXTS.has(ext)) {
     try {
       const out = await run('python3', [DOC_PY, filePath]);
-      const text = out.toString('utf8');
-      result = meaningfulLen(text) > 0 ? { text: text.slice(0, MAX_TEXT_CHARS), method: 'office' } : null;
+      const raw = out.toString('utf8');
+      if (meaningfulLen(raw) > 0) {
+        const { text, truncated } = capOfficeText(raw);
+        if (truncated) {
+          // Видимый сигнал в логах: многостраничная книга не уместилась в лимит, поздние листы
+          // (часто — лист с позициями) могли быть отрезаны. См. маркер в самом тексте (#334).
+          console.warn(`[extract-text] office-текст обрезан до ${MAX_TEXT_CHARS} символов для ${filePath} — поздние листы книги (# Лист: …) могли не попасть (#334)`);
+        }
+        result = { text, method: 'office' };
+      } else {
+        result = null;
+      }
     } catch {
       result = null;
     }

@@ -34,7 +34,7 @@ vi.mock('node:child_process', () => ({
   },
 }));
 
-const { extractDocumentText, rlimitWrap, hasTaxId } = await import('../extract-text.js');
+const { extractDocumentText, rlimitWrap, hasTaxId, OFFICE_TRUNC_NOTICE } = await import('../extract-text.js');
 
 beforeEach(() => { h.outputs = {}; h.codes = {}; });
 
@@ -58,6 +58,44 @@ describe('extractDocumentText', () => {
     const r = await extractDocumentText('/x/invoice.xlsx');
     expect(r).toMatchObject({ method: 'office' });
     expect(r.text).toContain('УНП 123456789');
+  });
+
+  it('#334 office: многостраничная книга — ВСЕ листы доходят до агента целиком', async () => {
+    // doc_to_text.py выводит листы подряд: реквизиты на одном листе, позиции — на другом.
+    h.outputs.python3 = [
+      '# Лист: Реквизиты',
+      'Поставщик\tООО Тест\tУНП 123456789',
+      '# Лист: Спецификация',
+      'Цемент М500\t10\t12.50',
+    ].join('\n');
+    const r = await extractDocumentText('/x/multi.xls');
+    expect(r.method).toBe('office');
+    expect(r.text).toContain('# Лист: Реквизиты');
+    expect(r.text).toContain('УНП 123456789');     // первый лист не потерян
+    expect(r.text).toContain('# Лист: Спецификация');
+    expect(r.text).toContain('Цемент М500');        // второй лист тоже на месте
+  });
+
+  it('#334 office: текст больше лимита → обрезан РОВНО до MAX_TEXT_CHARS с маркером в конце', async () => {
+    // Имитируем огромную книгу: первый лист заполняет весь бюджет, дальше — лист с позициями.
+    h.outputs.python3 = '# Лист: Реквизиты\n' + 'A'.repeat(200_000) + '\n# Лист: Позиции\nЦемент';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const r = await extractDocumentText('/x/huge.xlsx');
+    expect(r.method).toBe('office');
+    expect(r.text.length).toBe(100_000);                  // ровно лимит (маркер уложен В бюджет)
+    expect(r.text.endsWith(OFFICE_TRUNC_NOTICE)).toBe(true); // маркер целиком в самом конце
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('#334')); // потеря видна в логах
+    warnSpy.mockRestore();
+  });
+
+  it('#334 office: текст В пределах лимита → без маркера и без warn', async () => {
+    h.outputs.python3 = '# Лист: 1\nПоставщик\tООО Тест\tУНП 123456789';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const r = await extractDocumentText('/x/small.xlsx');
+    expect(r.text.includes(OFFICE_TRUNC_NOTICE)).toBe(false);
+    // единственный возможный warn здесь — про отсутствие УНП (#267); маркер обрезки (#334) НЕ зовётся
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('обрезан'));
+    warnSpy.mockRestore();
   });
 
   it('truncates extracted text to MAX_TEXT_CHARS (100000)', async () => {
