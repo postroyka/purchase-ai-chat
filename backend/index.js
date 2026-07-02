@@ -21,7 +21,7 @@ import { parseBotEvent, parseAppEvent, handleBotEvent } from './b24-bot.js';
 import { makeBotApi } from './b24-bot-api.js';
 import { createAppStore } from './app-store.js';
 import { safeCompare } from './utils.js';
-import { renderMaintenancePage } from './maintenance-page.js';
+import { renderMaintenancePage, DEFAULT_MAINTENANCE_MESSAGE } from './maintenance-page.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -239,7 +239,7 @@ export function createApp(config = {}) {
   const maintenanceMode = config.maintenanceMode
     ?? ['true', '1', 'yes', 'on'].includes(String(process.env.MAINTENANCE_MODE ?? '').trim().toLowerCase());
   const maintenanceMessage = config.maintenanceMessage
-    ?? (process.env.MAINTENANCE_MESSAGE || 'Подписание актов выполненных работ');
+    ?? (process.env.MAINTENANCE_MESSAGE || DEFAULT_MAINTENANCE_MESSAGE);
 
   // GitHub user-feedback channel (issue #182, channel 1 — "from the employee"). When no token is set
   // the feature is OFF: GET /feedback/config reports { enabled:false } so the UI hides the widget, and
@@ -332,6 +332,10 @@ export function createApp(config = {}) {
   // мёртвым и перезапустят/убьют) и favicon (браузер не пугать). Браузерам (Accept: text/html)
   // отдаём страницу-заглушку с кодом 503; программным/API-клиентам — 503 JSON. Retry-After — чтобы
   // корректно вели себя краулеры/клиенты. Кэш запрещаем: снимут флаг — пользователь сразу увидит апп.
+  // Осознанный компромисс: 503 накрывает и входящие вебхуки Bitrix24 (/b24/bot/event, /b24/app/event) —
+  // на время паузы события бота и жизненного цикла приложения (ONAPPINSTALL/ONAPPUNINSTALL) отбрасываются
+  // (Б24 ретраит ограниченно). Для сценария «приостановить приём/создание сделок» это приемлемо и намеренно
+  // (пауза = полная остановка). Задокументировано в GUIDE_OWNER/GUIDE_ADMIN.
   if (maintenanceMode) {
     console.warn(`[backend] MAINTENANCE_MODE включён — приложение отдаёт заглушку (${maintenanceMessage})`);
     app.use((req, res, next) => {

@@ -3,6 +3,10 @@
 // режиме обслуживания вместо приложения. По задумке: при загрузке страницы машинка «выезжает»
 // (CSS-анимация), снизу — подпись-причина паузы.
 
+// Единый источник дефолтной подписи — используется и здесь, и в index.js (fallback env),
+// чтобы строка не дрейфовала между файлами.
+export const DEFAULT_MAINTENANCE_MESSAGE = 'Подписание актов выполненных работ';
+
 /** Экранирование для безопасной вставки текста в HTML (сообщение приходит из env). */
 function escapeHtml(s) {
   return String(s ?? '')
@@ -18,7 +22,7 @@ function escapeHtml(s) {
  * @param {string} message — подпись снизу (причина паузы). По умолчанию — «Подписание актов выполненных работ».
  * @returns {string} полный HTML-документ.
  */
-export function renderMaintenancePage(message = 'Подписание актов выполненных работ') {
+export function renderMaintenancePage(message = DEFAULT_MAINTENANCE_MESSAGE) {
   const note = escapeHtml(message);
   return `<!doctype html>
 <html lang="ru">
