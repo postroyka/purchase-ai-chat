@@ -342,7 +342,11 @@ export function createApp(config = {}) {
       if (req.path === '/health' || req.path === '/favicon.ico') return next();
       res.setHeader('Retry-After', '3600');
       res.setHeader('Cache-Control', 'no-store, max-age=0');
-      const wantsHtml = req.method === 'GET' && String(req.headers.accept || '').includes('text/html');
+      // Заглушку отдаём по Accept: text/html НЕЗАВИСИМО от метода. Внутри Bitrix24 приложение
+      // открывается в iframe через POST (портал сабмитит форму авторизации на URL приложения),
+      // поэтому привязка к GET показывала бы в портале сырой JSON вместо страницы. Наши XHR к API
+      // и вебхуки Б24 шлют Accept application/json / form-urlencoded → им остаётся 503 JSON.
+      const wantsHtml = String(req.headers.accept || '').includes('text/html');
       if (wantsHtml) {
         res.status(503).type('html').send(renderMaintenancePage(maintenanceMessage));
         return;

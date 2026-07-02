@@ -55,6 +55,15 @@ describe('MAINTENANCE_MODE (env-рубильник)', () => {
     expect(res.headers['cache-control']).toContain('no-store');
   });
 
+  it('включён — POST-навигация из Bitrix24 (Accept text/html) получает HTML-заглушку, не JSON', async () => {
+    // Внутри портала приложение открывается в iframe через POST формы авторизации.
+    const app = createApp({ token: 'tok', maintenanceMode: true });
+    const res = await request(app).post('/').set('Accept', 'text/html');
+    expect(res.status).toBe(503);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.text).toContain('Сервис временно приостановлен');
+  });
+
   it('включён — загрузка файлов (POST) заблокирована 503', async () => {
     const app = createApp({ token: 'tok', maintenanceMode: true });
     const res = await request(app).post('/upload');
