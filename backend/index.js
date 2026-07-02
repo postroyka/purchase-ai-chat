@@ -21,6 +21,7 @@ import { parseBotEvent, parseAppEvent, handleBotEvent } from './b24-bot.js';
 import { makeBotApi } from './b24-bot-api.js';
 import { createAppStore } from './app-store.js';
 import { safeCompare } from './utils.js';
+import { renderMaintenancePage } from './maintenance-page.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -229,6 +230,17 @@ export function createApp(config = {}) {
   const sessionTtlMs = config.sessionTtlMs
     ?? Math.max(1, parseInt(process.env.SESSION_TTL_HOURS ?? '12', 10) || 12) * 60 * 60 * 1000;
 
+  // Режим обслуживания / «рубильник» (MAINTENANCE_MODE=true|1). Управляется ТОЛЬКО из env —
+  // включается без пересборки образа (правка .env.prod + `make prod-redeploy`). Когда включён,
+  // сервер отдаёт страницу-заглушку вместо приложения и 503 на API/загрузки — приём файлов и
+  // создание сделок остановлены. /health намеренно НЕ трогаем: контейнер остаётся healthy и
+  // оркестратор (Watchtower/compose) его не убивает, стек и данные (uploads/redis) целы.
+  // MAINTENANCE_MESSAGE — подпись-причина снизу заглушки.
+  const maintenanceMode = config.maintenanceMode
+    ?? ['true', '1', 'yes', 'on'].includes(String(process.env.MAINTENANCE_MODE ?? '').trim().toLowerCase());
+  const maintenanceMessage = config.maintenanceMessage
+    ?? (process.env.MAINTENANCE_MESSAGE || 'Подписание актов выполненных работ');
+
   // GitHub user-feedback channel (issue #182, channel 1 — "from the employee"). When no token is set
   // the feature is OFF: GET /feedback/config reports { enabled:false } so the UI hides the widget, and
   // POST /feedback returns 503. The repo defaults to this app's own repo (private at launch, so
@@ -314,6 +326,26 @@ export function createApp(config = {}) {
     }
     next();
   });
+
+  // Рубильник обслуживания (MAINTENANCE_MODE). Ставится ПЕРЕД всеми роутами/статикой, поэтому
+  // перекрывает и UI, и API. Исключения: /health (Docker healthcheck — иначе контейнер сочтут
+  // мёртвым и перезапустят/убьют) и favicon (браузер не пугать). Браузерам (Accept: text/html)
+  // отдаём страницу-заглушку с кодом 503; программным/API-клиентам — 503 JSON. Retry-After — чтобы
+  // корректно вели себя краулеры/клиенты. Кэш запрещаем: снимут флаг — пользователь сразу увидит апп.
+  if (maintenanceMode) {
+    console.warn(`[backend] MAINTENANCE_MODE включён — приложение отдаёт заглушку (${maintenanceMessage})`);
+    app.use((req, res, next) => {
+      if (req.path === '/health' || req.path === '/favicon.ico') return next();
+      res.setHeader('Retry-After', '3600');
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+      const wantsHtml = req.method === 'GET' && String(req.headers.accept || '').includes('text/html');
+      if (wantsHtml) {
+        res.status(503).type('html').send(renderMaintenancePage(maintenanceMessage));
+        return;
+      }
+      res.status(503).json({ error: 'maintenance', message: maintenanceMessage });
+    });
+  }
 
   const jobs = config.jobs ?? createJobsStore({ redisUrl, ttlHours });
   // The live NB RB rate is wired at the prod entry point (bottom of file), not here, so
