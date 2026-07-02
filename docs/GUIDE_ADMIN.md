@@ -60,6 +60,7 @@ make metrics-reset   # сбросить только счётчики /metrics (
 - **Деплой долго останавливает контейнер** — это норма: бэкенд дорабатывает текущий файл (graceful-drain до ~12 мин), что не успело — поднимет recovery при старте.
 - **PHP-модуль Bitrix24** (`shef:purchase.api.*`) живёт **на портале**, не в Docker — обновляется **отдельно** (`make deploy-b24` / ручная выкладка), Watchtower его не катит.
 - **Откат** — пин `APP_IMAGE_TAG`/`MCP_IMAGE_TAG` (sha-тег) в `.env.prod`; пошагово — [OPERATIONS.md §4](OPERATIONS.md).
+- **Пауза сервиса** — `MAINTENANCE_MODE=true` в `.env.prod` + `make prod-redeploy`: приложение отдаёт заглушку и `503` на API, но `/health` остаётся 200 и данные целы. Снять — `false` + redeploy. Полное выключение — `make prod-down`.
 
 ## Куда смотреть при инциденте
 On-call «алерт → действие», разбор по логам, откат — [`../mcp/docs/RUNBOOK.md`](../mcp/docs/RUNBOOK.md). Контакт эскалации — OPERATIONS §0.
